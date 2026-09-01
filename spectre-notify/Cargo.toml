@@ -1,0 +1,28 @@
+[package]
+name = "spectre-notify"
+description = "The Spectre notification daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "spectre-notify"
+path = "src/main.rs"
+
+[dependencies]
+spectre-config = { workspace = true }
+spectre-draw = { workspace = true }
+spectre-text = { workspace = true }
+spectre-theme = { workspace = true }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
+# The freedesktop notification spec is a D-Bus interface; there is no way to
+# implement it without a D-Bus library.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

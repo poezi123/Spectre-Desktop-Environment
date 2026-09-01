@@ -79,6 +79,9 @@ pub struct Label<'a> {
     pub max_width: Option<u32>,
     /// Where the ellipsis goes when the text is truncated.
     pub ellipsis: EllipsisSide,
+    /// Wrap onto at most this many lines. `1` never wraps, which is what a
+    /// title bar caption or a panel label wants.
+    pub max_lines: u16,
 }
 
 /// Which end of the text to drop when it does not fit.
@@ -94,9 +97,8 @@ pub enum EllipsisSide {
 }
 
 impl EllipsisSide {
-    fn to_cosmic(self) -> Ellipsize {
-        // One line: title bars and panel labels never wrap.
-        let limit = EllipsizeHeightLimit::Lines(1);
+    fn to_cosmic(self, lines: u16) -> Ellipsize {
+        let limit = EllipsizeHeightLimit::Lines(lines.max(1) as usize);
         match self {
             EllipsisSide::End => Ellipsize::End(limit),
             EllipsisSide::Start => Ellipsize::Start(limit),
@@ -115,6 +117,7 @@ impl<'a> Label<'a> {
             bold: false,
             max_width: None,
             ellipsis: EllipsisSide::default(),
+            max_lines: 1,
         }
     }
 
@@ -148,10 +151,29 @@ impl<'a> Label<'a> {
         self
     }
 
+    /// Allow the text to wrap onto up to `lines` lines.
+    ///
+    /// Requires a `max_width`: without one there is nothing to wrap against,
+    /// and the label stays on a single line.
+    pub fn max_lines(mut self, lines: u16) -> Self {
+        self.max_lines = lines.max(1);
+        self
+    }
+
     fn line_height(&self) -> f32 {
         // 1.3 is the ratio the concept renders use: tight enough for a 32px
         // title bar, loose enough that descenders are not clipped.
         (self.size_px * 1.3).ceil()
+    }
+
+    /// Whether this label is allowed to wrap.
+    fn wraps(&self) -> bool {
+        self.max_lines > 1 && self.max_width.is_some()
+    }
+
+    /// Height of the box the text is laid out in.
+    fn box_height(&self) -> f32 {
+        self.line_height() * self.max_lines.max(1) as f32
     }
 }
 
@@ -265,14 +287,14 @@ impl TextRenderer {
         let weight = if label.bold { Weight::SEMIBOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(label.family.to_attrs()).weight(weight);
 
-        // Title bars and panel labels never wrap; overflow is ellipsised
-        // instead, which cosmic-text does during layout so the shaping stays a
-        // single pass even for a caption that has to be cut.
-        buffer.set_wrap(Wrap::None);
+        // Title bars and panel labels never wrap; a notification body does.
+        // Either way overflow is ellipsised during layout, so shaping stays a
+        // single pass even for text that has to be cut.
+        buffer.set_wrap(if label.wraps() { Wrap::WordOrGlyph } else { Wrap::None });
         if label.max_width.is_some() {
-            buffer.set_ellipsize(label.ellipsis.to_cosmic());
+            buffer.set_ellipsize(label.ellipsis.to_cosmic(label.max_lines));
         }
-        buffer.set_size(label.max_width.map(|w| w as f32), Some(label.line_height()));
+        buffer.set_size(label.max_width.map(|w| w as f32), Some(label.box_height()));
         buffer.set_text(label.text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -285,7 +307,10 @@ impl TextRenderer {
             Some(max) => width.min(max),
             None => width,
         };
-        (buffer, width, label.line_height() as u32)
+        // Only as tall as the lines actually used, so a one-line body does not
+        // reserve room for two.
+        let lines = buffer.layout_runs().count().clamp(1, label.max_lines as usize);
+        (buffer, width, (label.line_height() * lines as f32) as u32)
     }
 }
 
@@ -323,11 +348,48 @@ mod tests {
     }
 
     #[test]
-    fn ellipsis_sides_map_to_a_single_line_limit() {
+    fn every_ellipsis_side_actually_ellipsises() {
         for side in [EllipsisSide::End, EllipsisSide::Start, EllipsisSide::Middle] {
-            let e = side.to_cosmic();
-            assert!(!matches!(e, Ellipsize::None), "{side:?} must actually ellipsise");
+            assert!(!matches!(side.to_cosmic(1), Ellipsize::None), "{side:?}");
+            assert!(!matches!(side.to_cosmic(3), Ellipsize::None), "{side:?}");
         }
+    }
+
+    #[test]
+    fn a_label_wraps_only_when_it_has_both_a_width_and_the_room() {
+        assert!(!Label::new("x").wraps(), "one line by default");
+        assert!(!Label::new("x").max_lines(3).wraps(), "no width to wrap against");
+        assert!(Label::new("x").max_lines(3).max_width(100).wraps());
+    }
+
+    #[test]
+    fn max_lines_never_drops_below_one() {
+        assert_eq!(Label::new("x").max_lines(0).max_lines, 1);
+    }
+
+    #[test]
+    fn a_wrapped_label_is_taller_than_a_single_line_one() {
+        let mut r = TextRenderer::new();
+        let text = "A notification body long enough that it has to run onto a second line";
+        let single = Label::new(text).size(12.0).max_width(160);
+        if r.measure(&single).0 == 0 {
+            eprintln!("no system font available; skipping");
+            return;
+        }
+        let wrapped = Label::new(text).size(12.0).max_width(160).max_lines(3);
+        assert!(r.measure(&wrapped).1 > r.measure(&single).1);
+    }
+
+    #[test]
+    fn short_text_does_not_reserve_room_for_lines_it_does_not_use() {
+        let mut r = TextRenderer::new();
+        let short = Label::new("Done").size(12.0).max_width(300).max_lines(3);
+        if r.measure(&short).0 == 0 {
+            eprintln!("no system font available; skipping");
+            return;
+        }
+        let one_line = Label::new("Done").size(12.0).max_width(300);
+        assert_eq!(r.measure(&short).1, r.measure(&one_line).1);
     }
 
     #[test]

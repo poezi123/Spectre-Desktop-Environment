@@ -57,10 +57,13 @@ impl General {
     /// It stays a normal autostart entry, which means a user who wants a
     /// different panel just turns this one off.
     pub fn startup_commands(&self, panel_enabled: bool) -> Vec<String> {
-        let mut commands = Vec::with_capacity(self.autostart.len() + 1);
+        let mut commands = Vec::with_capacity(self.autostart.len() + 2);
         if panel_enabled {
             commands.push(String::from("spectre-panel"));
         }
+        // The notification daemon is part of the desktop too: without it,
+        // applications that notify simply fail.
+        commands.push(String::from("spectre-notify"));
         commands.extend(self.autostart.iter().cloned());
         commands
     }
@@ -318,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn user_autostart_entries_come_after_the_panel() {
+    fn user_autostart_entries_come_after_the_desktop_s_own() {
         let cfg = Config::from_toml(
             r#"
             [general]
@@ -327,7 +330,14 @@ mod tests {
         )
         .unwrap();
         let commands = cfg.general.startup_commands(cfg.panel.enabled);
-        assert_eq!(commands, ["spectre-panel", "nm-applet", "foot"]);
+        assert_eq!(commands, ["spectre-panel", "spectre-notify", "nm-applet", "foot"]);
+    }
+
+    #[test]
+    fn the_notification_daemon_starts_even_without_a_panel() {
+        let cfg = Config::from_toml("[panel]\nenabled = false").unwrap();
+        let commands = cfg.general.startup_commands(cfg.panel.enabled);
+        assert_eq!(commands, ["spectre-notify"]);
     }
 
     #[test]
