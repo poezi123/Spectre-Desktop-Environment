@@ -22,6 +22,7 @@ use crate::backend::Backend;
 
 fn main() -> anyhow::Result<()> {
     init_tracing();
+    reap_children();
 
     let args = Args::parse(std::env::args().skip(1))?;
     if args.help {
@@ -65,6 +66,20 @@ fn main() -> anyhow::Result<()> {
         Backend::Udev => crate::backend::udev::run(config),
         #[cfg(not(feature = "udev"))]
         Backend::Udev => bail!("this build has no udev backend; rebuild with --features udev"),
+    }
+}
+
+/// Let the kernel reap the processes the compositor starts.
+///
+/// A desktop spawns a lot of children and never waits on any of them, so
+/// without this every launched application leaves a zombie behind. Ignoring
+/// `SIGCHLD` makes the kernel clean them up; the compositor never calls
+/// `wait`, so nothing is lost by doing so.
+fn reap_children() {
+    // SAFETY: setting a disposition on SIGCHLD is async-signal-safe and is
+    // done once, before any thread or child exists.
+    unsafe {
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
 }
 

@@ -12,6 +12,8 @@
 #   custom       the [effects] section below is used verbatim
 profile = "balanced"
 workspaces = 4
+# spectre-panel is started automatically unless [panel] enabled = false;
+# anything listed here runs after it.
 autostart = []
 
 # Only read when profile = "custom".

@@ -25,7 +25,6 @@ udev = [
     "smithay/backend_session_libseat",
     "smithay/backend_udev",
     "smithay/backend_egl",
-    "dep:libc",
 ]
 xwayland = ["smithay/xwayland"]
 
@@ -38,7 +37,7 @@ spectre-theme = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 bitflags = "2"
 
 [dependencies.smithay]

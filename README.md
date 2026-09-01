@@ -43,8 +43,9 @@ spectre-desktop
 ├── spectre-config       # Configuration model and profiles           [built]
 ├── spectre-theme        # Palette, metrics and the Spectre Pattern   [built]
 ├── spectre-text         # Shaping and rasterising labels             [built]
+├── spectre-launcher     # Application launcher                       [built]
+├── spectre-draw         # Software canvas for the shell surfaces     [built]
 ├── spectre-session      # Session startup                            [built]
-├── spectre-launcher     # Application launcher                       [planned]
 ├── spectre-settings     # Central settings application               [planned]
 ├── spectre-notify       # Notification daemon / UI                   [planned]
 └── spectre-lock         # Lock screen                                [planned]
@@ -328,7 +329,10 @@ workspaces and survives VT switching. `spectre-panel` sits at the bottom with
 the workspace indicator, running applications, a CPU and memory readout and
 the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
-Next: notifications, the application launcher, and the workspace transitions.
+`spectre-launcher` opens on `Mod+D`: type to filter the system's applications,
+arrows to move, Enter to launch.
+
+Next: notifications, the settings application, and the workspace transitions.
 
 ### Building
 
@@ -337,6 +341,25 @@ cargo build --release
 ./target/release/spectre-compositor --backend winit   # nested, for development
 ./target/release/spectre-compositor --backend udev    # real session, from a TTY
 ./target/release/spectre-panel                        # from inside the session
+./target/release/spectre-launcher                     # or press Mod+D
+```
+
+### Default key bindings
+
+```text
+Mod+Return        Terminal
+Mod+D             Launcher
+Mod+Q             Close window
+Mod+F             Fullscreen
+Mod+M             Maximize
+Mod+Tab           Next window (minimized ones included)
+Mod+1..9          Switch workspace
+Mod+Shift+1..9    Move window to workspace
+Mod+arrows        Focus in a direction
+Mod+Shift+arrows  Move the window
+Mod+Shift+A       Animation kill switch
+Mod+Shift+P       Cycle performance profile
+Mod+Shift+Q       End the session
 ```
 
 The `udev` backend needs `seatd` running (or logind) and the user in the `seat`
