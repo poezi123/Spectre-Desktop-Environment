@@ -1,5 +1,5 @@
 # Spectre Desktop Environment
-![Markdown-Logo](Logoofficial.png)
+![Spectre-Logo](assets/Logoofficial.png)
 > **A lightweight, dark and highly customizable Linux desktop environment with a focus on performance, fluid workspaces and subtle cyber-inspired visuals.**
 
 **Status:** Concept / early development  
