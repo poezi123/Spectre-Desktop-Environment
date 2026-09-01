@@ -157,10 +157,17 @@ For old laptops, VMs and low-power hardware.
 
 The intended default.
 
-- Subtle animated patterns
+- Subtle patterns, drawn but held still
 - Lightweight RGB accents
 - Smooth workspace transitions
 - Limited transparency/effects
+
+Patterns are static here rather than animated, and that is a deliberate
+change from the original sketch. Animating a pattern means compositing a new
+frame every vblank for the whole output, forever, to move a texture at 14%
+opacity. On the low-end hardware this project treats as a first-class target
+that is a bad trade, and it contradicts principle 1. Motion lives in the
+Spectre profile, and `profile = "custom"` turns it on anywhere.
 
 ### Spectre
 

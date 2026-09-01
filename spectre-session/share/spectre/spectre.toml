@@ -6,8 +6,9 @@
 [general]
 # performance | balanced | spectre | custom
 #   performance  static patterns, no blur, no animations - old laptops and VMs
-#   balanced     the default
-#   spectre      everything on - modern hardware
+#   balanced     the default: patterns are drawn but held still, so the
+#                compositor draws no frame at all while nothing changes
+#   spectre      everything on, including animated patterns - modern hardware
 #   custom       the [effects] section below is used verbatim
 profile = "balanced"
 workspaces = 4
@@ -53,8 +54,13 @@ border-width = 1
 corner-radius = 8
 panel-height = 32
 
-# The topographic contour pattern. Set kind = "none" to switch it off, or
-# animated = false to freeze it while keeping the texture.
+# The topographic contour pattern drawn on window title bars. Set
+# kind = "none" to switch it off, or animated = false to freeze it while
+# keeping the texture.
+#
+# Animating it means a new frame every vblank for the whole output. That is
+# why only the "spectre" profile turns it on; with profile = "custom" you can
+# have it on any machine you think can afford it.
 [theme.window-pattern]
 kind = "topographic"
 animated = true

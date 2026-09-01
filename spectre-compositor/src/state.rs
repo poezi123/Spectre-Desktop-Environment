@@ -261,13 +261,15 @@ impl Spectre {
 
     /// Whether an animation currently on screen needs a new frame every tick.
     ///
-    /// Only the desktop pattern is asked, because it is the only animated
-    /// surface the compositor draws today. Window and panel patterns join this
-    /// once the decoration renderer draws them; until then, treating them as
-    /// animated would redraw the screen sixty times a second to show nothing
-    /// new, which is exactly the waste the performance profiles exist to avoid.
+    /// Both patterns the compositor draws are asked, but the window pattern
+    /// only counts while a decorated window is actually mapped: an empty
+    /// desktop must fall back to zero frames per second.
     pub fn needs_animation_frames(&self) -> bool {
-        self.config.theme.desktop_pattern.needs_continuous_redraw()
+        if self.config.theme.desktop_pattern.needs_continuous_redraw() {
+            return true;
+        }
+        self.config.theme.window_pattern.needs_continuous_redraw()
+            && self.workspaces.active().elements().any(|w| self.is_decorated(w))
     }
 
     /// Ask the event loop to stop; the session ends after the current iteration.

@@ -70,6 +70,7 @@ pub fn output_elements(
     }
 
     let pointer = state.pointer.current_location();
+    let phase = state.pattern_phase();
     let mut cache = state.text.borrow_mut();
 
     for window in space.elements() {
@@ -88,13 +89,31 @@ pub fn output_elements(
             );
         }
 
+        // The Spectre Pattern goes in before the frame so it lands *above* the
+        // title bar background and *below* the caption: contour lines read as
+        // texture in the bar rather than as marks drawn over the text.
+        if frame.is_decorated() {
+            if let Some(pattern) = shader.and_then(|shader| {
+                shader.element(
+                    &theme.window_pattern,
+                    frame.titlebar,
+                    theme.palette.titlebar(focused),
+                    theme.palette.accent.sample(if focused { 0.5 } else { 0.0 }),
+                    if focused { phase } else { 0.0 },
+                    scale,
+                )
+            }) {
+                elements.push(SpectreElement::Pattern(pattern));
+            }
+        }
+
         elements.extend(
             decorations::frame_elements(
                 &frame,
                 &metrics,
                 &theme.palette,
                 focused,
-                hovered.filter(|_| focused || hovered.is_some()),
+                hovered,
                 if focused { glow } else { 0.0 },
                 scale,
             )
