@@ -5,7 +5,6 @@
 //! at 1920x32 the whole surface is a quarter of a megabyte, and keeping it on
 //! the CPU is what lets the panel cost single-digit megabytes of memory.
 
-mod canvas;
 mod clock;
 mod draw;
 mod layout;
@@ -39,7 +38,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
-use crate::canvas::Canvas;
+use spectre_draw::Canvas;
 use crate::clock::Clock;
 use crate::layout::{Item, Placed};
 use crate::readout::Readout;

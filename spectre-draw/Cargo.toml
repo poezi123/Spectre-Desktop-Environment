@@ -1,0 +1,13 @@
+[package]
+name = "spectre-draw"
+description = "Software rendering for Spectre's shell surfaces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+spectre-text = { workspace = true }
+spectre-theme = { workspace = true }

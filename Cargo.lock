@@ -1865,6 +1865,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spectre-draw"
+version = "0.1.0"
+dependencies = [
+ "spectre-text",
+ "spectre-theme",
+]
+
+[[package]]
 name = "spectre-ipc"
 version = "0.1.0"
 dependencies = [
@@ -1881,6 +1889,7 @@ dependencies = [
  "anyhow",
  "smithay-client-toolkit 0.21.1",
  "spectre-config",
+ "spectre-draw",
  "spectre-ipc",
  "spectre-text",
  "spectre-theme",

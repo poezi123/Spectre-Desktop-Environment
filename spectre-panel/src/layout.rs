@@ -7,7 +7,7 @@
 
 use spectre_ipc::{Desktop, WindowId};
 
-use crate::canvas::Rect;
+use spectre_draw::Rect;
 
 /// Horizontal padding at the panel's ends.
 pub const EDGE_PADDING: i32 = 6;

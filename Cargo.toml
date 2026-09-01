@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "spectre-config",
+    "spectre-draw",
     "spectre-ipc",
     "spectre-panel",
     "spectre-text",
@@ -19,6 +20,7 @@ authors = ["Leon Pelzmann"]
 
 [workspace.dependencies]
 spectre-config = { path = "spectre-config", version = "0.1.0" }
+spectre-draw   = { path = "spectre-draw",   version = "0.1.0" }
 spectre-ipc    = { path = "spectre-ipc",    version = "0.1.0" }
 spectre-theme  = { path = "spectre-theme",  version = "0.1.0" }
 spectre-text   = { path = "spectre-text",   version = "0.1.0" }

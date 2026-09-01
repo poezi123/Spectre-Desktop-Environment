@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 spectre-config = { workspace = true }
+spectre-draw = { workspace = true }
 spectre-ipc = { workspace = true }
 spectre-text = { workspace = true }
 spectre-theme = { workspace = true }

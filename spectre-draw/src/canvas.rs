@@ -1,10 +1,5 @@
 //! A minimal software canvas.
 //!
-//! The panel is a strip a few hundred kilobytes in size, redrawn a handful of
-//! times a second. That is far below the point where a GPU context would pay
-//! for itself, so everything is composited here on the CPU, straight into the
-//! shared-memory buffer the compositor reads.
-//!
 //! Pixels are stored as `Argb8888` - what `wl_shm` expects - which on a
 //! little-endian machine is `[B, G, R, A]` in memory, premultiplied.
 
@@ -77,14 +72,11 @@ impl Canvas {
         Self { width, height, pixels: vec![0; (width * height * 4) as usize] }
     }
 
-    /// Used by the tests, and by any future widget that needs to know how much
-    /// room it has without going through `bounds`.
-    #[allow(dead_code)]
+    /// How much room a widget has, without going through `bounds`.
     pub fn width(&self) -> i32 {
         self.width
     }
 
-    #[allow(dead_code)]
     pub fn height(&self) -> i32 {
         self.height
     }
@@ -110,7 +102,6 @@ impl Canvas {
     }
 
     /// Overwrite every pixel, ignoring what was there.
-    #[allow(dead_code)]
     pub fn clear(&mut self, color: Color) {
         let [b, g, r, a] = to_argb(color);
         for chunk in self.pixels.chunks_exact_mut(4) {

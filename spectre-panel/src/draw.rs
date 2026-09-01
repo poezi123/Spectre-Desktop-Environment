@@ -7,7 +7,7 @@
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Pattern, Theme};
 
-use crate::canvas::{Canvas, Rect};
+use spectre_draw::{Canvas, Rect};
 use crate::layout::{Item, Placed, CHIP_PADDING};
 
 /// Font size for panel labels, in logical pixels.
