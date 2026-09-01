@@ -2,9 +2,13 @@
 
 pub mod decorations;
 mod pattern;
+mod text;
 
+pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
+pub use text::TextCache;
 
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
@@ -13,7 +17,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::space::{space_render_elements, SpaceRenderElements};
 use smithay::output::Output;
 use smithay::render_elements;
-use smithay::utils::{Logical, Physical, Rectangle, Scale};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
 use spectre_theme::Color;
 
 use crate::state::Spectre;
@@ -26,9 +30,18 @@ render_elements! {
     /// backdrop, window outlines and the focus accent.
     pub SpectreElement<=GlesRenderer>;
     Space = WindowElement,
+    Text = MemoryRenderBufferRenderElement<GlesRenderer>,
     Solid = SolidColorRenderElement,
     Pattern = PixelShaderElement,
 }
+
+/// Caption font size, in logical pixels.
+const CAPTION_SIZE: f32 = 13.0;
+/// Glyphs drawn on the title bar buttons.
+const MINIMIZE_GLYPH: &str = "\u{2212}";
+const MAXIMIZE_GLYPH: &str = "\u{25a1}";
+const RESTORE_GLYPH: &str = "\u{2750}";
+const CLOSE_GLYPH: &str = "\u{2715}";
 
 /// Build the full front-to-back element list for one output.
 ///
@@ -56,17 +69,32 @@ pub fn output_elements(
         Err(err) => tracing::warn!(?err, "failed to collect surface elements"),
     }
 
+    let pointer = state.pointer.current_location();
+    let mut cache = state.text.borrow_mut();
+
     for window in space.elements() {
         let Some(geometry) = space.element_geometry(window) else {
             continue;
         };
         let focused = state.focus.as_ref() == Some(window);
+        let frame = Frame::new(geometry, &metrics, state.is_decorated(window));
+        let hovered = decorations::part_at(&frame, &metrics, pointer);
+
+        if frame.is_decorated() {
+            elements.extend(
+                decoration_text(state, &frame, window, focused, hovered, &mut cache, renderer, scale)
+                    .into_iter()
+                    .map(SpectreElement::Text),
+            );
+        }
+
         elements.extend(
-            decorations::window_outline(
-                geometry,
-                focused,
-                &theme.palette,
+            decorations::frame_elements(
+                &frame,
                 &metrics,
+                &theme.palette,
+                focused,
+                hovered.filter(|_| focused || hovered.is_some()),
                 if focused { glow } else { 0.0 },
                 scale,
             )
@@ -74,6 +102,7 @@ pub fn output_elements(
             .map(SpectreElement::Solid),
         );
     }
+    drop(cache);
 
     if let Some(area) = state.workspaces.output_geometry(output) {
         let backdrop = shader.and_then(|shader| {
@@ -93,6 +122,69 @@ pub fn output_elements(
     }
 
     elements
+}
+
+/// The caption and the button glyphs for one window.
+#[allow(clippy::too_many_arguments)]
+fn decoration_text(
+    state: &Spectre,
+    frame: &Frame,
+    window: &smithay::desktop::Window,
+    focused: bool,
+    hovered: Option<Part>,
+    cache: &mut TextCache,
+    renderer: &mut GlesRenderer,
+    scale: f64,
+) -> Vec<MemoryRenderBufferRenderElement<GlesRenderer>> {
+    use spectre_text::Label;
+
+    let theme = &state.config.theme;
+    let metrics = theme.metrics;
+    let mut out = Vec::new();
+
+    // Caption, centred in the space the buttons leave over.
+    let area = decorations::caption_area(frame, &metrics);
+    if area.size.w > 0 {
+        let title = state.window_title(window);
+        let label = Label::new(&title)
+            .size(CAPTION_SIZE)
+            .color(theme.palette.titlebar_text(focused))
+            .bold(focused)
+            .max_width(area.size.w as u32);
+        let size = cache.measure(&label);
+        let location = Point::from((
+            area.loc.x + (area.size.w - size.w).max(0) / 2,
+            area.loc.y + (area.size.h - size.h).max(0) / 2,
+        ));
+        out.extend(cache.element(renderer, &label, location, scale));
+    }
+
+    // Button glyphs, centred in their hit boxes.
+    let maximized = state.is_maximized(window);
+    for (part, rect) in decorations::buttons(frame, &metrics) {
+        let glyph = match part {
+            Part::Minimize => MINIMIZE_GLYPH,
+            Part::Maximize if maximized => RESTORE_GLYPH,
+            Part::Maximize => MAXIMIZE_GLYPH,
+            Part::Close => CLOSE_GLYPH,
+            Part::Titlebar | Part::Border => continue,
+        };
+        let color = match (hovered == Some(part), part) {
+            (true, Part::Close) => theme.palette.text,
+            (true, _) => theme.palette.text,
+            (false, _) if focused => theme.palette.text_dim,
+            (false, _) => theme.palette.text_muted,
+        };
+        let label = Label::new(glyph).size(CAPTION_SIZE).color(color);
+        let size = cache.measure(&label);
+        let location = Point::from((
+            rect.loc.x + (rect.size.w - size.w).max(0) / 2,
+            rect.loc.y + (rect.size.h - size.h).max(0) / 2,
+        ));
+        out.extend(cache.element(renderer, &label, location, scale));
+    }
+
+    out
 }
 
 /// A filled rectangle in logical coordinates.

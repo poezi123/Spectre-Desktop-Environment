@@ -6,11 +6,18 @@ use smithay::backend::input::{
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::keyboard::{keysyms, FilterResult, Keysym, ModifiersState};
-use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent};
+use smithay::input::pointer::{
+    AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent,
+};
 use smithay::utils::{Point, SERIAL_COUNTER};
 use spectre_config::{Action, Keybind, Modifiers, Profile};
 
+use crate::grabs::{MoveGrab, BTN_LEFT};
+use crate::render::Part;
 use crate::state::Spectre;
+
+/// Two clicks closer together than this on a title bar count as a double click.
+const DOUBLE_CLICK_MS: u32 = 400;
 
 /// The name Spectre uses for a keysym in a binding, e.g. `return`, `q`, `f1`.
 ///
@@ -270,9 +277,17 @@ impl Spectre {
         let serial = SERIAL_COUNTER.next_serial();
         let button = event.button_code();
         let state = event.state();
+        let time = event.time_msec();
 
-        // Click to focus: a press anywhere in a window raises and focuses it.
         if state == ButtonState::Pressed {
+            // Decorations are ours: a press on one is handled here and never
+            // reaches the client, which would otherwise see a stray click.
+            if let Some((window, part)) = self.decoration_under_pointer() {
+                self.focus_window(Some(&window));
+                self.on_decoration_press(&window, part, button, serial, time);
+                return;
+            }
+            // Click to focus anywhere inside a window.
             if let Some(window) = self.window_under_pointer() {
                 if self.focus.as_ref() != Some(&window) {
                     self.focus_window(Some(&window));
@@ -281,8 +296,76 @@ impl Spectre {
         }
 
         let pointer = self.pointer.clone();
-        pointer.button(self, &ButtonEvent { button, state, serial, time: event.time_msec() });
+        pointer.button(self, &ButtonEvent { button, state, serial, time });
         pointer.frame(self);
+    }
+
+    /// Act on a press over a window's frame.
+    fn on_decoration_press(
+        &mut self,
+        window: &smithay::desktop::Window,
+        part: Part,
+        button: u32,
+        serial: smithay::utils::Serial,
+        time: u32,
+    ) {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Top;
+
+        if button != BTN_LEFT {
+            return;
+        }
+
+        match part {
+            Part::Close => {
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.send_close();
+                }
+            }
+            Part::Minimize => self.minimize(window),
+            Part::Maximize => {
+                let on = self.has_state(window, Top::Maximized);
+                self.set_maximized(window, !on);
+            }
+            Part::Titlebar => {
+                if self.is_double_click(window, time) {
+                    let on = self.has_state(window, Top::Maximized);
+                    self.set_maximized(window, !on);
+                    return;
+                }
+                // A maximized window is not draggable: it has no position to
+                // drag to until the user restores it.
+                if self.has_state(window, Top::Maximized) {
+                    return;
+                }
+                self.start_move(window, serial);
+            }
+            Part::Border => {}
+        }
+    }
+
+    /// Whether this title bar press completes a double click.
+    fn is_double_click(&mut self, window: &smithay::desktop::Window, time: u32) -> bool {
+        let same = self.last_click.as_ref().is_some_and(|(w, t)| {
+            w == window && time.saturating_sub(*t) <= DOUBLE_CLICK_MS
+        });
+        // Consume the click either way, so a triple click is not two doubles.
+        self.last_click = if same { None } else { Some((window.clone(), time)) };
+        same
+    }
+
+    /// Begin dragging `window` by its title bar.
+    fn start_move(&mut self, window: &smithay::desktop::Window, serial: smithay::utils::Serial) {
+        let Some(location) = self.workspaces.active().element_location(window) else {
+            return;
+        };
+        let start_data = GrabStartData {
+            focus: None,
+            button: BTN_LEFT,
+            location: self.pointer.current_location(),
+        };
+        let grab = MoveGrab::new(start_data, window.clone(), location);
+        let pointer = self.pointer.clone();
+        pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, event: B::PointerAxisEvent) {

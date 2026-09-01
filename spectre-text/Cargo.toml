@@ -1,0 +1,19 @@
+[package]
+name = "spectre-text"
+description = "Text shaping and rasterisation for Spectre's decorations and panel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+spectre-theme = { workspace = true }
+tracing = { workspace = true }
+
+# cosmic-text rather than a bare rasteriser: window titles and panel labels are
+# arbitrary user text, so shaping and font fallback are not optional if the
+# desktop is to render a CJK or emoji window title correctly. The runtime cost
+# is a bounded glyph cache, not per-frame work.
+cosmic-text = "0.19"

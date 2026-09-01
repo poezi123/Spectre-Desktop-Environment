@@ -55,6 +55,9 @@ struct Surface {
 /// compositor state stays backend-agnostic: `Spectre` never has to know that
 /// DRM exists.
 struct Udev {
+    /// Held for the lifetime of the backend: dropping the session hands the
+    /// seat back to libseat and the compositor loses its devices.
+    #[allow(dead_code)]
     session: LibSeatSession,
     renderer: GlesRenderer,
     gbm: GbmDevice<DrmDeviceFd>,

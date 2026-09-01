@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "spectre-config",
+    "spectre-text",
     "spectre-theme",
     "spectre-compositor",
 ]
@@ -17,6 +18,7 @@ authors = ["Leon Pelzmann"]
 [workspace.dependencies]
 spectre-config = { path = "spectre-config", version = "0.1.0" }
 spectre-theme  = { path = "spectre-theme",  version = "0.1.0" }
+spectre-text   = { path = "spectre-text",   version = "0.1.0" }
 
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

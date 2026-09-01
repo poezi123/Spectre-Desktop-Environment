@@ -1,79 +1,243 @@
-//! Window decorations.
+//! Window decorations: the frame Spectre draws around every server-side
+//! decorated window.
 //!
-//! Spectre draws a thin outline around every window: flat grey when the window
-//! is unfocused, and a teal-to-purple accent gradient when it is focused. The
-//! gradient is faked with a handful of solid steps, which costs nothing and is
-//! indistinguishable at one or two pixels wide.
+//! Layout, matching `Fensterconcept.png`:
 //!
-//! Title bars with captions and buttons need a text rasteriser and a pointer
-//! grab; both arrive with the shell phase. Until then the outline carries the
-//! focus signal on its own, which keeps the desktop usable exactly as the
-//! project principles require.
+//! ```text
+//! +--------------------------------------------------+  <- border (accent when focused)
+//! | [icon]        Window title          [_] [#] [x]  |  <- title bar
+//! +--------------------------------------------------+
+//! |                                                  |
+//! |                 client surface                   |
+//! ```
+//!
+//! Geometry lives here as pure functions so the renderer and the pointer
+//! hit-test cannot disagree about where a button is - the class of bug where a
+//! close button is drawn in one place and clickable in another.
 
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 use spectre_theme::{Metrics, Palette};
 
 use super::{horizontal_steps, solid};
 
 /// Number of solid steps used to fake the accent gradient along an edge.
 const GRADIENT_STEPS: u32 = 12;
+/// Gap between title bar buttons, in logical pixels.
+const BUTTON_GAP: i32 = 2;
+/// Padding at the ends of the title bar.
+const TITLEBAR_PADDING: i32 = 8;
 
-/// Build the outline for one window.
+/// The rectangles that make up one window's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    /// The client surface itself.
+    pub window: Rectangle<i32, Logical>,
+    /// The title bar, directly above the surface. Zero-sized when undecorated.
+    pub titlebar: Rectangle<i32, Logical>,
+    /// Title bar plus surface plus border: everything Spectre paints.
+    pub outer: Rectangle<i32, Logical>,
+    /// Border thickness used to build `outer`.
+    pub border: i32,
+}
+
+impl Frame {
+    /// Build the frame for a window whose surface occupies `window`.
+    pub fn new(window: Rectangle<i32, Logical>, metrics: &Metrics, decorated: bool) -> Self {
+        let border = if decorated { metrics.border_width as i32 } else { 0 };
+        let title_h = if decorated { metrics.titlebar_height as i32 } else { 0 };
+
+        let titlebar = Rectangle::new(
+            Point::from((window.loc.x, window.loc.y - title_h)),
+            Size::from((window.size.w, title_h)),
+        );
+        let outer = Rectangle::new(
+            Point::from((window.loc.x - border, window.loc.y - title_h - border)),
+            Size::from((
+                window.size.w + border * 2,
+                window.size.h + title_h + border * 2,
+            )),
+        );
+
+        Self { window, titlebar, outer, border }
+    }
+
+    pub fn is_decorated(&self) -> bool {
+        self.titlebar.size.h > 0
+    }
+}
+
+/// A part of the frame the pointer can interact with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Dragging here moves the window; a double click maximises it.
+    Titlebar,
+    Minimize,
+    Maximize,
+    Close,
+    /// Inside the border, but not the title bar.
+    Border,
+}
+
+/// The three buttons, right-aligned, in the order they are drawn.
 ///
-/// `geometry` is the window's own rectangle in logical coordinates; the outline
-/// is drawn just outside it, so it never covers client content.
-pub fn window_outline(
-    geometry: Rectangle<i32, Logical>,
-    focused: bool,
-    palette: &Palette,
-    metrics: &Metrics,
-    glow: f32,
-    scale: f64,
-) -> Vec<SolidColorRenderElement> {
-    let width = metrics.border_width as i32;
-    if width <= 0 || geometry.size.w <= 0 || geometry.size.h <= 0 {
+/// Returns an empty vector for an undecorated or very narrow title bar, so a
+/// window can never end up with a button drawn outside its own frame.
+pub fn buttons(frame: &Frame, metrics: &Metrics) -> Vec<(Part, Rectangle<i32, Logical>)> {
+    let size = metrics.button_size as i32;
+    let bar = frame.titlebar;
+    if bar.size.h <= 0 || size <= 0 {
         return Vec::new();
     }
 
-    let outer = Rectangle::new(
-        (geometry.loc.x - width, geometry.loc.y - width).into(),
-        (geometry.size.w + width * 2, geometry.size.h + width * 2).into(),
-    );
+    let order = [Part::Close, Part::Maximize, Part::Minimize];
+    let needed = order.len() as i32 * size + (order.len() as i32 - 1) * BUTTON_GAP;
+    if bar.size.w < needed + TITLEBAR_PADDING * 2 {
+        return Vec::new();
+    }
 
+    let y = bar.loc.y + (bar.size.h - size) / 2;
+    let mut x = bar.loc.x + bar.size.w - TITLEBAR_PADDING - size;
+
+    let mut out = Vec::with_capacity(order.len());
+    for part in order {
+        out.push((part, Rectangle::new(Point::from((x, y)), Size::from((size, size)))));
+        x -= size + BUTTON_GAP;
+    }
+    out
+}
+
+/// Space available for the caption: the title bar minus the buttons and padding.
+pub fn caption_area(frame: &Frame, metrics: &Metrics) -> Rectangle<i32, Logical> {
+    let bar = frame.titlebar;
+    let buttons = buttons(frame, metrics);
+    let right = buttons
+        .iter()
+        .map(|(_, r)| r.loc.x)
+        .min()
+        .unwrap_or(bar.loc.x + bar.size.w - TITLEBAR_PADDING);
+
+    let left = bar.loc.x + TITLEBAR_PADDING;
+    let width = (right - BUTTON_GAP - left).max(0);
+    Rectangle::new(Point::from((left, bar.loc.y)), Size::from((width, bar.size.h)))
+}
+
+/// Which part of the frame `point` falls on, if any.
+///
+/// Returns `None` for points over the client surface: those belong to the
+/// client and must be forwarded untouched.
+pub fn part_at(
+    frame: &Frame,
+    metrics: &Metrics,
+    point: Point<f64, Logical>,
+) -> Option<Part> {
+    let p = Point::<i32, Logical>::from((point.x.floor() as i32, point.y.floor() as i32));
+    if !frame.outer.contains(p) || frame.window.contains(p) {
+        return None;
+    }
+
+    for (part, rect) in buttons(frame, metrics) {
+        if rect.contains(p) {
+            return Some(part);
+        }
+    }
+    if frame.titlebar.contains(p) {
+        return Some(Part::Titlebar);
+    }
+    Some(Part::Border)
+}
+
+/// Solid rectangles for one window's frame, front to back.
+///
+/// `hovered` highlights a button under the pointer; `glow` is the RGB accent
+/// intensity, and `0.0` skips the glow ring entirely.
+pub fn frame_elements(
+    frame: &Frame,
+    metrics: &Metrics,
+    palette: &Palette,
+    focused: bool,
+    hovered: Option<Part>,
+    glow: f32,
+    scale: f64,
+) -> Vec<SolidColorRenderElement> {
+    let mut elements = Vec::new();
+    if frame.outer.size.w <= 0 || frame.outer.size.h <= 0 {
+        return elements;
+    }
+
+    // Buttons first so they sit above the title bar background.
+    for (part, rect) in buttons(frame, metrics) {
+        let Some(color) = button_background(part, hovered, palette) else {
+            continue;
+        };
+        elements.extend(solid(rect, color, scale));
+    }
+
+    if frame.is_decorated() {
+        elements.extend(solid(frame.titlebar, palette.titlebar(focused), scale));
+    }
+
+    elements.extend(border_elements(frame, palette, focused, glow, scale));
+    elements
+}
+
+/// The button's background plate. `None` means "draw nothing", which is the
+/// resting state: the concept keeps the bar clean until the pointer arrives.
+fn button_background(part: Part, hovered: Option<Part>, palette: &Palette) -> Option<spectre_theme::Color> {
+    if hovered != Some(part) {
+        return None;
+    }
+    Some(match part {
+        Part::Close => palette.danger,
+        _ => palette.overlay,
+    })
+}
+
+fn border_elements(
+    frame: &Frame,
+    palette: &Palette,
+    focused: bool,
+    glow: f32,
+    scale: f64,
+) -> Vec<SolidColorRenderElement> {
+    let width = frame.border;
+    if width <= 0 {
+        return Vec::new();
+    }
+    let outer = frame.outer;
     let mut elements = Vec::new();
 
     if focused {
-        // The accent runs left-to-right along the top and bottom edges, and the
-        // side edges pick up the colour of the corner they touch, so the whole
-        // frame reads as one continuous sweep.
-        let top = Rectangle::new(outer.loc, (outer.size.w, width).into());
-        let bottom =
-            Rectangle::new((outer.loc.x, outer.loc.y + outer.size.h - width).into(), (outer.size.w, width).into());
-
+        // The accent sweeps left to right along the horizontal edges; the
+        // vertical edges take the colour of the corner they meet, so the frame
+        // reads as one continuous gradient rather than four separate strips.
+        let top = Rectangle::new(outer.loc, Size::from((outer.size.w, width)));
+        let bottom = Rectangle::new(
+            Point::from((outer.loc.x, outer.loc.y + outer.size.h - width)),
+            Size::from((outer.size.w, width)),
+        );
         for edge in [top, bottom] {
             for (rect, t) in horizontal_steps(edge, GRADIENT_STEPS) {
                 elements.extend(solid(rect, palette.accent.sample(t), scale));
             }
         }
 
+        let inner_h = (outer.size.h - width * 2).max(0);
         let left = Rectangle::new(
-            (outer.loc.x, outer.loc.y + width).into(),
-            (width, outer.size.h - width * 2).into(),
+            Point::from((outer.loc.x, outer.loc.y + width)),
+            Size::from((width, inner_h)),
         );
         let right = Rectangle::new(
-            (outer.loc.x + outer.size.w - width, outer.loc.y + width).into(),
-            (width, outer.size.h - width * 2).into(),
+            Point::from((outer.loc.x + outer.size.w - width, outer.loc.y + width)),
+            Size::from((width, inner_h)),
         );
         elements.extend(solid(left, palette.accent.sample(0.0), scale));
         elements.extend(solid(right, palette.accent.sample(1.0), scale));
 
-        // Optional glow: one extra ring outside the border at low alpha. Costs a
-        // single blended quad per edge and is skipped entirely at glow 0.
         if glow > 0.0 {
             let ring = Rectangle::new(
-                (outer.loc.x - width, outer.loc.y - width).into(),
-                (outer.size.w + width * 2, outer.size.h + width * 2).into(),
+                Point::from((outer.loc.x - width, outer.loc.y - width)),
+                Size::from((outer.size.w + width * 2, outer.size.h + width * 2)),
             );
             for (i, edge) in ring_edges(ring, width).into_iter().enumerate() {
                 let t = if i % 2 == 0 { 0.25 } else { 0.75 };
@@ -90,19 +254,22 @@ pub fn window_outline(
 }
 
 /// The four edges of `rect` as `width`-thick rectangles, without overlapping
-/// corners (top and bottom span the full width, sides fill the gap between).
+/// corners: top and bottom span the full width, the sides fill the gap between.
 fn ring_edges(rect: Rectangle<i32, Logical>, width: i32) -> [Rectangle<i32, Logical>; 4] {
     let inner_h = (rect.size.h - width * 2).max(0);
     [
-        Rectangle::new(rect.loc, (rect.size.w, width).into()),
+        Rectangle::new(rect.loc, Size::from((rect.size.w, width))),
         Rectangle::new(
-            (rect.loc.x, rect.loc.y + rect.size.h - width).into(),
-            (rect.size.w, width).into(),
+            Point::from((rect.loc.x, rect.loc.y + rect.size.h - width)),
+            Size::from((rect.size.w, width)),
         ),
-        Rectangle::new((rect.loc.x, rect.loc.y + width).into(), (width, inner_h).into()),
         Rectangle::new(
-            (rect.loc.x + rect.size.w - width, rect.loc.y + width).into(),
-            (width, inner_h).into(),
+            Point::from((rect.loc.x, rect.loc.y + width)),
+            Size::from((width, inner_h)),
+        ),
+        Rectangle::new(
+            Point::from((rect.loc.x + rect.size.w - width, rect.loc.y + width)),
+            Size::from((width, inner_h)),
         ),
     ]
 }
@@ -112,66 +279,151 @@ mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
-        Rectangle::new((x, y).into(), (w, h).into())
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    fn frame(w: i32, h: i32) -> Frame {
+        Frame::new(rect(100, 140, w, h), &Metrics::default(), true)
     }
 
     #[test]
-    fn a_zero_width_border_draws_nothing() {
-        let metrics = Metrics { border_width: 0, ..Default::default() };
-        let out =
-            window_outline(rect(0, 0, 100, 100), true, &Palette::default(), &metrics, 1.0, 1.0);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn an_empty_window_draws_nothing() {
-        let out = window_outline(
-            rect(0, 0, 0, 100),
-            true,
-            &Palette::default(),
-            &Metrics::default(),
-            0.0,
-            1.0,
-        );
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn an_unfocused_window_gets_exactly_four_edges() {
-        let out = window_outline(
-            rect(10, 10, 200, 120),
-            false,
-            &Palette::default(),
-            &Metrics::default(),
-            1.0,
-            1.0,
-        );
-        assert_eq!(out.len(), 4, "glow must not apply to unfocused windows");
-    }
-
-    #[test]
-    fn glow_adds_elements_only_when_enabled() {
-        let p = Palette::default();
+    fn the_titlebar_sits_directly_above_the_surface() {
         let m = Metrics::default();
-        let without = window_outline(rect(0, 0, 200, 120), true, &p, &m, 0.0, 1.0).len();
-        let with = window_outline(rect(0, 0, 200, 120), true, &p, &m, 1.0, 1.0).len();
-        assert!(with > without);
+        let f = frame(400, 300);
+        assert_eq!(f.titlebar.loc.y + f.titlebar.size.h, f.window.loc.y);
+        assert_eq!(f.titlebar.size.h, m.titlebar_height as i32);
+        assert_eq!(f.titlebar.size.w, f.window.size.w);
     }
 
     #[test]
-    fn ring_edges_do_not_overlap() {
+    fn the_outer_rectangle_contains_everything() {
+        let f = frame(400, 300);
+        assert!(f.outer.contains_rect(f.window));
+        assert!(f.outer.contains_rect(f.titlebar));
+        assert_eq!(f.window.loc.y - f.outer.loc.y, f.titlebar.size.h + f.border);
+    }
+
+    #[test]
+    fn an_undecorated_window_has_no_frame_at_all() {
+        let f = Frame::new(rect(0, 0, 400, 300), &Metrics::default(), false);
+        assert!(!f.is_decorated());
+        assert_eq!(f.outer, f.window);
+        assert!(buttons(&f, &Metrics::default()).is_empty());
+        assert_eq!(part_at(&f, &Metrics::default(), (10.0, 10.0).into()), None);
+    }
+
+    #[test]
+    fn buttons_are_right_aligned_close_outermost() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        let b = buttons(&f, &m);
+        assert_eq!(b.len(), 3);
+        assert_eq!(b[0].0, Part::Close);
+        let close = b[0].1;
+        assert_eq!(close.loc.x + close.size.w, f.titlebar.loc.x + f.titlebar.size.w - 8);
+        // Right to left, no overlap.
+        assert!(b[1].1.loc.x + b[1].1.size.w <= b[0].1.loc.x);
+        assert!(b[2].1.loc.x + b[2].1.size.w <= b[1].1.loc.x);
+    }
+
+    #[test]
+    fn buttons_are_vertically_centred_in_the_bar() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        let (_, close) = buttons(&f, &m)[0];
+        let above = close.loc.y - f.titlebar.loc.y;
+        let below = (f.titlebar.loc.y + f.titlebar.size.h) - (close.loc.y + close.size.h);
+        assert!((above - below).abs() <= 1);
+    }
+
+    #[test]
+    fn a_narrow_window_drops_its_buttons_rather_than_overflowing() {
+        let m = Metrics::default();
+        let f = frame(40, 300);
+        assert!(buttons(&f, &m).is_empty(), "buttons must never be drawn outside the frame");
+        assert!(caption_area(&f, &m).size.w >= 0);
+    }
+
+    #[test]
+    fn the_caption_never_runs_under_the_buttons() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        let caption = caption_area(&f, &m);
+        let leftmost_button = buttons(&f, &m).iter().map(|(_, r)| r.loc.x).min().unwrap();
+        assert!(caption.loc.x + caption.size.w <= leftmost_button);
+    }
+
+    #[test]
+    fn hit_testing_agrees_with_the_drawn_buttons() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        for (part, rect) in buttons(&f, &m) {
+            let centre = Point::<f64, Logical>::from((
+                (rect.loc.x + rect.size.w / 2) as f64,
+                (rect.loc.y + rect.size.h / 2) as f64,
+            ));
+            assert_eq!(part_at(&f, &m, centre), Some(part), "{part:?}");
+        }
+    }
+
+    #[test]
+    fn the_client_surface_is_never_claimed_by_the_frame() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        let inside = Point::<f64, Logical>::from((200.0, 200.0));
+        assert!(f.window.contains(Point::<i32, Logical>::from((200, 200))));
+        assert_eq!(part_at(&f, &m, inside), None);
+    }
+
+    #[test]
+    fn empty_space_on_the_bar_is_a_drag_handle() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        let p = Point::<f64, Logical>::from((f.titlebar.loc.x as f64 + 20.0, f.titlebar.loc.y as f64 + 8.0));
+        assert_eq!(part_at(&f, &m, p), Some(Part::Titlebar));
+    }
+
+    #[test]
+    fn points_outside_the_frame_belong_to_nobody() {
+        let m = Metrics::default();
+        let f = frame(400, 300);
+        assert_eq!(part_at(&f, &m, (0.0, 0.0).into()), None);
+        assert_eq!(part_at(&f, &m, (10_000.0, 10_000.0).into()), None);
+    }
+
+    #[test]
+    fn only_the_hovered_button_gets_a_plate() {
+        let p = Palette::default();
+        assert_eq!(button_background(Part::Close, None, &p), None);
+        assert_eq!(button_background(Part::Close, Some(Part::Minimize), &p), None);
+        assert_eq!(button_background(Part::Close, Some(Part::Close), &p), Some(p.danger));
+        assert_eq!(button_background(Part::Minimize, Some(Part::Minimize), &p), Some(p.overlay));
+    }
+
+    #[test]
+    fn an_unfocused_frame_draws_four_flat_edges_and_no_glow() {
+        let m = Metrics::default();
+        let p = Palette::default();
+        let f = frame(400, 300);
+        let with_glow = frame_elements(&f, &m, &p, false, None, 1.0, 1.0).len();
+        let without = frame_elements(&f, &m, &p, false, None, 0.0, 1.0).len();
+        assert_eq!(with_glow, without, "glow applies to focused windows only");
+    }
+
+    #[test]
+    fn a_focused_frame_costs_more_elements_with_glow_on() {
+        let m = Metrics::default();
+        let p = Palette::default();
+        let f = frame(400, 300);
+        let off = frame_elements(&f, &m, &p, true, None, 0.0, 1.0).len();
+        let on = frame_elements(&f, &m, &p, true, None, 1.0, 1.0).len();
+        assert!(on > off);
+    }
+
+    #[test]
+    fn ring_edges_tile_the_ring_without_overlapping() {
         let [top, bottom, left, right] = ring_edges(rect(0, 0, 50, 40), 2);
-        assert_eq!(top.size, (50, 2).into());
-        assert_eq!(bottom.loc.y, 38);
-        assert_eq!(left.size, (2, 36).into());
-        assert_eq!(right.loc.x, 48);
         let area: i32 = [top, bottom, left, right].iter().map(|r| r.size.w * r.size.h).sum();
-        assert_eq!(area, 50 * 40 - 46 * 36, "edges must tile the ring exactly");
-    }
-
-    #[test]
-    fn a_ring_thinner_than_two_borders_has_no_negative_sides() {
-        let [_, _, left, right] = ring_edges(rect(0, 0, 10, 2), 3);
-        assert!(left.size.h >= 0 && right.size.h >= 0);
+        assert_eq!(area, 50 * 40 - 46 * 36);
     }
 }

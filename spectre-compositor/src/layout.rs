@@ -11,6 +11,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
 use spectre_config::Direction;
 
+use crate::render::{decorations, Frame, Part};
 use crate::state::Spectre;
 
 /// Offset applied to each successive window that lands on the same spot, so
@@ -46,6 +47,16 @@ impl Spectre {
         area
     }
 
+    /// Decoration inset above the client surface: title bar plus border.
+    fn top_inset(&self, window: &Window) -> i32 {
+        let m = self.config.theme.metrics;
+        if self.is_decorated(window) {
+            m.titlebar_height as i32 + m.border_width as i32
+        } else {
+            0
+        }
+    }
+
     /// Place a freshly mapped window and give it focus.
     pub fn place_window(&mut self, window: Window) {
         let Some(output) = self.active_output() else {
@@ -55,9 +66,18 @@ impl Spectre {
 
         let area = self.working_area(&output);
         let size = window.geometry().size;
+        let top = self.top_inset(&window);
+        let border = if self.is_decorated(&window) {
+            self.config.theme.metrics.border_width as i32
+        } else {
+            0
+        };
+
+        // Centre the whole frame, not just the surface, so a decorated window
+        // does not sit visually low by half a title bar.
         let mut loc = Point::from((
             area.loc.x + (area.size.w - size.w).max(0) / 2,
-            area.loc.y + (area.size.h - size.h).max(0) / 2,
+            area.loc.y + top + (area.size.h - size.h - top - border).max(0) / 2,
         ));
 
         // Cascade while something already sits exactly here.
@@ -69,9 +89,11 @@ impl Spectre {
             loc += Point::from((CASCADE_STEP, CASCADE_STEP));
             guard += 1;
         }
-        // Never cascade a window off the bottom-right of the working area.
+        // Never cascade a window off the bottom-right, and never above the
+        // working area: a title bar pushed off screen cannot be grabbed back.
         loc.x = loc.x.min((area.loc.x + area.size.w - size.w).max(area.loc.x));
-        loc.y = loc.y.min((area.loc.y + area.size.h - size.h).max(area.loc.y));
+        loc.y = loc.y.min((area.loc.y + area.size.h - size.h).max(area.loc.y + top));
+        loc.y = loc.y.max(area.loc.y + top);
 
         self.workspaces.active_mut().map_element(window.clone(), loc, true);
         self.focus_window(Some(&window));
@@ -129,8 +151,12 @@ impl Spectre {
     }
 
     /// Focus the next (or previous) window in the active workspace.
+    ///
+    /// Minimized windows are part of the cycle and are restored when reached;
+    /// otherwise minimizing a window would put it out of reach entirely.
     pub fn cycle_focus(&mut self, forward: bool) {
-        let windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
+        let mut windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
+        windows.extend(self.minimized.iter().map(|(w, _)| w.clone()));
         if windows.is_empty() {
             return;
         }
@@ -142,7 +168,11 @@ impl Spectre {
         let n = windows.len();
         let next = if forward { (current + 1) % n } else { (current + n - 1) % n };
         let target = windows[next].clone();
-        self.focus_window(Some(&target));
+        if self.is_minimized(&target) {
+            self.restore(&target);
+        } else {
+            self.focus_window(Some(&target));
+        }
     }
 
     /// Focus the nearest window in `direction`, measured between centres.
@@ -168,6 +198,64 @@ impl Spectre {
         if let Some(window) = best {
             self.focus_window(Some(&window));
         }
+    }
+
+    /// Move `window` so its surface top-left lands on `location`, clamped so the
+    /// title bar always stays grabbable.
+    pub fn move_window_to(&mut self, window: &Window, location: Point<i32, Logical>) {
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let area = self.working_area(&output);
+        let top = self.top_inset(window);
+        let size = window.geometry().size;
+
+        let mut loc = location;
+        // Horizontally a window may hang off the edge, but never so far that
+        // less than this much of it is left to grab.
+        const MIN_VISIBLE: i32 = 48;
+        loc.x = loc.x.clamp(
+            area.loc.x - (size.w - MIN_VISIBLE).max(0),
+            area.loc.x + area.size.w - MIN_VISIBLE,
+        );
+        loc.y = loc.y.clamp(area.loc.y + top, area.loc.y + area.size.h - MIN_VISIBLE);
+
+        self.workspaces.active_mut().map_element(window.clone(), loc, false);
+        self.mark_dirty();
+    }
+
+    /// Hide `window` without closing it. It stays in the workspace's window
+    /// list so `Mod+Tab` can bring it back, which is the only way back until
+    /// the panel exists.
+    pub fn minimize(&mut self, window: &Window) {
+        let Some(location) = self.workspaces.active().element_location(window) else {
+            return;
+        };
+        if self.minimized.iter().any(|(w, _)| w == window) {
+            return;
+        }
+        self.workspaces.active_mut().unmap_elem(window);
+        self.minimized.push((window.clone(), location));
+
+        if self.focus.as_ref() == Some(window) {
+            let next = self.workspaces.active().elements().last().cloned();
+            self.focus_window(next.as_ref());
+        }
+        self.mark_dirty();
+    }
+
+    /// Bring a minimized window back where it was and focus it.
+    pub fn restore(&mut self, window: &Window) {
+        let Some(index) = self.minimized.iter().position(|(w, _)| w == window) else {
+            return;
+        };
+        let (window, location) = self.minimized.remove(index);
+        self.workspaces.active_mut().map_element(window.clone(), location, true);
+        self.focus_window(Some(&window));
+    }
+
+    pub fn is_minimized(&self, window: &Window) -> bool {
+        self.minimized.iter().any(|(w, _)| w == window)
     }
 
     /// Nudge the focused floating window in `direction`, clamped to the working
@@ -200,6 +288,9 @@ impl Spectre {
     }
 
     /// Maximize or restore `window`.
+    ///
+    /// The client is sized to the working area *minus* the frame, so a
+    /// maximized window's title bar and border stay on screen.
     pub fn set_maximized(&mut self, window: &Window, maximized: bool) {
         let Some(output) = self.active_output() else {
             return;
@@ -208,11 +299,21 @@ impl Spectre {
         let Some(toplevel) = window.toplevel().cloned() else {
             return;
         };
+        let top = self.top_inset(window);
+        let border = if self.is_decorated(window) {
+            self.config.theme.metrics.border_width as i32
+        } else {
+            0
+        };
+        let size = Size::from((
+            (area.size.w - border * 2).max(1),
+            (area.size.h - top - border).max(1),
+        ));
 
         toplevel.with_pending_state(|state| {
             if maximized {
                 state.states.set(xdg_toplevel::State::Maximized);
-                state.size = Some(area.size);
+                state.size = Some(size);
             } else {
                 state.states.unset(xdg_toplevel::State::Maximized);
                 state.size = None;
@@ -221,7 +322,8 @@ impl Spectre {
         toplevel.send_pending_configure();
 
         if maximized {
-            self.workspaces.active_mut().map_element(window.clone(), area.loc, true);
+            let location = Point::from((area.loc.x + border, area.loc.y + top));
+            self.workspaces.active_mut().map_element(window.clone(), location, true);
         }
         self.mark_dirty();
     }
@@ -257,11 +359,7 @@ impl Spectre {
 
     /// True when the focused window is in the given toplevel state.
     pub fn focused_has_state(&self, wanted: xdg_toplevel::State) -> bool {
-        self.focus
-            .as_ref()
-            .and_then(|w| w.toplevel().cloned())
-            .map(|t| t.with_pending_state(|state| state.states.contains(wanted)))
-            .unwrap_or(false)
+        self.focus.as_ref().map(|w| self.has_state(w, wanted)).unwrap_or(false)
     }
 
     /// Ask the focused window to close.
@@ -275,21 +373,44 @@ impl Spectre {
     pub fn reflow_output(&mut self, output: &Output) {
         layer_map_for_output(output).arrange();
 
-        let area = self.working_area(output);
+        // Panels changing their exclusive zone changes the working area, so
+        // anything maximized has to be resized to the new one.
         let windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
         for window in windows {
-            let Some(toplevel) = window.toplevel().cloned() else {
-                continue;
-            };
-            let maximized = toplevel
-                .with_pending_state(|s| s.states.contains(xdg_toplevel::State::Maximized));
-            if maximized {
-                toplevel.with_pending_state(|state| state.size = Some(area.size));
-                toplevel.send_pending_configure();
-                self.workspaces.active_mut().map_element(window, area.loc, false);
+            if self.is_maximized(&window) {
+                self.set_maximized(&window, true);
             }
         }
         self.mark_dirty();
+    }
+
+    /// The window whose decoration the pointer is over, topmost first.
+    ///
+    /// Decorations are not client surfaces, so they are hit-tested here rather
+    /// than through `Space`, and always win over the window stacked below them.
+    pub fn decoration_under_pointer(&self) -> Option<(Window, Part)> {
+        let pointer = self.pointer.current_location();
+        let metrics = self.config.theme.metrics;
+        let space = self.workspaces.active();
+
+        for window in space.elements().rev() {
+            let Some(geometry) = space.element_geometry(window) else {
+                continue;
+            };
+            let frame = Frame::new(geometry, &metrics, self.is_decorated(window));
+            if let Some(part) = decorations::part_at(&frame, &metrics, pointer) {
+                return Some((window.clone(), part));
+            }
+            // A point inside this window's surface belongs to the client, and
+            // must not fall through to a window stacked underneath.
+            if frame.window.contains(Point::<i32, Logical>::from((
+                pointer.x.floor() as i32,
+                pointer.y.floor() as i32,
+            ))) {
+                return None;
+            }
+        }
+        None
     }
 
     /// Window under the pointer in the active workspace.

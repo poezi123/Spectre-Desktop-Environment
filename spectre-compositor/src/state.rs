@@ -1,6 +1,7 @@
 //! The compositor state: every Wayland global Spectre exposes, plus the
 //! desktop model (workspaces, focus, outputs) that the backends drive.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,6 +25,8 @@ use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::socket::ListeningSocketSource;
 use spectre_config::{Config, Keybinds};
 
@@ -88,10 +91,21 @@ pub struct Spectre {
     /// Toplevels that have been created but not yet given a size, so they
     /// cannot be placed sensibly. Moved into a workspace on first commit.
     pub pending_windows: Vec<Window>,
+    /// Windows hidden by the minimize button, with the position to restore
+    /// them to. They stay reachable through focus cycling.
+    pub minimized: Vec<(Window, smithay::utils::Point<i32, smithay::utils::Logical>)>,
     /// The window that currently has keyboard focus.
     pub focus: Option<Window>,
+    /// Last title bar press, for double-click detection.
+    pub last_click: Option<(Window, u32)>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
+    /// Shaped and uploaded labels for title bars and, later, the panel.
+    ///
+    /// Behind a `RefCell` because the render pass borrows the state immutably
+    /// while it walks the window stack, yet rasterising a caption mutates the
+    /// cache.
+    pub text: RefCell<crate::render::TextCache>,
     /// Dmabuf imports waiting for the backend's renderer to accept them.
     pub pending_dmabufs: Vec<(
         smithay::backend::allocator::dmabuf::Dmabuf,
@@ -181,8 +195,11 @@ impl Spectre {
             cursor_status: CursorImageStatus::default_named(),
             workspaces,
             pending_windows: Vec::new(),
+            minimized: Vec::new(),
             focus: None,
+            last_click: None,
             dirty: true,
+            text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),
             socket_name,
         })
@@ -268,6 +285,61 @@ impl Spectre {
     /// All outputs currently mapped.
     pub fn outputs(&self) -> Vec<Output> {
         self.workspaces.outputs().cloned().collect()
+    }
+
+    /// Title a window asks to be shown in its title bar.
+    ///
+    /// Falls back to the app id, then to a generic name, so a window is never
+    /// left with a blank bar.
+    pub fn window_title(&self, window: &Window) -> String {
+        use smithay::wayland::compositor::with_states;
+        use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+
+        let Some(surface) = window.wl_surface() else {
+            return String::from("Window");
+        };
+        with_states(&surface, |states| {
+            let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
+                return String::from("Window");
+            };
+            let data = data.lock().unwrap();
+            data.title
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| data.app_id.clone().filter(|a| !a.trim().is_empty()))
+                .unwrap_or_else(|| String::from("Window"))
+        })
+    }
+
+    /// Whether Spectre draws the frame for this window.
+    ///
+    /// Clients that asked for client-side decorations through xdg-decoration
+    /// draw their own, and must not get a second one from us.
+    pub fn is_decorated(&self, window: &Window) -> bool {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+
+        let Some(toplevel) = window.toplevel() else {
+            return false;
+        };
+        // Fullscreen windows own the whole output; a frame would only cover it.
+        if self.has_state(window, xdg_toplevel::State::Fullscreen) {
+            return false;
+        }
+        toplevel.with_pending_state(|state| {
+            !matches!(state.decoration_mode, Some(Mode::ClientSide))
+        })
+    }
+
+    pub fn is_maximized(&self, window: &Window) -> bool {
+        self.has_state(window, xdg_toplevel::State::Maximized)
+    }
+
+    /// Whether `window`'s toplevel carries `wanted`.
+    pub fn has_state(&self, window: &Window, wanted: xdg_toplevel::State) -> bool {
+        window
+            .toplevel()
+            .map(|t| t.with_pending_state(|state| state.states.contains(wanted)))
+            .unwrap_or(false)
     }
 
     /// Housekeeping that has to run once per event loop iteration.
