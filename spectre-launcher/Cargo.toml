@@ -1,0 +1,26 @@
+[package]
+name = "spectre-launcher"
+description = "The Spectre application launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "spectre-launcher"
+path = "src/main.rs"
+
+[dependencies]
+spectre-config = { workspace = true }
+spectre-draw = { workspace = true }
+spectre-text = { workspace = true }
+spectre-theme = { workspace = true }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+xdg = { workspace = true }
+
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }

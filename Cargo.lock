@@ -1883,6 +1883,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spectre-launcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "smithay-client-toolkit 0.21.1",
+ "spectre-config",
+ "spectre-draw",
+ "spectre-text",
+ "spectre-theme",
+ "tracing",
+ "tracing-subscriber",
+ "xdg",
+]
+
+[[package]]
 name = "spectre-panel"
 version = "0.1.0"
 dependencies = [

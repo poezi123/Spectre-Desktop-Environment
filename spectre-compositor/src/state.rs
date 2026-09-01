@@ -98,6 +98,9 @@ pub struct Spectre {
     pub focus: Option<Window>,
     /// Last title bar press, for double-click detection.
     pub last_click: Option<(Window, u32)>,
+    /// The layer surface currently holding keyboard focus, if any. A launcher
+    /// or a lock screen takes the keyboard away from windows while it is up.
+    pub layer_focus: Option<WlSurface>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
@@ -201,6 +204,7 @@ impl Spectre {
             minimized: Vec::new(),
             focus: None,
             last_click: None,
+            layer_focus: None,
             dirty: true,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),

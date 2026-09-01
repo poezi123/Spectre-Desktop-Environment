@@ -97,6 +97,7 @@ impl CompositorHandler for Spectre {
         // Any surface commit is new content on screen, including a panel
         // attaching its first buffer. Without this the compositor would sit
         // idle while a layer surface waited to be shown.
+        self.update_layer_focus();
         self.mark_dirty();
     }
 }
@@ -320,8 +321,10 @@ impl WlrLayerShellHandler for Spectre {
         });
 
         if let Some(output) = found {
-            // Removing an exclusive zone changes how much room windows have.
+            // Removing an exclusive zone changes how much room windows have,
+            // and a dismissed launcher has to hand the keyboard back.
             self.reflow_output(&output);
+            self.update_layer_focus();
         }
     }
 }

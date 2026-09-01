@@ -369,6 +369,42 @@ impl Spectre {
         }
     }
 
+    /// Hand the keyboard to the topmost layer surface that wants it, or give
+    /// it back to the focused window when none does.
+    ///
+    /// Without this a launcher or a lock screen would be drawn but deaf.
+    pub fn update_layer_focus(&mut self) {
+        let target = self.outputs().into_iter().find_map(|output| {
+            let map = layer_map_for_output(&output);
+            let surface = map
+                .layers()
+                .rev()
+                .find(|layer| layer.can_receive_keyboard_focus())
+                .map(|layer| layer.wl_surface().clone());
+            surface
+        });
+
+        if target == self.layer_focus {
+            return;
+        }
+        self.layer_focus = target.clone();
+
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+
+        match target {
+            Some(surface) => keyboard.set_focus(self, Some(surface), serial),
+            None => {
+                // Give the keyboard back to whatever had it before.
+                let window = self.focus.clone();
+                self.focus_window(window.as_ref());
+            }
+        }
+        self.mark_dirty();
+    }
+
     /// Re-arrange layer surfaces on `output` and refit anything maximized.
     pub fn reflow_output(&mut self, output: &Output) {
         layer_map_for_output(output).arrange();

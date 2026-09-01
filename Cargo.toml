@@ -4,6 +4,7 @@ members = [
     "spectre-config",
     "spectre-draw",
     "spectre-ipc",
+    "spectre-launcher",
     "spectre-panel",
     "spectre-text",
     "spectre-theme",

@@ -151,7 +151,7 @@ impl Spectre {
             }
             Action::ToggleAnimations => self.toggle_animations(),
             Action::CycleProfile => self.cycle_profile(),
-            Action::ToggleLauncher => self.spawn_configured("launcher"),
+            Action::ToggleLauncher => self.spawn("spectre-launcher"),
             Action::LockSession => self.spawn_configured("lock"),
             Action::Screenshot => self.spawn_configured("screenshot"),
         }
