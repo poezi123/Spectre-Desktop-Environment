@@ -110,14 +110,20 @@ The panel should remain functional with **all animations and RGB effects disable
 
 Workspace switching is intended to become one of Spectre's signature features.
 
-Instead of a GNOME-style overview being required for every switch, Spectre will provide fast normal switching plus optional visual transitions such as:
+Instead of a GNOME-style overview being required for every switch, Spectre
+provides fast normal switching plus optional visual transitions:
 
-- Slide
-- Depth
-- Cube / 3D
-- Coverflow-inspired transition
-- Minimal fade
+- Slide — the default
+- Fade
+- Depth — slide plus a scale-back, so the workspaces read as layers
+- Cube / 3D — not implemented; runs as Depth for now
+- Coverflow-inspired transition — likewise
 - No animation
+
+Cube and Coverflow need each workspace rendered to its own texture and mapped
+onto a perspective-projected quad, which the flat element pipeline cannot
+express. Rather than doing nothing when one is selected, they animate as Depth:
+the user asked for motion and gets motion, just not the shape they picked.
 
 Effects must never be mandatory. Users on old hardware should be able to disable them completely.
 
@@ -215,12 +221,13 @@ Performance profiles must only affect visual features — **never basic desktop 
 Garuda Linux in VirtualBox, 4 cores, 4 GB RAM, VMSVGA, one 1920x991 output:
 
 ```text
-spectre-compositor       62 MB PSS (about 20 MB private, the rest shared GL)
-spectre-panel            11 MB PSS
-spectre-notify           10 MB PSS
+spectre-compositor       65 MB PSS (about 20 MB private, the rest shared GL)
+spectre-panel             9 MB PSS
+spectre-notify            9 MB PSS
 whole system, idle      472 MB including kernel, systemd and NetworkManager
 CPU, idle                0 %, nothing is drawn and nothing wakes up unless
                          something actually changed
+during an animation      one frame per refresh period, no more
 ```
 
 The panel is software rendered on purpose. At 1920x32 the surface is a
@@ -294,10 +301,10 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 - [x] RGB window decorations
 - [x] Animated contour patterns
-- [ ] Workspace animations
+- [x] Workspace animations
 - [ ] 3D workspace effects
-- [ ] Performance profiles
-- [ ] Animation kill-switch
+- [x] Performance profiles
+- [x] Animation kill-switch
 
 ### Phase 4 — Distribution
 
@@ -338,7 +345,10 @@ arrows to move, Enter to launch. `spectre-notify` implements
 Urgency shows in the accent bar, and critical notifications stay until they
 are clicked away.
 
-Next: the settings application, a system tray, and the workspace transitions.
+Workspace switches animate. `Mod+Shift+A` stops every animation on the spot,
+and `Mod+Shift+P` cycles the performance profile without restarting anything.
+
+Next: the settings application, a system tray, and the lock screen.
 
 ### Building
 
