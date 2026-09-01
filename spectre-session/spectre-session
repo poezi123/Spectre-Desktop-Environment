@@ -1,0 +1,29 @@
+#!/bin/sh
+# Session entry point.
+#
+# Display managers exec this; it sets the environment every Wayland desktop is
+# expected to export, then hands over to the compositor. Keeping it a shell
+# script means a user can copy it, tweak one variable and point their display
+# manager at the copy without rebuilding anything.
+
+set -eu
+
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Spectre}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-spectre}"
+export XDG_SESSION_TYPE=wayland
+
+# Toolkits: prefer native Wayland, fall back to X11 through XWayland.
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
+export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland,x11}"
+export CLUTTER_BACKEND="${CLUTTER_BACKEND:-wayland}"
+export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
+# Spectre draws its own decorations; asking Qt not to add a second frame.
+export QT_WAYLAND_DISABLE_WINDOWDECORATION="${QT_WAYLAND_DISABLE_WINDOWDECORATION:-1}"
+
+# Let the user drop overrides in without editing this file.
+for conf in /etc/spectre/session.conf "${XDG_CONFIG_HOME:-$HOME/.config}/spectre/session.conf"; do
+    [ -r "$conf" ] && . "$conf"
+done
+
+exec spectre-compositor "$@"

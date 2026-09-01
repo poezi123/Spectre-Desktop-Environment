@@ -293,3 +293,37 @@ mod tests {
         assert_eq!(cfg, back);
     }
 }
+
+#[cfg(test)]
+mod shipped_config_tests {
+    use super::*;
+
+    /// The commented default that gets installed to
+    /// `/usr/share/spectre/spectre.toml`.
+    const SHIPPED: &str = include_str!("../../spectre-session/share/spectre/spectre.toml");
+
+    #[test]
+    fn the_shipped_default_config_parses() {
+        let cfg = Config::from_toml(SHIPPED)
+            .unwrap_or_else(|e| panic!("the config we ship does not parse: {e}"));
+        assert_eq!(cfg.general.profile, Profile::Balanced);
+        assert_eq!(cfg.general.workspaces, 4);
+    }
+
+    #[test]
+    fn the_shipped_default_documents_every_effect_key() {
+        // A key that silently disappears from the sample is a documentation
+        // bug; deny_unknown_fields only catches the opposite direction.
+        for key in [
+            "blur",
+            "shadows",
+            "rounded-corners",
+            "window-animations",
+            "animation-speed",
+            "workspace-transition",
+            "rgb-glow",
+        ] {
+            assert!(SHIPPED.contains(key), "the sample config never mentions `{key}`");
+        }
+    }
+}

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Spectre
+Comment=Lightweight. Dark. Fluid.
+Exec=spectre-session
+TryExec=spectre-session
+Type=Application
+DesktopNames=Spectre
+Keywords=wayland;compositor;spectre;

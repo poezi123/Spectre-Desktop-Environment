@@ -43,6 +43,9 @@ impl ClientData for ClientState {
 /// Everything the compositor owns.
 pub struct Spectre {
     pub display_handle: DisplayHandle,
+    /// Kept so later phases (idle timers, config reload watchers) can add
+    /// sources without threading the handle through every call site.
+    #[allow(dead_code)]
     pub loop_handle: LoopHandle<'static, Spectre>,
     pub loop_signal: LoopSignal,
     pub clock: Clock<Monotonic>,
@@ -55,6 +58,9 @@ pub struct Spectre {
     // Wayland globals.
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    /// Holds the `zxdg_decoration_manager_v1` global alive; the handler reaches
+    /// it through the delegate macro rather than through this field.
+    #[allow(dead_code)]
     pub xdg_decoration_state: XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
@@ -64,6 +70,8 @@ pub struct Spectre {
     /// Kept alive for the lifetime of the compositor; dropping it would remove
     /// the `zwp_linux_dmabuf_v1` global from under running clients.
     pub dmabuf_global: Option<DmabufGlobal>,
+    /// Holds the `xdg_output_manager` global alive.
+    #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
@@ -71,6 +79,7 @@ pub struct Spectre {
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
+    #[allow(dead_code)]
     pub seat_name: String,
     pub pointer: PointerHandle<Self>,
     pub cursor_status: CursorImageStatus,

@@ -1,0 +1,74 @@
+# Spectre desktop configuration.
+#
+# Copy to ~/.config/spectre/spectre.toml and edit. Every key is optional: what
+# you leave out keeps the shipped default, so a file with a single line is fine.
+
+[general]
+# performance | balanced | spectre | custom
+#   performance  static patterns, no blur, no animations - old laptops and VMs
+#   balanced     the default
+#   spectre      everything on - modern hardware
+#   custom       the [effects] section below is used verbatim
+profile = "balanced"
+workspaces = 4
+autostart = []
+
+# Only read when profile = "custom".
+[effects]
+blur = false
+shadows = true
+rounded-corners = true
+window-animations = true
+animation-speed = 1.0
+# none | fade | slide | depth | cube | coverflow
+workspace-transition = "slide"
+# Strength of the RGB accent glow around the focused window, 0.0 to 1.0.
+rgb-glow = 0.45
+
+[input.keyboard]
+# Empty means "use the system default" (localectl).
+layout = ""
+variant = ""
+options = ""
+repeat-delay = 400
+repeat-rate = 30
+
+[input.pointer]
+accel-speed = 0.0
+accel-profile = "adaptive"
+natural-scroll = false
+tap-to-click = true
+focus-follows-mouse = false
+
+[panel]
+enabled = true
+# top | bottom | left | right
+position = "bottom"
+floating = false
+opacity = 1.0
+
+[theme.metrics]
+titlebar-height = 32
+border-width = 1
+corner-radius = 8
+panel-height = 32
+
+# The topographic contour pattern. Set kind = "none" to switch it off, or
+# animated = false to freeze it while keeping the texture.
+[theme.window-pattern]
+kind = "topographic"
+animated = true
+speed = 0.6
+intensity = 0.14
+
+[theme.desktop-pattern]
+kind = "none"
+
+# Bindings merge over the defaults, so only list what you want to change.
+# Actions: spawn (with `command`), close-window, quit, focus-next, focus-prev,
+# focus-direction / move-direction (with `direction`), toggle-maximize,
+# toggle-fullscreen, workspace / move-to-workspace (with `index`),
+# next-workspace, prev-workspace, toggle-animations, cycle-profile,
+# toggle-launcher, lock-session, screenshot.
+[keybinds]
+"Mod+Return" = { action = "spawn", command = "konsole" }

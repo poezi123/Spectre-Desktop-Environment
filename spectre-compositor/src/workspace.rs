@@ -21,6 +21,9 @@ pub struct Workspaces {
     outputs: Vec<(Output, Point<i32, Logical>)>,
 }
 
+/// Some accessors below are read by the panel IPC and the settings app rather
+/// than by the compositor itself, so they stay even without a caller here.
+#[allow(dead_code)]
 impl Workspaces {
     /// Create `count` workspaces. `count` is clamped to at least one, because
     /// a session with no workspace has nowhere to put a window.
