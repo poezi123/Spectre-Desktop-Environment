@@ -400,7 +400,8 @@ This separation allows Spectre to remain usable outside Garuda Linux while retai
 **TBD.** An open-source license will be selected before the first public source release.
 
 ---
-
+There will be no AI that created all of this.
+Art cannot be made by an AI...
 <p align="center">
   <strong>SPECTRE DE</strong><br>
   Lightweight. Dark. Fluid.
