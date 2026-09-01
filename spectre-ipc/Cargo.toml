@@ -1,0 +1,15 @@
+[package]
+name = "spectre-ipc"
+description = "The protocol the Spectre panel and shell use to talk to the compositor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+spectre-config = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+tracing = { workspace = true }

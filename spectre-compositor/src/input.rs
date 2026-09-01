@@ -204,6 +204,9 @@ impl Spectre {
         };
 
         let mut cmd = std::process::Command::new(program);
+        if let Some(socket) = self.ipc_socket_path() {
+            cmd.env(spectre_ipc::SOCKET_ENV, socket);
+        }
         cmd.args(args)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("XDG_SESSION_TYPE", "wayland")

@@ -113,6 +113,9 @@ pub struct Spectre {
     )>,
     /// Wayland socket clients connect to, e.g. `wayland-1`.
     pub socket_name: String,
+    /// The control socket the panel and shell connect to. `None` when it could
+    /// not be bound; the desktop still works, it just has no panel.
+    pub ipc: Option<crate::ipc::Ipc>,
 }
 
 impl Spectre {
@@ -202,6 +205,7 @@ impl Spectre {
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),
             socket_name,
+            ipc: None,
         })
     }
 
@@ -239,6 +243,23 @@ impl Spectre {
         Ok(())
     }
 
+    /// Bind the control socket. Failing to is survivable: the desktop runs
+    /// without a panel rather than not at all.
+    pub fn start_ipc(&mut self) {
+        match crate::ipc::Ipc::new(&self.loop_handle, &self.socket_name.clone()) {
+            Ok(ipc) => {
+                tracing::info!(socket = %ipc.path.display(), "control socket ready");
+                self.ipc = Some(ipc);
+            }
+            Err(err) => tracing::error!(?err, "no control socket; the panel will not start"),
+        }
+    }
+
+    /// Path children should be told to connect to.
+    pub fn ipc_socket_path(&self) -> Option<std::path::PathBuf> {
+        self.ipc.as_ref().map(|ipc| ipc.path.clone())
+    }
+
     /// Seconds since the compositor started, for pattern animation.
     pub fn elapsed_secs(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
@@ -250,8 +271,14 @@ impl Spectre {
     }
 
     /// Note that something visible changed, so the next frame is drawn.
+    ///
+    /// Shell clients are told as well: focus, workspace and window changes all
+    /// pass through here, which is exactly what a panel needs to know about.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+        if let Some(ipc) = self.ipc.as_mut() {
+            ipc.mark_dirty();
+        }
     }
 
     /// Take the dirty flag, returning whether a redraw is needed.
@@ -287,6 +314,23 @@ impl Spectre {
     /// All outputs currently mapped.
     pub fn outputs(&self) -> Vec<Output> {
         self.workspaces.outputs().cloned().collect()
+    }
+
+    /// The application id a window reports, or an empty string.
+    pub fn window_app_id(&self, window: &Window) -> String {
+        use smithay::wayland::compositor::with_states;
+        use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+
+        let Some(surface) = window.wl_surface() else {
+            return String::new();
+        };
+        with_states(&surface, |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .and_then(|data| data.lock().unwrap().app_id.clone())
+                .unwrap_or_default()
+        })
     }
 
     /// Title a window asks to be shown in its title bar.
@@ -348,6 +392,8 @@ impl Spectre {
     pub fn refresh(&mut self) {
         self.workspaces.refresh();
         self.popups.cleanup();
+        self.prune_ipc_windows();
+        self.publish_desktop_state();
         if let Err(err) = self.display_handle.flush_clients() {
             tracing::warn!(?err, "failed to flush clients");
         }

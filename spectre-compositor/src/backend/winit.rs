@@ -63,6 +63,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     }
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
+    state.start_ipc();
     tracing::info!(socket = %state.socket_name, "Spectre is up (nested)");
     for command in state.config.general.autostart.clone() {
         state.spawn(&command);

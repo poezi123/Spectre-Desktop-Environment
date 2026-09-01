@@ -95,6 +95,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     init_drm_events(&mut state, &shared, drm_notifier)?;
     init_session_events(&mut state, session_notifier, &shared)?;
 
+    state.start_ipc();
     tracing::info!(socket = %state.socket_name, seat = %seat_name, "Spectre is up (native)");
     for command in state.config.general.autostart.clone() {
         state.spawn(&command);
