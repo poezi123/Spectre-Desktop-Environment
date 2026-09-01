@@ -238,12 +238,19 @@ impl Spectre {
     }
 
     /// Take the dirty flag, returning whether a redraw is needed.
-    ///
-    /// An animated pattern is always dirty: it changes every frame by
-    /// definition, and asking the theme keeps that decision in one place.
     pub fn take_dirty(&mut self) -> bool {
-        let animated = self.config.theme.needs_continuous_redraw();
-        std::mem::replace(&mut self.dirty, false) || animated
+        std::mem::replace(&mut self.dirty, false) || self.needs_animation_frames()
+    }
+
+    /// Whether an animation currently on screen needs a new frame every tick.
+    ///
+    /// Only the desktop pattern is asked, because it is the only animated
+    /// surface the compositor draws today. Window and panel patterns join this
+    /// once the decoration renderer draws them; until then, treating them as
+    /// animated would redraw the screen sixty times a second to show nothing
+    /// new, which is exactly the waste the performance profiles exist to avoid.
+    pub fn needs_animation_frames(&self) -> bool {
+        self.config.theme.desktop_pattern.needs_continuous_redraw()
     }
 
     /// Ask the event loop to stop; the session ends after the current iteration.

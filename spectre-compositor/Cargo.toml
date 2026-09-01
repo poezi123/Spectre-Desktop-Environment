@@ -13,7 +13,7 @@ name = "spectre-compositor"
 path = "src/main.rs"
 
 [features]
-default = ["winit", "xwayland"]
+default = ["winit", "udev", "xwayland"]
 # Nested backend: runs Spectre inside an existing Wayland or X11 session.
 # Invaluable for development, and how the VM smoke test runs.
 winit = ["smithay/backend_winit", "smithay/backend_egl"]
