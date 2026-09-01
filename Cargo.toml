@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "spectre-config",
     "spectre-ipc",
+    "spectre-panel",
     "spectre-text",
     "spectre-theme",
     "spectre-compositor",

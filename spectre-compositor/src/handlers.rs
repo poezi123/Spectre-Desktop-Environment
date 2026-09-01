@@ -93,6 +93,11 @@ impl CompositorHandler for Spectre {
         self.popups.commit(surface);
         self.ensure_initial_configure(surface);
         self.map_new_window(surface);
+
+        // Any surface commit is new content on screen, including a panel
+        // attaching its first buffer. Without this the compositor would sit
+        // idle while a layer surface waited to be shown.
+        self.mark_dirty();
     }
 }
 

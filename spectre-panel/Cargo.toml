@@ -1,0 +1,32 @@
+[package]
+name = "spectre-panel"
+description = "The Spectre taskbar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "spectre-panel"
+path = "src/main.rs"
+
+[dependencies]
+spectre-config = { workspace = true }
+spectre-ipc = { workspace = true }
+spectre-text = { workspace = true }
+spectre-theme = { workspace = true }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# A layer-shell client, drawn into shared memory. No GL: a 1920x32 strip is
+# a quarter of a megabyte, and staying off the GPU keeps the panel's memory
+# footprint to its own pixels.
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
+
+# Local time for the clock. The panel is single threaded, so `time`'s local
+# offset lookup is safe here and it is a much smaller dependency than chrono.
+time = { version = "0.3", features = ["local-offset", "formatting", "macros"] }

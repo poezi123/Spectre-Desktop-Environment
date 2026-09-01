@@ -107,6 +107,69 @@ impl Pattern {
         self.animated = false;
         self
     }
+
+    /// Line coverage at a device pixel, in `0.0..=1.0`.
+    ///
+    /// This is the CPU twin of `spectre-compositor`'s `pattern.glsl`, for
+    /// surfaces drawn in software - the panel, and any renderer without a GPU.
+    /// The two must stay in step: the constants below are the same ones the
+    /// shader uses, and changing one without the other makes the panel and the
+    /// title bars disagree about what the Spectre Pattern looks like.
+    pub fn coverage(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
+        if self.is_noop() {
+            return 0.0;
+        }
+        let spacing = (self.line_spacing * scale).max(1.0);
+        let q = (x / (spacing * 6.0) + phase, y / (spacing * 6.0) + phase * 0.6);
+        let height = fbm(q.0, q.1);
+
+        let levels = height * 16.0;
+        let dist = (levels.fract().abs() - 0.5).abs();
+        let half_width = ((self.line_width * scale) / spacing).clamp(0.004, 0.4);
+        let feather = half_width * 0.9 + 0.015;
+        1.0 - smoothstep(half_width, half_width + feather, dist)
+    }
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    if edge1 <= edge0 {
+        return if x < edge0 { 0.0 } else { 1.0 };
+    }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn hash(x: f32, y: f32) -> f32 {
+    let d = x * 127.1 + y * 311.7;
+    (d.sin() * 43758.547).fract().abs()
+}
+
+fn value_noise(x: f32, y: f32) -> f32 {
+    let (ix, iy) = (x.floor(), y.floor());
+    let (fx, fy) = (x - ix, y - iy);
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+
+    let a = hash(ix, iy);
+    let b = hash(ix + 1.0, iy);
+    let c = hash(ix, iy + 1.0);
+    let d = hash(ix + 1.0, iy + 1.0);
+    let top = a + (b - a) * ux;
+    let bottom = c + (d - c) * ux;
+    top + (bottom - top) * uy
+}
+
+/// Four octaves, matching the shader.
+fn fbm(mut x: f32, mut y: f32) -> f32 {
+    let mut v = 0.0;
+    let mut amp = 0.5;
+    for _ in 0..4 {
+        v += amp * value_noise(x, y);
+        x *= 2.03;
+        y *= 2.03;
+        amp *= 0.5;
+    }
+    v
 }
 
 #[cfg(test)]
@@ -140,6 +203,53 @@ mod tests {
         let p = Pattern::default();
         assert!(p.phase(10.0) > p.phase(0.0));
         assert!(p.phase(1.0e9).abs() < 1000.0);
+    }
+
+    #[test]
+    fn coverage_stays_inside_zero_to_one() {
+        let p = Pattern::default();
+        for i in 0..400 {
+            let (x, y) = (i as f32 * 3.7, (i % 37) as f32 * 2.3);
+            let c = p.coverage(x, y, 0.25, 1.0);
+            assert!((0.0..=1.0).contains(&c), "coverage {c} at ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_disabled_pattern_covers_nothing() {
+        assert_eq!(Pattern::OFF.coverage(10.0, 10.0, 0.0, 1.0), 0.0);
+        let flat = Pattern { intensity: 0.0, ..Default::default() };
+        assert_eq!(flat.coverage(10.0, 10.0, 0.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn the_pattern_actually_draws_lines_somewhere() {
+        let p = Pattern::default();
+        let any = (0..2000).any(|i| p.coverage(i as f32 * 1.3, 16.0, 0.0, 1.0) > 0.5);
+        assert!(any, "a topographic pattern with no visible contour is not a pattern");
+    }
+
+    #[test]
+    fn the_phase_moves_the_field() {
+        let p = Pattern::default();
+        let before: Vec<f32> = (0..64).map(|i| p.coverage(i as f32 * 4.0, 8.0, 0.0, 1.0)).collect();
+        let after: Vec<f32> = (0..64).map(|i| p.coverage(i as f32 * 4.0, 8.0, 5.0, 1.0)).collect();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn coverage_is_deterministic() {
+        let p = Pattern::default();
+        assert_eq!(p.coverage(12.5, 7.5, 0.3, 1.25), p.coverage(12.5, 7.5, 0.3, 1.25));
+    }
+
+    #[test]
+    fn scaling_keeps_the_pattern_finite() {
+        let p = Pattern::default();
+        for scale in [0.5, 1.0, 1.5, 2.0, 3.0] {
+            let c = p.coverage(100.0, 20.0, 0.0, scale);
+            assert!(c.is_finite() && (0.0..=1.0).contains(&c));
+        }
     }
 
     #[test]
