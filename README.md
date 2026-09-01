@@ -178,15 +178,27 @@ Performance profiles must only affect visual features — **never basic desktop 
 
 ## Technology direction
 
-The exact stack is not final yet, but the current direction is:
+- **Rust** for every Spectre component.
+- **Wayland** as the primary display protocol, via [Smithay](https://github.com/Smithay/smithay).
+  `spectre-compositor` is a compositor in its own right rather than a
+  configuration of somebody else's, which is what makes server-side
+  decorations, the pattern shader and the workspace transitions possible.
+- Two backends from the same state: `udev` (KMS/DRM, libinput, libseat) for the
+  real session, and `winit` for running Spectre nested inside another session
+  during development.
+- GPU shaders (GLSL ES 1.00, no derivative extensions) for the animated
+  patterns, so they still run on software GL and old integrated chips.
+- Standard freedesktop.org protocols wherever possible.
 
-- **Wayland** as the primary display protocol
-- **Rust and/or C++** for performance-critical components
-- A lightweight compositor foundation rather than implementing every Wayland protocol from scratch
-- **Qt 6** where it provides a clear advantage for configuration and desktop UI
-- GPU shaders for optional animated patterns and effects
-- IPC between compositor, panel and shell
-- Standard freedesktop.org protocols wherever possible
+### Measured so far
+
+Garuda Linux in VirtualBox, 4 cores, 4 GB RAM, VMSVGA, one 1920x991 output:
+
+```text
+spectre-compositor       59 MB PSS (19 MB private, the rest shared GL libraries)
+whole system, idle      596 MB including kernel, systemd and NetworkManager
+compositor CPU, idle    0 %, no frame is drawn unless something changed
+```
 
 X11 compatibility may be provided through **XWayland** rather than maintaining a separate X11 desktop implementation.
 
@@ -226,8 +238,8 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 - [x] Define initial panel concepts
 - [x] Define Spectre Pattern concept
 - [ ] Finalize UI design system
-- [ ] Define RAM/CPU performance targets
-- [ ] Choose compositor foundation and primary language
+- [x] Define RAM/CPU performance targets
+- [x] Choose compositor foundation and primary language
 
 ### Phase 1 — Panel prototype
 
@@ -242,13 +254,13 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 ### Phase 2 — Core desktop
 
-- [ ] Create compositor prototype
-- [ ] Window management
-- [ ] Keyboard shortcuts
-- [ ] Multi-monitor support
+- [x] Create compositor prototype
+- [x] Window management
+- [x] Keyboard shortcuts
+- [x] Multi-monitor support
 - [ ] Shell integration
 - [ ] Notifications
-- [ ] Session management
+- [x] Session management
 
 ### Phase 3 — Spectre visuals
 
@@ -281,9 +293,25 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 ## Current status
 
-Spectre DE is currently a **design and architecture concept**. There is no production-ready desktop environment yet.
+`spectre-compositor` runs as a real Wayland session on KMS/DRM: it maps
+windows, draws the accent focus outline, routes keyboard and pointer input,
+handles four workspaces and survives VT switching. Clients confirm it as
+`WM: spectre-compositor (Wayland)`.
 
-The first planned implementation target is **Spectre Panel**, followed by the core Wayland compositor and shell components.
+Next up is `spectre-panel`, followed by title bars with captions and buttons,
+then the workspace transitions.
+
+### Building
+
+```sh
+cargo build --release
+./target/release/spectre-compositor --backend winit   # nested, for development
+./target/release/spectre-compositor --backend udev    # real session, from a TTY
+```
+
+The `udev` backend needs `seatd` running (or logind) and the user in the `seat`
+group. Copy `spectre-session/share/spectre/spectre.toml` to
+`~/.config/spectre/spectre.toml` to change anything; every key is optional.
 
 ## Naming
 
