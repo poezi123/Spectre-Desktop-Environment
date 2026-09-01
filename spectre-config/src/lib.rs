@@ -49,6 +49,23 @@ impl Default for General {
     }
 }
 
+impl General {
+    /// Everything to launch once the session is up.
+    ///
+    /// The panel is part of the desktop rather than something a user has to
+    /// remember to add, so it is prepended unless `[panel] enabled = false`.
+    /// It stays a normal autostart entry, which means a user who wants a
+    /// different panel just turns this one off.
+    pub fn startup_commands(&self, panel_enabled: bool) -> Vec<String> {
+        let mut commands = Vec::with_capacity(self.autostart.len() + 1);
+        if panel_enabled {
+            commands.push(String::from("spectre-panel"));
+        }
+        commands.extend(self.autostart.iter().cloned());
+        commands
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Panel {
@@ -284,6 +301,33 @@ mod tests {
             Some(&Action::Spawn { command: "foot".into() })
         );
         assert_eq!(merged.get(&"Mod+q".parse().unwrap()), Some(&Action::CloseWindow));
+    }
+
+    #[test]
+    fn the_panel_starts_with_the_session() {
+        let cfg = Config::default().resolved();
+        let commands = cfg.general.startup_commands(cfg.panel.enabled);
+        assert_eq!(commands.first().map(String::as_str), Some("spectre-panel"));
+    }
+
+    #[test]
+    fn disabling_the_panel_leaves_it_out_of_startup() {
+        let cfg = Config::from_toml("[panel]\nenabled = false").unwrap();
+        let commands = cfg.general.startup_commands(cfg.panel.enabled);
+        assert!(!commands.iter().any(|c| c.contains("spectre-panel")));
+    }
+
+    #[test]
+    fn user_autostart_entries_come_after_the_panel() {
+        let cfg = Config::from_toml(
+            r#"
+            [general]
+            autostart = ["nm-applet", "foot"]
+            "#,
+        )
+        .unwrap();
+        let commands = cfg.general.startup_commands(cfg.panel.enabled);
+        assert_eq!(commands, ["spectre-panel", "nm-applet", "foot"]);
     }
 
     #[test]

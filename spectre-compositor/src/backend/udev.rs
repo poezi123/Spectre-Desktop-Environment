@@ -97,7 +97,8 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     state.start_ipc();
     tracing::info!(socket = %state.socket_name, seat = %seat_name, "Spectre is up (native)");
-    for command in state.config.general.autostart.clone() {
+    let startup = state.config.general.startup_commands(state.config.panel.enabled);
+    for command in startup {
         state.spawn(&command);
     }
 
