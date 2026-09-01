@@ -37,16 +37,28 @@ Spectre is intended to be distribution-independent. **Garuda Spectre** will be t
 ```text
 spectre-desktop
 │
-├── spectre-compositor   # Wayland compositor and window management
-├── spectre-panel        # Taskbar / panel
-├── spectre-shell        # Desktop shell and integration
-├── spectre-launcher     # Application launcher
-├── spectre-settings     # Central settings application
-├── spectre-notify       # Notification daemon / UI
-├── spectre-lock         # Lock screen
-├── spectre-session      # Session startup and management
-├── spectre-effects      # Optional visual effects and shaders
-└── spectre-theme        # Default Spectre visual assets
+├── spectre-compositor   # Wayland compositor and window management   [built]
+├── spectre-panel        # Taskbar / panel                            [built]
+├── spectre-ipc          # Control socket protocol, plus spectrectl   [built]
+├── spectre-config       # Configuration model and profiles           [built]
+├── spectre-theme        # Palette, metrics and the Spectre Pattern   [built]
+├── spectre-text         # Shaping and rasterising labels             [built]
+├── spectre-session      # Session startup                            [built]
+├── spectre-launcher     # Application launcher                       [planned]
+├── spectre-settings     # Central settings application               [planned]
+├── spectre-notify       # Notification daemon / UI                   [planned]
+└── spectre-lock         # Lock screen                                [planned]
+```
+
+The shell components are ordinary Wayland clients. They learn about the
+desktop through `spectre-ipc`, a newline-delimited JSON protocol on a Unix
+socket the compositor exports as `$SPECTRE_SOCKET`:
+
+```sh
+spectrectl state          # the whole desktop as JSON
+spectrectl watch          # ...and again on every change
+spectrectl workspace 2
+spectrectl profile spectre
 ```
 
 Spectre should reuse established Linux infrastructure wherever possible instead of reinventing it.
@@ -202,10 +214,15 @@ Performance profiles must only affect visual features — **never basic desktop 
 Garuda Linux in VirtualBox, 4 cores, 4 GB RAM, VMSVGA, one 1920x991 output:
 
 ```text
-spectre-compositor       59 MB PSS (19 MB private, the rest shared GL libraries)
-whole system, idle      596 MB including kernel, systemd and NetworkManager
+spectre-compositor       64 MB PSS (about 20 MB private, the rest shared GL)
+spectre-panel            10 MB PSS
+whole system, idle      611 MB including kernel, systemd and NetworkManager
 compositor CPU, idle    0 %, no frame is drawn unless something changed
 ```
+
+The panel is software rendered on purpose. At 1920x32 the surface is a
+quarter of a megabyte; a GL context would cost more memory than the pixels it
+would be drawing.
 
 X11 compatibility may be provided through **XWayland** rather than maintaining a separate X11 desktop implementation.
 
@@ -250,14 +267,15 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 ### Phase 1 — Panel prototype
 
-- [ ] Create `spectre-panel`
-- [ ] Application launcher button
-- [ ] Workspace indicator
-- [ ] Pinned/running applications
+- [x] Create `spectre-panel`
+- [x] Application launcher button
+- [x] Workspace indicator
+- [x] Running applications
+- [ ] Pinned applications
 - [ ] System tray
-- [ ] Clock
-- [ ] Configuration file
-- [ ] Static Spectre Pattern
+- [x] Clock
+- [x] Configuration file
+- [x] Static Spectre Pattern
 
 ### Phase 2 — Core desktop
 
@@ -265,14 +283,14 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 - [x] Window management
 - [x] Keyboard shortcuts
 - [x] Multi-monitor support
-- [ ] Shell integration
+- [x] Shell integration
 - [ ] Notifications
 - [x] Session management
 
 ### Phase 3 — Spectre visuals
 
-- [ ] RGB window decorations
-- [ ] Animated contour patterns
+- [x] RGB window decorations
+- [x] Animated contour patterns
 - [ ] Workspace animations
 - [ ] 3D workspace effects
 - [ ] Performance profiles
@@ -300,13 +318,17 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 ## Current status
 
-`spectre-compositor` runs as a real Wayland session on KMS/DRM: it maps
-windows, draws the accent focus outline, routes keyboard and pointer input,
-handles four workspaces and survives VT switching. Clients confirm it as
-`WM: spectre-compositor (Wayland)`.
+A usable desktop, in the sense that you can log into it and work.
 
-Next up is `spectre-panel`, followed by title bars with captions and buttons,
-then the workspace transitions.
+`spectre-compositor` runs as a real Wayland session on KMS/DRM. It maps
+windows with server-side title bars - caption, minimize, maximize and close,
+drag to move, double click to maximize - draws the accent focus outline and
+the topographic pattern, routes keyboard and pointer input, handles four
+workspaces and survives VT switching. `spectre-panel` sits at the bottom with
+the workspace indicator, running applications, a CPU and memory readout and
+the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
+
+Next: notifications, the application launcher, and the workspace transitions.
 
 ### Building
 
@@ -314,6 +336,7 @@ then the workspace transitions.
 cargo build --release
 ./target/release/spectre-compositor --backend winit   # nested, for development
 ./target/release/spectre-compositor --backend udev    # real session, from a TTY
+./target/release/spectre-panel                        # from inside the session
 ```
 
 The `udev` backend needs `seatd` running (or logind) and the user in the `seat`
