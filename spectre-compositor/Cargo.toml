@@ -1,0 +1,51 @@
+[package]
+name = "spectre-compositor"
+description = "The Spectre Wayland compositor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "spectre-compositor"
+path = "src/main.rs"
+
+[features]
+default = ["winit", "xwayland"]
+# Nested backend: runs Spectre inside an existing Wayland or X11 session.
+# Invaluable for development, and how the VM smoke test runs.
+winit = ["smithay/backend_winit", "smithay/backend_egl"]
+# Native backend: KMS/DRM + libinput + libseat. This is the real session.
+udev = [
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_libinput",
+    "smithay/backend_session_libseat",
+    "smithay/backend_udev",
+    "smithay/backend_egl",
+    "dep:libc",
+]
+xwayland = ["smithay/xwayland"]
+
+[dependencies]
+spectre-config = { workspace = true }
+spectre-theme = { workspace = true }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+libc = { version = "0.2", optional = true }
+bitflags = "2"
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = [
+    "desktop",
+    "wayland_frontend",
+    "renderer_gl",
+    "renderer_multi",
+    "use_system_lib",
+]
