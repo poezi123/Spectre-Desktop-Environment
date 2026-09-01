@@ -1,1 +1,4 @@
-*.png
+/target
+**/*.rs.bk
+*.pdb
+.direnv/

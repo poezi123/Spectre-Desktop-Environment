@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "spectre-config",
+    "spectre-theme",
+    "spectre-compositor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/poezi123/Spectre-Desktop-Environment"
+authors = ["Leon Pelzmann"]
+
+[workspace.dependencies]
+spectre-config = { path = "spectre-config", version = "0.1.0" }
+spectre-theme  = { path = "spectre-theme",  version = "0.1.0" }
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+xdg = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
