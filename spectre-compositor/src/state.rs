@@ -101,6 +101,8 @@ pub struct Spectre {
     /// The layer surface currently holding keyboard focus, if any. A launcher
     /// or a lock screen takes the keyboard away from windows while it is up.
     pub layer_focus: Option<WlSurface>,
+    /// A workspace switch being animated.
+    pub transition: Option<crate::transition::Transition>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
@@ -205,6 +207,7 @@ impl Spectre {
             focus: None,
             last_click: None,
             layer_focus: None,
+            transition: None,
             dirty: true,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),
@@ -296,6 +299,9 @@ impl Spectre {
     /// only counts while a decorated window is actually mapped: an empty
     /// desktop must fall back to zero frames per second.
     pub fn needs_animation_frames(&self) -> bool {
+        if self.transition.is_some() {
+            return true;
+        }
         if self.config.theme.desktop_pattern.needs_continuous_redraw() {
             return true;
         }
@@ -394,6 +400,7 @@ impl Spectre {
 
     /// Housekeeping that has to run once per event loop iteration.
     pub fn refresh(&mut self) {
+        self.finish_transition();
         self.workspaces.refresh();
         self.popups.cleanup();
         self.prune_ipc_windows();

@@ -247,11 +247,7 @@ impl Spectre {
                 self.send_ipc(id, &Event::State(desktop));
             }
             Request::SwitchWorkspace { index } => {
-                if self.workspaces.switch(index.saturating_sub(1) as usize) {
-                    let next = self.workspaces.active().elements().last().cloned();
-                    self.focus_window(next.as_ref());
-                    self.mark_dirty();
-                }
+                self.switch_workspace(index.saturating_sub(1) as usize);
             }
             Request::ActivateWindow { id: window_id } => match self.window_by_id(window_id) {
                 Some(window) if self.is_minimized(&window) => self.restore(&window),

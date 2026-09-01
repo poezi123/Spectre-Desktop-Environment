@@ -125,9 +125,7 @@ impl Spectre {
                 tracing::debug!("toggle-floating is not implemented yet");
             }
             Action::Workspace { index } => {
-                if self.workspaces.switch(index.saturating_sub(1) as usize) {
-                    self.on_workspace_changed();
-                }
+                self.switch_workspace(index.saturating_sub(1) as usize);
             }
             Action::MoveToWorkspace { index } => {
                 if let Some(window) = self.focus.clone() {
@@ -140,14 +138,10 @@ impl Spectre {
                 }
             }
             Action::NextWorkspace => {
-                if self.workspaces.switch_relative(1) {
-                    self.on_workspace_changed();
-                }
+                self.switch_workspace_relative(1);
             }
             Action::PrevWorkspace => {
-                if self.workspaces.switch_relative(-1) {
-                    self.on_workspace_changed();
-                }
+                self.switch_workspace_relative(-1);
             }
             Action::ToggleAnimations => self.toggle_animations(),
             Action::CycleProfile => self.cycle_profile(),
@@ -155,12 +149,6 @@ impl Spectre {
             Action::LockSession => self.spawn_configured("lock"),
             Action::Screenshot => self.spawn_configured("screenshot"),
         }
-    }
-
-    fn on_workspace_changed(&mut self) {
-        let next = self.workspaces.active().elements().last().cloned();
-        self.focus_window(next.as_ref());
-        self.mark_dirty();
     }
 
     /// Flip the animation kill switch at runtime.

@@ -369,6 +369,55 @@ impl Spectre {
         }
     }
 
+    /// Switch to a workspace, animating the change when the profile allows it.
+    ///
+    /// Returns `false` when nothing changed, so callers can skip a redraw.
+    pub fn switch_workspace(&mut self, index: usize) -> bool {
+        let from = self.workspaces.active_index();
+        if !self.workspaces.switch(index) {
+            return false;
+        }
+        self.begin_transition(from);
+        true
+    }
+
+    /// Switch by `delta` workspaces, wrapping around.
+    pub fn switch_workspace_relative(&mut self, delta: isize) -> bool {
+        let from = self.workspaces.active_index();
+        if !self.workspaces.switch_relative(delta) {
+            return false;
+        }
+        self.begin_transition(from);
+        true
+    }
+
+    /// Start the animation and move focus onto the new workspace.
+    fn begin_transition(&mut self, from: usize) {
+        let effects = &self.config.effects;
+        self.transition = crate::transition::Transition::start(
+            from,
+            self.workspaces.active_index(),
+            effects.workspace_transition,
+            effects.transition_duration_ms(),
+            std::time::Instant::now(),
+        );
+
+        let next = self.workspaces.active().elements().last().cloned();
+        self.focus_window(next.as_ref());
+        self.mark_dirty();
+    }
+
+    /// Drop a finished transition. Returns `true` when one ended.
+    pub fn finish_transition(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if self.transition.as_ref().is_some_and(|t| t.is_done(now)) {
+            self.transition = None;
+            self.mark_dirty();
+            return true;
+        }
+        false
+    }
+
     /// Hand the keyboard to the topmost layer surface that wants it, or give
     /// it back to the focused window when none does.
     ///

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
@@ -47,6 +47,11 @@ struct Surface {
     >,
     /// Set while a page flip is in flight, so we do not queue two frames.
     awaiting_flip: bool,
+    /// When the last frame was queued, and the shortest gap allowed between
+    /// two frames. Drivers that complete a page flip immediately - vmwgfx does
+    /// - would otherwise let the compositor render as fast as the CPU allows.
+    last_frame: Instant,
+    frame_interval: Duration,
 }
 
 /// Everything the native backend owns.
@@ -243,7 +248,19 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
 
         tracing::info!(output = %name, mode = ?(w, h), refresh = mode.vrefresh(), "driving connector");
         state.workspaces.map_output(&output, (x, 0).into());
-        udev.surfaces.insert(crtc, Surface { output, compositor, awaiting_flip: false });
+        // One frame per refresh period. `vrefresh` is in Hz and can be zero on
+        // a virtual connector, so fall back to 60.
+        let refresh = if mode.vrefresh() == 0 { 60 } else { mode.vrefresh() };
+        udev.surfaces.insert(
+            crtc,
+            Surface {
+                output,
+                compositor,
+                awaiting_flip: false,
+                last_frame: Instant::now() - Duration::from_secs(1),
+                frame_interval: Duration::from_secs_f64(1.0 / refresh as f64),
+            },
+        );
         x += w as i32;
     }
 
@@ -456,6 +473,16 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
         tracing::trace!(?crtc, "skipping render: a page flip is still in flight");
         return;
     }
+    // Pace to the output's refresh rate. Rendering faster than the screen can
+    // show costs CPU and changes nothing anyone can see.
+    let now = Instant::now();
+    if udev
+        .surfaces
+        .get(&crtc)
+        .is_some_and(|s| now.duration_since(s.last_frame) < s.frame_interval)
+    {
+        return;
+    }
 
     let Udev { renderer, shader, surfaces, .. } = &mut *udev;
     let elements: Vec<SpectreElement> = output_elements(state, &output, renderer, shader.as_ref());
@@ -468,6 +495,7 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
         Ok(frame) if !frame.is_empty => match surface.compositor.queue_frame(()) {
             Ok(()) => {
                 surface.awaiting_flip = true;
+                surface.last_frame = now;
                 tracing::trace!(?crtc, elements = elements.len(), "frame queued");
             }
             Err(err) => tracing::warn!(?err, "could not queue a frame"),

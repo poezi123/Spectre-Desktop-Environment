@@ -151,6 +151,7 @@ pub fn part_at(
 ///
 /// `hovered` highlights a button under the pointer; `glow` is the RGB accent
 /// intensity, and `0.0` skips the glow ring entirely.
+#[allow(clippy::too_many_arguments)]
 pub fn frame_elements(
     frame: &Frame,
     metrics: &Metrics,
@@ -159,6 +160,7 @@ pub fn frame_elements(
     hovered: Option<Part>,
     glow: f32,
     scale: f64,
+    alpha: f32,
 ) -> Vec<SolidColorRenderElement> {
     let mut elements = Vec::new();
     if frame.outer.size.w <= 0 || frame.outer.size.h <= 0 {
@@ -170,15 +172,20 @@ pub fn frame_elements(
         let Some(color) = button_background(part, hovered, palette) else {
             continue;
         };
-        elements.extend(solid(rect, color, scale));
+        elements.extend(solid(rect, faded(color, alpha), scale));
     }
 
     if frame.is_decorated() {
-        elements.extend(solid(frame.titlebar, palette.titlebar(focused), scale));
+        elements.extend(solid(frame.titlebar, faded(palette.titlebar(focused), alpha), scale));
     }
 
-    elements.extend(border_elements(frame, palette, focused, glow, scale));
+    elements.extend(border_elements(frame, palette, focused, glow, scale, alpha));
     elements
+}
+
+/// Scale a colour's opacity, for a workspace being faded in or out.
+fn faded(color: spectre_theme::Color, alpha: f32) -> spectre_theme::Color {
+    color.alpha(color.a * alpha.clamp(0.0, 1.0))
 }
 
 /// The button's background plate. `None` means "draw nothing", which is the
@@ -199,6 +206,7 @@ fn border_elements(
     focused: bool,
     glow: f32,
     scale: f64,
+    alpha: f32,
 ) -> Vec<SolidColorRenderElement> {
     let width = frame.border;
     if width <= 0 {
@@ -218,7 +226,7 @@ fn border_elements(
         );
         for edge in [top, bottom] {
             for (rect, t) in horizontal_steps(edge, GRADIENT_STEPS) {
-                elements.extend(solid(rect, palette.accent.sample(t), scale));
+                elements.extend(solid(rect, faded(palette.accent.sample(t), alpha), scale));
             }
         }
 
@@ -231,8 +239,8 @@ fn border_elements(
             Point::from((outer.loc.x + outer.size.w - width, outer.loc.y + width)),
             Size::from((width, inner_h)),
         );
-        elements.extend(solid(left, palette.accent.sample(0.0), scale));
-        elements.extend(solid(right, palette.accent.sample(1.0), scale));
+        elements.extend(solid(left, faded(palette.accent.sample(0.0), alpha), scale));
+        elements.extend(solid(right, faded(palette.accent.sample(1.0), alpha), scale));
 
         if glow > 0.0 {
             let ring = Rectangle::new(
@@ -241,12 +249,12 @@ fn border_elements(
             );
             for (i, edge) in ring_edges(ring, width).into_iter().enumerate() {
                 let t = if i % 2 == 0 { 0.25 } else { 0.75 };
-                elements.extend(solid(edge, palette.accent_glow(t, glow), scale));
+                elements.extend(solid(edge, faded(palette.accent_glow(t, glow), alpha), scale));
             }
         }
     } else {
         for edge in ring_edges(outer, width) {
-            elements.extend(solid(edge, palette.border, scale));
+            elements.extend(solid(edge, faded(palette.border, alpha), scale));
         }
     }
 
@@ -405,8 +413,8 @@ mod tests {
         let m = Metrics::default();
         let p = Palette::default();
         let f = frame(400, 300);
-        let with_glow = frame_elements(&f, &m, &p, false, None, 1.0, 1.0).len();
-        let without = frame_elements(&f, &m, &p, false, None, 0.0, 1.0).len();
+        let with_glow = frame_elements(&f, &m, &p, false, None, 1.0, 1.0, 1.0).len();
+        let without = frame_elements(&f, &m, &p, false, None, 0.0, 1.0, 1.0).len();
         assert_eq!(with_glow, without, "glow applies to focused windows only");
     }
 
@@ -415,8 +423,8 @@ mod tests {
         let m = Metrics::default();
         let p = Palette::default();
         let f = frame(400, 300);
-        let off = frame_elements(&f, &m, &p, true, None, 0.0, 1.0).len();
-        let on = frame_elements(&f, &m, &p, true, None, 1.0, 1.0).len();
+        let off = frame_elements(&f, &m, &p, true, None, 0.0, 1.0, 1.0).len();
+        let on = frame_elements(&f, &m, &p, true, None, 1.0, 1.0, 1.0).len();
         assert!(on > off);
     }
 
