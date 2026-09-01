@@ -44,10 +44,10 @@ spectre-desktop
 ├── spectre-theme        # Palette, metrics and the Spectre Pattern   [built]
 ├── spectre-text         # Shaping and rasterising labels             [built]
 ├── spectre-launcher     # Application launcher                       [built]
+├── spectre-notify       # Notification daemon / UI                   [built]
 ├── spectre-draw         # Software canvas for the shell surfaces     [built]
 ├── spectre-session      # Session startup                            [built]
 ├── spectre-settings     # Central settings application               [planned]
-├── spectre-notify       # Notification daemon / UI                   [planned]
 └── spectre-lock         # Lock screen                                [planned]
 ```
 
@@ -215,10 +215,12 @@ Performance profiles must only affect visual features — **never basic desktop 
 Garuda Linux in VirtualBox, 4 cores, 4 GB RAM, VMSVGA, one 1920x991 output:
 
 ```text
-spectre-compositor       64 MB PSS (about 20 MB private, the rest shared GL)
-spectre-panel            10 MB PSS
-whole system, idle      611 MB including kernel, systemd and NetworkManager
-compositor CPU, idle    0 %, no frame is drawn unless something changed
+spectre-compositor       62 MB PSS (about 20 MB private, the rest shared GL)
+spectre-panel            11 MB PSS
+spectre-notify           10 MB PSS
+whole system, idle      472 MB including kernel, systemd and NetworkManager
+CPU, idle                0 %, nothing is drawn and nothing wakes up unless
+                         something actually changed
 ```
 
 The panel is software rendered on purpose. At 1920x32 the surface is a
@@ -285,7 +287,7 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 - [x] Keyboard shortcuts
 - [x] Multi-monitor support
 - [x] Shell integration
-- [ ] Notifications
+- [x] Notifications
 - [x] Session management
 
 ### Phase 3 — Spectre visuals
@@ -330,9 +332,13 @@ the workspace indicator, running applications, a CPU and memory readout and
 the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
 `spectre-launcher` opens on `Mod+D`: type to filter the system's applications,
-arrows to move, Enter to launch.
+arrows to move, Enter to launch. `spectre-notify` implements
+`org.freedesktop.Notifications`, so anything on the system that notifies -
+`notify-send`, a browser, a backup script - appears in the top-right corner.
+Urgency shows in the accent bar, and critical notifications stay until they
+are clicked away.
 
-Next: notifications, the settings application, and the workspace transitions.
+Next: the settings application, a system tray, and the workspace transitions.
 
 ### Building
 
@@ -343,6 +349,9 @@ cargo build --release
 ./target/release/spectre-panel                        # from inside the session
 ./target/release/spectre-launcher                     # or press Mod+D
 ```
+
+`spectre-panel` and `spectre-notify` are started by the session automatically;
+set `[panel] enabled = false` to run a different panel.
 
 ### Default key bindings
 
