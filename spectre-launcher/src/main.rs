@@ -4,6 +4,7 @@
 //! Escape to dismiss. It is a plain layer-shell client, so it can be replaced
 //! by any other launcher without touching the compositor.
 
+mod category;
 mod entry;
 mod matcher;
 mod ui;
@@ -38,6 +39,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
+use crate::category::Category;
 use crate::entry::Entry;
 
 const BTN_LEFT: u32 = 0x110;
@@ -96,11 +98,13 @@ fn main() -> anyhow::Result<()> {
         mask: spectre_draw::PatternMask::new(),
         text: TextRenderer::new(),
         config,
+        categories: crate::category::populated(&entries),
         entries,
         query: String::new(),
         results: Vec::new(),
         selected: 0,
         offset: 0,
+        category: 0,
         started: Instant::now(),
     };
     launcher.refilter();
@@ -155,13 +159,24 @@ struct Launcher {
     results: Vec<usize>,
     selected: usize,
     offset: usize,
+    /// Categories with something in them, and the one being shown.
+    categories: Vec<Category>,
+    category: usize,
     started: Instant,
 }
 
 impl Launcher {
-    /// Re-rank after the query changed.
+    /// Re-rank after the query or the category changed.
+    ///
+    /// A query searches every application; the category column only applies
+    /// while the search field is empty.
     fn refilter(&mut self) {
-        let ranked = matcher::rank(&self.query, &self.entries);
+        let current = self.categories.get(self.category).copied().unwrap_or(Category::All);
+        let ranked = if self.query.trim().is_empty() {
+            crate::category::filter(current, &self.entries)
+        } else {
+            matcher::rank(&self.query, &self.entries)
+        };
         self.results = ranked
             .into_iter()
             .map(|entry| {
@@ -171,6 +186,17 @@ impl Launcher {
         self.selected = 0;
         self.offset = 0;
         self.dirty = true;
+    }
+
+    /// Step through the category column.
+    fn move_category(&mut self, delta: isize) {
+        if self.categories.is_empty() {
+            return;
+        }
+        let count = self.categories.len() as isize;
+        self.category = (self.category as isize + delta).rem_euclid(count) as usize;
+        self.query.clear();
+        self.refilter();
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -257,6 +283,8 @@ impl Launcher {
             results: &results,
             selected: self.selected,
             offset: self.offset,
+            categories: &self.categories,
+            category: self.category,
             mask: &self.mask,
             color_phase: pattern.color_phase(elapsed),
         };
@@ -358,8 +386,12 @@ impl KeyboardHandler for Launcher {
         match event.keysym {
             Keysym::Escape => self.exit = true,
             Keysym::Return | Keysym::KP_Enter => self.activate(),
-            Keysym::Down | Keysym::Tab => self.move_selection(1),
-            Keysym::Up | Keysym::ISO_Left_Tab => self.move_selection(-1),
+            Keysym::Down => self.move_selection(1),
+            Keysym::Up => self.move_selection(-1),
+            Keysym::Tab | Keysym::Right => self.move_category(1),
+            Keysym::ISO_Left_Tab | Keysym::Left => self.move_category(-1),
+            Keysym::Page_Down => self.move_selection(ui::visible_rows(self.height) as isize),
+            Keysym::Page_Up => self.move_selection(-(ui::visible_rows(self.height) as isize)),
             Keysym::BackSpace => {
                 if self.query.pop().is_some() {
                     self.refilter();
@@ -436,7 +468,16 @@ impl PointerHandler for Launcher {
                     }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                    if let Some(row) = ui::row_at(self.width * self.scale, self.height * self.scale, x, y)
+                    if let Some(index) =
+                        ui::category_at(self.categories.len(), self.height * self.scale, x, y)
+                    {
+                        if index != self.category {
+                            self.category = index;
+                            self.query.clear();
+                            self.refilter();
+                        }
+                    } else if let Some(row) =
+                        ui::row_at(self.width * self.scale, self.height * self.scale, x, y)
                     {
                         let index = self.offset + row;
                         if index < self.results.len() {

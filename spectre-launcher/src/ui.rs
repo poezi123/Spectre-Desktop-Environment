@@ -8,6 +8,7 @@ use spectre_draw::{Canvas, Rect};
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Palette, Pattern, Theme};
 
+use crate::category::Category;
 use crate::entry::Entry;
 
 /// Height of the search field.
@@ -22,16 +23,49 @@ pub const NAME_SIZE: f32 = 14.0;
 pub const COMMENT_SIZE: f32 = 10.5;
 /// Width of the accent bar marking the selected row.
 pub const MARKER_WIDTH: i32 = 3;
+/// Width of the category column.
+pub const SIDEBAR_WIDTH: i32 = 176;
+/// Height of one category row.
+pub const CATEGORY_HEIGHT: i32 = 30;
 
 /// Preferred launcher size for an output of the given size.
 ///
 /// Clamped so it neither swallows a small screen nor floats as a postage stamp
 /// on a large one.
 pub fn window_size(output_width: i32, output_height: i32, rows: i32) -> (i32, i32) {
-    let width = (output_width * 2 / 5).clamp(320, 640).min(output_width.max(1));
+    let width = (output_width * 3 / 5).clamp(480, 900).min(output_width.max(1));
     let content = SEARCH_HEIGHT + rows.max(1) * ROW_HEIGHT + PADDING * 2;
-    let height = content.min((output_height * 3 / 4).max(SEARCH_HEIGHT + PADDING * 2));
+    let wanted = content.max(SEARCH_HEIGHT + PADDING * 2 + CATEGORY_HEIGHT * 8);
+    let height = wanted.min((output_height * 3 / 4).max(SEARCH_HEIGHT + PADDING * 2));
     (width, height)
+}
+
+/// The category column.
+pub fn sidebar_rect(height: i32) -> Rect {
+    Rect::new(0, 0, SIDEBAR_WIDTH, height)
+}
+
+/// The rectangle of the `index`-th category.
+pub fn category_rect(index: usize) -> Rect {
+    Rect::new(
+        PADDING / 2,
+        PADDING + index as i32 * CATEGORY_HEIGHT,
+        SIDEBAR_WIDTH - PADDING,
+        CATEGORY_HEIGHT,
+    )
+}
+
+/// Which category a point falls on.
+pub fn category_at(count: usize, height: i32, x: i32, y: i32) -> Option<usize> {
+    (0..count).find(|&i| {
+        let rect = category_rect(i);
+        rect.bottom() <= height && rect.contains(x, y)
+    })
+}
+
+/// How many categories fit in a window of this height.
+pub fn visible_categories(height: i32) -> usize {
+    ((height - PADDING * 2) / CATEGORY_HEIGHT).max(0) as usize
 }
 
 /// How many result rows fit in a window of this height.
@@ -42,9 +76,9 @@ pub fn visible_rows(height: i32) -> usize {
 /// The rectangle of the `index`-th visible row.
 pub fn row_rect(width: i32, index: usize) -> Rect {
     Rect::new(
-        PADDING,
+        SIDEBAR_WIDTH + PADDING,
         PADDING + SEARCH_HEIGHT + index as i32 * ROW_HEIGHT,
-        (width - PADDING * 2).max(0),
+        (width - SIDEBAR_WIDTH - PADDING * 2).max(0),
         ROW_HEIGHT,
     )
 }
@@ -78,6 +112,9 @@ pub struct Frame<'a> {
     pub results: &'a [&'a Entry],
     pub selected: usize,
     pub offset: usize,
+    /// The categories in the column, and which one is showing.
+    pub categories: &'a [Category],
+    pub category: usize,
     pub mask: &'a spectre_draw::PatternMask,
     pub color_phase: f32,
 }
@@ -90,6 +127,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
 
     canvas.fill_pattern(bounds, frame.mask, palette.surface, &palette.accent, frame.color_phase);
     draw_border(canvas, bounds, palette);
+    draw_sidebar(canvas, text, bounds.h, frame);
     draw_search(canvas, text, width, frame);
 
     let rows = visible_rows(bounds.h);
@@ -98,17 +136,57 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
         draw_row(canvas, text, row_rect(width, row), entry, absolute == frame.selected, palette);
     }
 
-    if frame.results.is_empty() && !frame.query.is_empty() {
-        let label = Label::new("No matches").size(NAME_SIZE).color(palette.text_muted);
+    if frame.results.is_empty() {
+        let what = if frame.query.is_empty() { "Nothing here" } else { "No matches" };
+        let label = Label::new(what).size(NAME_SIZE).color(palette.text_muted);
         let image = text.rasterise(&label);
-        let x = (width - image.width as i32) / 2;
+        let x = SIDEBAR_WIDTH + (width - SIDEBAR_WIDTH - image.width as i32) / 2;
         let y = PADDING + SEARCH_HEIGHT + ROW_HEIGHT / 2 - image.height as i32 / 2;
-        canvas.draw_image(x, y, &image);
+        canvas.draw_image(x.max(SIDEBAR_WIDTH), y, &image);
     }
 }
 
+fn draw_sidebar(canvas: &mut Canvas, text: &mut TextRenderer, height: i32, frame: &Frame<'_>) {
+    let palette = &frame.theme.palette;
+    let column = sidebar_rect(height);
+    canvas.fill_rect(column, palette.elevated);
+    canvas.fill_rect(Rect::new(column.right() - 1, 0, 1, height), palette.line);
+
+    let searching = !frame.query.trim().is_empty();
+    for (index, category) in frame.categories.iter().enumerate().take(visible_categories(height)) {
+        let rect = category_rect(index);
+        let current = !searching && index == frame.category;
+        if current {
+            canvas.fill_rect(rect, palette.overlay);
+            canvas.fill_rect(
+                Rect::new(rect.x, rect.y + 4, MARKER_WIDTH, rect.h - 8),
+                palette.accent.sample(0.3),
+            );
+        }
+        let color = match (current, searching) {
+            (true, _) => palette.text,
+            (_, true) => palette.text_muted,
+            _ => palette.text_dim,
+        };
+        let label = Label::new(category.label())
+            .size(NAME_SIZE - 1.0)
+            .color(color)
+            .bold(current)
+            .max_width((rect.w - MARKER_WIDTH - 14).max(1) as u32)
+            .ellipsis(EllipsisSide::End);
+        let image = text.rasterise(&label);
+        canvas.draw_image(
+            rect.x + MARKER_WIDTH + 8,
+            rect.y + (rect.h - image.height as i32) / 2,
+            &image,
+        );
+    }
+}
+
+/// The pattern behind the menu, held well back: this surface is a wall of
+/// text, and at title bar intensity the contours read through it.
 pub fn launcher_pattern(theme: &Theme) -> Pattern {
-    theme.window_pattern
+    Pattern { intensity: theme.window_pattern.intensity * 0.3, ..theme.window_pattern }
 }
 
 /// A one pixel accent frame, so the launcher reads as its own surface.
@@ -134,7 +212,12 @@ fn draw_border(canvas: &mut Canvas, bounds: Rect, palette: &Palette) {
 
 fn draw_search(canvas: &mut Canvas, text: &mut TextRenderer, width: i32, frame: &Frame<'_>) {
     let palette = &frame.theme.palette;
-    let field = Rect::new(PADDING, PADDING, (width - PADDING * 2).max(0), SEARCH_HEIGHT - PADDING);
+    let field = Rect::new(
+        SIDEBAR_WIDTH + PADDING,
+        PADDING,
+        (width - SIDEBAR_WIDTH - PADDING * 2).max(0),
+        SEARCH_HEIGHT - PADDING,
+    );
     canvas.fill_rect(field, palette.elevated);
 
     let prompt = Label::new("\u{203a}").size(NAME_SIZE + 2.0).color(palette.accent.sample(0.2));
@@ -225,7 +308,7 @@ mod tests {
     fn the_window_stays_a_sensible_size_on_any_output() {
         for (w, h) in [(800, 600), (1920, 1080), (3840, 2160), (320, 240)] {
             let (width, height) = window_size(w, h, 8);
-            assert!(width >= 320.min(w) && width <= 640, "{w}x{h} gave width {width}");
+            assert!(width >= 480.min(w) && width <= 900, "{w}x{h} gave width {width}");
             assert!(height > 0 && height <= h.max(1), "{w}x{h} gave height {height}");
         }
     }
@@ -234,7 +317,7 @@ mod tests {
     fn a_tiny_output_still_gets_a_usable_window() {
         let (width, height) = window_size(200, 100, 8);
         assert!(width > 0 && height > 0);
-        assert!(width <= 320, "the window must not exceed a 200px wide output by much");
+        assert!(width <= 480, "the window must not exceed a 200px wide output by much");
     }
 
     #[test]
@@ -268,6 +351,35 @@ mod tests {
         assert_eq!(row_at(width, height, 20, PADDING + 2), None);
         // Past the last row.
         assert_eq!(row_at(width, height, 20, height - 1), None);
+    }
+
+    #[test]
+    fn the_category_column_and_the_rows_never_overlap() {
+        let width = 700;
+        let height = PADDING * 2 + SEARCH_HEIGHT + ROW_HEIGHT * 6;
+        for i in 0..6 {
+            assert!(row_rect(width, i).x >= SIDEBAR_WIDTH);
+        }
+        for i in 0..visible_categories(height) {
+            assert!(category_rect(i).right() <= SIDEBAR_WIDTH);
+        }
+    }
+
+    #[test]
+    fn hit_testing_matches_the_drawn_categories() {
+        let height = PADDING * 2 + CATEGORY_HEIGHT * 6;
+        for i in 0..5 {
+            let rect = category_rect(i);
+            assert_eq!(category_at(5, height, rect.x + 2, rect.y + 2), Some(i));
+        }
+        assert_eq!(category_at(5, height, SIDEBAR_WIDTH + 40, 60), None);
+    }
+
+    #[test]
+    fn categories_that_do_not_fit_are_not_clickable() {
+        let height = PADDING * 2 + CATEGORY_HEIGHT * 2;
+        let rect = category_rect(5);
+        assert_eq!(category_at(11, height, rect.x + 2, rect.y + 2), None);
     }
 
     #[test]

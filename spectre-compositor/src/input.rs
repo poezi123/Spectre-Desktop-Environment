@@ -66,15 +66,27 @@ impl Spectre {
             serial,
             time,
             |state, modifiers, handle| {
-                // Only presses trigger bindings; releases always go to the client
-                // so a client never sees a press without its release.
-                if event.state() != smithay::backend::input::KeyState::Pressed {
-                    return FilterResult::Forward;
-                }
-
                 // Compare against the unmodified symbol so `Mod+Shift+q` matches
                 // the physical Q key rather than the shifted keysym.
                 let sym = handle.raw_syms().first().copied().unwrap_or(handle.modified_sym());
+                let is_logo =
+                    matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
+
+                // Only presses trigger bindings; releases always go to the client
+                // so a client never sees a press without its release.
+                if event.state() != smithay::backend::input::KeyState::Pressed {
+                    if is_logo && std::mem::take(&mut state.logo_armed) {
+                        return FilterResult::Intercept(Some(Action::ToggleLauncher));
+                    }
+                    return FilterResult::Forward;
+                }
+
+                // A tap of the logo key on its own opens the menu; pressing it
+                // as part of a binding, or pressing anything else while it is
+                // held, disarms that.
+                state.logo_armed =
+                    is_logo && !modifiers.ctrl && !modifiers.alt && !modifiers.shift;
+
                 if sym.raw() == keysyms::KEY_NoSymbol {
                     return FilterResult::Forward;
                 }
@@ -145,7 +157,7 @@ impl Spectre {
             }
             Action::ToggleAnimations => self.toggle_animations(),
             Action::CycleProfile => self.cycle_profile(),
-            Action::ToggleLauncher => self.spawn("spectre-launcher"),
+            Action::ToggleLauncher => self.toggle_launcher(),
             Action::LockSession => self.spawn_configured("lock"),
             Action::Screenshot => self.spawn_configured("screenshot"),
         }
@@ -183,12 +195,17 @@ impl Spectre {
 
     /// Run a command detached from the compositor.
     pub fn spawn(&self, command: &str) {
+        let _ = self.spawn_pid(command);
+    }
+
+    /// Spawn `command`, returning the child's pid.
+    pub fn spawn_pid(&self, command: &str) -> Option<u32> {
         let Some(argv) = shell_split(command) else {
             tracing::warn!(%command, "unbalanced quotes in spawn command");
-            return;
+            return None;
         };
         let Some((program, args)) = argv.split_first() else {
-            return;
+            return None;
         };
 
         let mut cmd = std::process::Command::new(program);
@@ -207,12 +224,29 @@ impl Spectre {
 
         match cmd.spawn() {
             Ok(child) => {
-                // Detach: nothing waits on it, so reap it via double-fork
-                // semantics provided by the shell-free `Command` + `drop`.
+                // Nothing waits on it: SIGCHLD is ignored, so the kernel reaps.
+                let pid = child.id();
                 drop(child);
+                Some(pid)
             }
-            Err(err) => tracing::warn!(?err, %program, "failed to spawn"),
+            Err(err) => {
+                tracing::warn!(?err, %program, "failed to spawn");
+                None
+            }
         }
+    }
+
+    /// Open the application menu, or close it if it is already up.
+    fn toggle_launcher(&mut self) {
+        if let Some(pid) = self.launcher.take() {
+            // Signal 0 only asks whether the process is still there.
+            let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+            if alive {
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                return;
+            }
+        }
+        self.launcher = self.spawn_pid("spectre-launcher");
     }
 
     /// Spawn one of the helper components. These live in later phases; until
@@ -271,6 +305,8 @@ impl Spectre {
         let time = event.time_msec();
 
         if state == ButtonState::Pressed {
+            // Clicking while the logo key is held is a drag, not a menu tap.
+            self.logo_armed = false;
             // Decorations are ours: a press on one is handled here and never
             // reaches the client, which would otherwise see a stray click.
             if let Some((window, part)) = self.decoration_under_pointer() {

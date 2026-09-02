@@ -103,6 +103,11 @@ pub struct Spectre {
     pub layer_focus: Option<WlSurface>,
     /// A workspace switch being animated.
     pub transition: Option<crate::transition::Transition>,
+    /// Set while the logo key is held and nothing else has been pressed, so a
+    /// tap of it on its own can open the application menu.
+    pub logo_armed: bool,
+    /// The launcher process, if one was started and may still be up.
+    pub launcher: Option<u32>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
@@ -208,6 +213,8 @@ impl Spectre {
             last_click: None,
             layer_focus: None,
             transition: None,
+            logo_armed: false,
+            launcher: None,
             dirty: true,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),

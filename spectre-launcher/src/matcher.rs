@@ -101,6 +101,7 @@ mod tests {
             exec: exec.into(),
             terminal: false,
             keywords: keywords.into(),
+            categories: keywords.into(),
             id: name.into(),
         }
     }

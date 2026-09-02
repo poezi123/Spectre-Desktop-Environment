@@ -20,6 +20,8 @@ pub struct Entry {
     pub terminal: bool,
     /// Freedesktop categories, used for a secondary match.
     pub keywords: String,
+    /// The raw `Categories=` value, for the category column.
+    pub categories: String,
     /// Where it came from, for de-duplication.
     pub id: String,
 }
@@ -54,6 +56,7 @@ impl Entry {
             exec,
             terminal: is_true(get("Terminal")),
             keywords: format!("{} {}", get("Keywords"), get("Categories")).trim().to_owned(),
+            categories: get("Categories").trim().to_owned(),
             id: id.to_owned(),
         })
     }
