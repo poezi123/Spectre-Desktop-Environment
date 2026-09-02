@@ -55,6 +55,36 @@ pub struct Desktop {
     pub profile: Profile,
     /// Mirrors the animation kill switch.
     pub animations: bool,
+    /// Connected outputs and the modes they offer, for the settings app.
+    #[serde(default)]
+    pub outputs: Vec<Output>,
+}
+
+/// One connected display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Output {
+    pub name: String,
+    /// Every mode the display reports, de-duplicated and largest first.
+    pub modes: Vec<Mode>,
+    pub current: Option<Mode>,
+    pub scale: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Mode {
+    pub width: i32,
+    pub height: i32,
+    /// Whole Hz.
+    pub refresh: u32,
+}
+
+impl Mode {
+    /// `1920x1080@60`, the form the config file takes.
+    pub fn label(&self) -> String {
+        format!("{}x{}@{}", self.width, self.height, self.refresh)
+    }
 }
 
 impl Desktop {
@@ -141,9 +171,29 @@ mod tests {
             windows: vec![window(1, 1, true)],
             profile: Profile::Balanced,
             animations: true,
+            outputs: vec![Output {
+                name: String::from("Virtual-1"),
+                modes: vec![Mode { width: 1920, height: 1080, refresh: 60 }],
+                current: Some(Mode { width: 1920, height: 1080, refresh: 60 }),
+                scale: 1.0,
+            }],
         });
         let line = serde_json::to_string(&event).unwrap();
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), event);
+    }
+
+    #[test]
+    fn a_client_built_before_outputs_existed_still_parses_a_state() {
+        let line = r#"{"event":"state","workspaces":[],"windows":[],"profile":"balanced","animations":true}"#;
+        let Event::State(desktop) = serde_json::from_str::<Event>(line).unwrap() else {
+            panic!("not a state event");
+        };
+        assert!(desktop.outputs.is_empty());
+    }
+
+    #[test]
+    fn a_mode_is_labelled_the_way_the_config_writes_it() {
+        assert_eq!(Mode { width: 1920, height: 1080, refresh: 60 }.label(), "1920x1080@60");
     }
 
     #[test]

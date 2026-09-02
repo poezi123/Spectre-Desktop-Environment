@@ -14,12 +14,14 @@
 //! ```
 
 pub mod desktop;
+pub mod display;
 pub mod effects;
 pub mod input;
 pub mod keybind;
 pub mod profile;
 
 pub use desktop::{Desktop, WallpaperMode};
+pub use display::Display;
 pub use effects::{Effects, WorkspaceTransition};
 pub use input::{Input, Keyboard, Pointer};
 pub use keybind::{Action, Direction, Keybind, Keybinds, Modifiers};
@@ -131,6 +133,7 @@ impl Default for Panel {
 pub struct Config {
     pub general: General,
     pub desktop: Desktop,
+    pub display: Display,
     pub effects: Effects,
     pub input: Input,
     pub panel: Panel,

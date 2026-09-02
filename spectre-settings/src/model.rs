@@ -11,6 +11,8 @@ use spectre_theme::PatternKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
+    Resolution,
+    OutputScale,
     Profile,
     Wallpaper,
     WallpaperMode,
@@ -66,6 +68,9 @@ pub struct Settings {
     pub config: Config,
     /// Wallpapers found on this machine, with "None" as the first choice.
     pub wallpapers: Vec<Option<PathBuf>>,
+    /// Resolutions the display reports, with "Auto" first. Empty until the
+    /// compositor has answered, which is why "Auto" is always a valid choice.
+    pub resolutions: Vec<String>,
 }
 
 impl Settings {
@@ -78,11 +83,31 @@ impl Settings {
                 wallpapers.push(Some(current));
             }
         }
-        Self { config, wallpapers }
+        Self { config, wallpapers, resolutions: vec![AUTO.to_owned()] }
+    }
+
+    /// Take the modes the compositor reported for its first output.
+    pub fn set_modes(&mut self, modes: &[spectre_ipc::Mode]) {
+        let mut list = vec![AUTO.to_owned()];
+        list.extend(modes.iter().map(|m| m.label()));
+        // A resolution written by hand stays selectable even if the display
+        // stops offering it, so the row never shows something that is not there.
+        let current = self.config.display.resolution.clone();
+        if !current.eq_ignore_ascii_case(AUTO) && !list.contains(&current) {
+            list.push(current);
+        }
+        self.resolutions = list;
     }
 
     pub fn sections(&self) -> Vec<Section> {
         vec![
+            Section {
+                title: "Display",
+                rows: vec![
+                    self.row(Field::Resolution, "Resolution", "Mode the output is driven at"),
+                    self.row(Field::OutputScale, "Scale", "Logical pixels per device pixel"),
+                ],
+            },
             Section {
                 title: "Appearance",
                 rows: vec![
@@ -136,6 +161,11 @@ impl Settings {
         let cfg = &self.config;
         let pattern = &cfg.theme.window_pattern;
         match field {
+            Field::Resolution => choice(self.resolutions.clone(), self.resolution_index()),
+            Field::OutputScale => Control::Slider {
+                value: ((cfg.display.output_scale() - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)) as f32,
+                label: format!("{:.2}x", cfg.display.output_scale()),
+            },
             Field::Profile => choice(
                 Profile::ALL.iter().map(|p| p.label().to_owned()).collect(),
                 Profile::ALL.iter().position(|p| *p == cfg.general.profile).unwrap_or(0),
@@ -185,6 +215,13 @@ impl Settings {
         }
     }
 
+    fn resolution_index(&self) -> usize {
+        self.resolutions
+            .iter()
+            .position(|r| r.eq_ignore_ascii_case(&self.config.display.resolution))
+            .unwrap_or(0)
+    }
+
     fn wallpaper_index(&self) -> usize {
         self.wallpapers
             .iter()
@@ -199,6 +236,17 @@ impl Settings {
     pub fn step(&mut self, field: Field, delta: i32) -> bool {
         let before = self.config.clone();
         match field {
+            Field::Resolution => {
+                let index = wrap(self.resolutions.len(), self.resolution_index(), delta);
+                self.config.display.resolution = self.resolutions[index].clone();
+            }
+            Field::OutputScale => {
+                // Quarter steps: anything finer is invisible and makes the row
+                // impossible to land on with an arrow key.
+                let scale = (self.config.display.output_scale() + delta as f64 * 0.25)
+                    .clamp(MIN_SCALE, MAX_SCALE);
+                self.config.display.scale = (scale * 100.0).round() / 100.0;
+            }
             Field::Profile => {
                 let index = cycle(&Profile::ALL, self.control_index(field), delta);
                 self.config.general.profile = Profile::ALL[index];
@@ -327,6 +375,11 @@ impl Settings {
     }
 }
 
+/// The string that means "whatever the display prefers".
+pub const AUTO: &str = "Auto";
+const MIN_SCALE: f64 = 0.5;
+const MAX_SCALE: f64 = 3.0;
+
 const MAX_RADIUS: u32 = 24;
 const MAX_TITLEBAR: u32 = 48;
 const MAX_BORDER: u32 = 6;
@@ -409,7 +462,15 @@ mod tests {
     use super::*;
 
     fn settings() -> Settings {
-        Settings { config: Config::default(), wallpapers: vec![None] }
+        Settings {
+            config: Config::default(),
+            wallpapers: vec![None],
+            resolutions: vec![AUTO.to_owned()],
+        }
+    }
+
+    fn mode(width: i32, height: i32, refresh: u32) -> spectre_ipc::Mode {
+        spectre_ipc::Mode { width, height, refresh }
     }
 
     #[test]
@@ -499,6 +560,46 @@ mod tests {
             s.step(Field::BorderWidth, -1);
         }
         assert_eq!(s.config.theme.metrics.border_width, 0);
+    }
+
+    #[test]
+    fn the_resolution_list_always_offers_auto_first() {
+        let mut s = settings();
+        s.set_modes(&[mode(1920, 1080, 60), mode(1280, 720, 60)]);
+        assert_eq!(s.resolutions[0], AUTO);
+        assert!(s.resolutions.contains(&String::from("1920x1080@60")));
+    }
+
+    #[test]
+    fn a_resolution_the_display_no_longer_offers_stays_selectable() {
+        let mut s = settings();
+        s.config.display.resolution = String::from("3840x2160@60");
+        s.set_modes(&[mode(1920, 1080, 60)]);
+        assert!(s.resolutions.contains(&String::from("3840x2160@60")));
+        assert!(s.resolution_index() > 0);
+    }
+
+    #[test]
+    fn stepping_the_resolution_writes_something_the_config_can_parse() {
+        let mut s = settings();
+        s.set_modes(&[mode(1920, 1080, 60)]);
+        s.step(Field::Resolution, 1);
+        assert_eq!(s.config.display.resolution, "1920x1080@60");
+        let wanted = s.config.display.wanted_mode().unwrap();
+        assert_eq!((wanted.width, wanted.height, wanted.refresh), (1920, 1080, Some(60)));
+        s.step(Field::Resolution, -1);
+        assert!(s.config.display.wanted_mode().is_none(), "back to Auto");
+    }
+
+    #[test]
+    fn the_scale_moves_in_quarter_steps_and_stays_drivable() {
+        let mut s = settings();
+        s.step(Field::OutputScale, 1);
+        assert_eq!(s.config.display.scale, 1.25);
+        for _ in 0..40 {
+            s.step(Field::OutputScale, -1);
+        }
+        assert_eq!(s.config.display.scale, 0.5);
     }
 
     #[test]

@@ -6,8 +6,8 @@
 [general]
 # performance | balanced | spectre | custom
 #   performance  static patterns, no blur, no animations - old laptops and VMs
-#   balanced     the default: patterns are drawn but held still, so the
-#                compositor draws no frame at all while nothing changes
+#   balanced     the default: the contour lines are held still, but their
+#                colours travel, which is the cheap half of the animation
 #   spectre      everything on, including animated patterns - modern hardware
 #   custom       the [effects] section below is used verbatim
 profile = "balanced"
@@ -27,6 +27,12 @@ animation-speed = 1.0
 workspace-transition = "slide"
 # Strength of the RGB accent glow around the focused window, 0.0 to 1.0.
 rgb-glow = 0.45
+
+# The output the session drives. `auto` takes the display's preferred mode;
+# otherwise `1920x1080` or `1920x1080@60`. Both keys apply without a restart.
+[display]
+resolution = "auto"
+scale = 1.0
 
 # The desktop background. Leave the wallpaper out for the Spectre black.
 # mode: fill | fit | stretch | center

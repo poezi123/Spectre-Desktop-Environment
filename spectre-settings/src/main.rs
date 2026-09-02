@@ -53,7 +53,22 @@ fn main() -> anyhow::Result<()> {
     }
     // The file as written, not as resolved: the settings window edits what is
     // in the file, and the profile is one of the rows.
-    let settings = Settings::new(config);
+    let mut settings = Settings::new(config);
+
+    // Ask the session what the display can actually do, so the resolution row
+    // offers real modes rather than a guessed list.
+    let mut ipc = Client::connect().ok();
+    if let Some(client) = ipc.as_mut() {
+        match client.request_state() {
+            Ok(Some(desktop)) => {
+                if let Some(output) = desktop.outputs.first() {
+                    settings.set_modes(&output.modes);
+                }
+            }
+            Ok(None) => {}
+            Err(err) => tracing::warn!(?err, "could not read the display's modes"),
+        }
+    }
 
     let conn = Connection::connect_to_env().context("no Wayland compositor to connect to")?;
     let (globals, event_queue) = registry_queue_init(&conn)?;
@@ -97,7 +112,7 @@ fn main() -> anyhow::Result<()> {
         section: 0,
         row: 0,
         status: String::new(),
-        ipc: Client::connect().ok(),
+        ipc,
         started: Instant::now(),
     };
 

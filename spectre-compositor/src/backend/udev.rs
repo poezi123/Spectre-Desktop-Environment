@@ -26,7 +26,9 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::drm::control::{connector, crtc, Device as ControlDevice, ModeTypeFlags};
+use smithay::reexports::drm::control::{
+    connector, crtc, Device as ControlDevice, Mode as DrmMode, ModeTypeFlags,
+};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::Display;
@@ -39,6 +41,8 @@ use crate::state::Spectre;
 /// One driven connector: its output, its DRM compositor and its damage state.
 struct Surface {
     output: Output,
+    /// Kept so a config reload can look the connector's modes up again.
+    connector: connector::Handle,
     compositor: DrmCompositor<
         GbmAllocator<DrmDeviceFd>,
         GbmFramebufferExporter<DrmDeviceFd>,
@@ -116,6 +120,9 @@ pub fn run(config: Config) -> anyhow::Result<()> {
             return;
         }
         state.refresh();
+        if state.take_display_dirty() {
+            apply_display(state, &shared);
+        }
         if state.take_dirty() {
             render_all(state, &shared);
         }
@@ -184,14 +191,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
     let mut used_crtcs: Vec<crtc::Handle> = Vec::new();
 
     for connector in connectors {
-        // Prefer the connector's preferred mode, else the largest one.
-        let Some(mode) = connector
-            .modes()
-            .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or_else(|| connector.modes().first())
-            .copied()
-        else {
+        let Some(mode) = pick_mode(connector.modes(), &state.config.display) else {
             tracing::warn!(connector = ?connector.interface(), "connector reports no modes");
             continue;
         };
@@ -219,8 +219,20 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
             },
         );
         let _global = output.create_global::<Spectre>(&state.display_handle);
-        output.change_current_state(Some(output_mode), None, None, Some((x, 0).into()));
+        output.change_current_state(
+            Some(output_mode),
+            None,
+            Some(smithay::output::Scale::Fractional(state.config.display.output_scale())),
+            Some((x, 0).into()),
+        );
         output.set_preferred(output_mode);
+        for available in connector.modes() {
+            let (mw, mh) = available.size();
+            output.add_mode(OutputMode {
+                size: (mw as i32, mh as i32).into(),
+                refresh: (available.vrefresh() * 1000) as i32,
+            });
+        }
 
         let surface = udev.drm.create_surface(crtc, mode, &[connector.handle()])?;
         let allocator = GbmAllocator::new(
@@ -256,6 +268,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
             crtc,
             Surface {
                 output,
+                connector: connector.handle(),
                 compositor,
                 awaiting_flip: false,
                 last_frame: Instant::now() - Duration::from_secs(1),
@@ -331,12 +344,106 @@ fn init_input(
         .loop_handle
         .insert_source(backend, move |event, _, state: &mut Spectre| {
             if let InputEvent::DeviceAdded { device } = &event {
+                tracing::info!(device = device.name(), "input device added");
                 configure_device(device, &state.config);
             }
             state.handle_input(event);
         })
         .map_err(|err| anyhow::anyhow!("could not listen for input: {err}"))?;
     Ok(())
+}
+
+/// Re-apply `[display]` to every driven connector.
+///
+/// A mode switch is a real DRM operation, so it only happens when the mode
+/// actually differs; the scale is cheap and is always refreshed.
+fn apply_display(state: &mut Spectre, shared: &Shared) {
+    let scale = state.config.display.output_scale();
+    let wanted: Vec<(crtc::Handle, Option<DrmMode>)> = {
+        let udev = shared.borrow();
+        udev.surfaces
+            .iter()
+            .map(|(crtc, surface)| {
+                let modes = udev
+                    .drm
+                    .get_connector(surface.connector, false)
+                    .map(|info| info.modes().to_vec())
+                    .unwrap_or_default();
+                (*crtc, pick_mode(&modes, &state.config.display))
+            })
+            .collect()
+    };
+
+    let mut outputs = Vec::new();
+    {
+        let mut udev = shared.borrow_mut();
+        for (crtc, mode) in wanted {
+            let Some(mode) = mode else { continue };
+            let Some(surface) = udev.surfaces.get_mut(&crtc) else { continue };
+
+            let (w, h) = mode.size();
+            let output_mode = OutputMode {
+                size: (w as i32, h as i32).into(),
+                refresh: (mode.vrefresh() * 1000) as i32,
+            };
+            let changed = surface.output.current_mode() != Some(output_mode);
+            if changed {
+                if let Err(err) = surface.compositor.use_mode(mode) {
+                    tracing::warn!(?err, "the display refused the requested mode");
+                    continue;
+                }
+                let refresh = if mode.vrefresh() == 0 { 60 } else { mode.vrefresh() };
+                surface.frame_interval = Duration::from_secs_f64(1.0 / refresh as f64);
+                tracing::info!(mode = ?(w, h), refresh, "display mode changed");
+            }
+            surface.output.change_current_state(
+                Some(output_mode),
+                None,
+                Some(smithay::output::Scale::Fractional(scale)),
+                None,
+            );
+            outputs.push((surface.output.clone(), (w as i32, h as i32)));
+        }
+    }
+
+    for (output, (w, h)) in outputs {
+        smithay::desktop::layer_map_for_output(&output).arrange();
+        state.reflow_output(&output);
+        state.refresh_wallpaper(w, h);
+    }
+    state.mark_dirty();
+}
+
+/// The mode the config asks for, else the connector's preferred one, else the
+/// first it reports.
+fn pick_mode(modes: &[DrmMode], display: &spectre_config::Display) -> Option<DrmMode> {
+    if let Some(wanted) = display.wanted_mode() {
+        let matching: Vec<&DrmMode> = modes
+            .iter()
+            .filter(|m| {
+                let (w, h) = m.size();
+                w as i32 == wanted.width && h as i32 == wanted.height
+            })
+            .collect();
+        let chosen = match wanted.refresh {
+            Some(hz) => matching.iter().find(|m| m.vrefresh() == hz).or(matching.first()),
+            None => matching.first(),
+        };
+        if let Some(mode) = chosen {
+            return Some(**mode);
+        }
+        let resolution = display.resolution.clone();
+        tracing::warn!(
+            %resolution,
+            "the configured resolution is not offered by this display; using the preferred one"
+        );
+    }
+
+    modes
+        .iter()
+        .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .or_else(|| modes.first())
+        .copied()
 }
 
 /// Apply the `[input.pointer]` settings to a freshly plugged device.

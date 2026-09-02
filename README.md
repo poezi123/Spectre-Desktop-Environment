@@ -292,6 +292,7 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 - [x] Window management
 - [x] Keyboard shortcuts
 - [x] Multi-monitor support
+- [x] Resolution and scale settings
 - [x] Shell integration
 - [x] Notifications
 - [x] Session management
@@ -345,8 +346,9 @@ memory readout and the clock. Clients report it as `WM: spectre-compositor (Wayl
 in, above the panel. It lists everything installed under the
 freedesktop categories, and typing searches across all of them.
 
-`spectre-settings` opens on `Mod+,`. Appearance, the Spectre Pattern, effects
-and the panel, including the wallpaper picker. Every change is written to the
+`spectre-settings` opens on `Mod+,`. Display, appearance, the Spectre Pattern,
+effects and the panel, including the wallpaper picker and the resolution, whose
+list comes from the modes the display actually reports. Every change is written to the
 configuration file and applied to the running session immediately over the
 control socket. `spectre-notify` implements
 `org.freedesktop.Notifications`, so anything on the system that notifies -

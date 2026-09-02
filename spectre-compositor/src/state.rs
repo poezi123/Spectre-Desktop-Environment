@@ -114,6 +114,8 @@ pub struct Spectre {
     pub cursor: Option<crate::render::CursorImage>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
+    /// Set when `[display]` changed; the backend re-applies the output mode.
+    display_dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
     ///
     /// Behind a `RefCell` because the render pass borrows the state immutably
@@ -226,6 +228,7 @@ impl Spectre {
             wallpaper: None,
             cursor: Some(cursor),
             dirty: true,
+            display_dirty: false,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),
             socket_name,
@@ -332,6 +335,17 @@ impl Spectre {
     }
 
     /// Take the dirty flag, returning whether a redraw is needed.
+    /// Whether the output mode has to be re-applied, clearing the flag.
+    pub fn take_display_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.display_dirty, false)
+    }
+
+    /// Ask the backend to re-apply `[display]`.
+    pub fn mark_display_dirty(&mut self) {
+        self.display_dirty = true;
+        self.mark_dirty();
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         std::mem::replace(&mut self.dirty, false) || self.needs_animation_frames()
     }

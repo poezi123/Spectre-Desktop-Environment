@@ -14,7 +14,7 @@
 
 pub mod protocol;
 
-pub use protocol::{Desktop, Event, Request, Window, WindowId, Workspace};
+pub use protocol::{Desktop, Event, Mode, Output, Request, Window, WindowId, Workspace};
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

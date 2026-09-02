@@ -306,7 +306,11 @@ impl Spectre {
 
         self.keybinds =
             spectre_config::Keybinds::default().merged_with(config.keybinds.clone());
+        let display_changed = self.config.display != config.display;
         self.config = config;
+        if display_changed {
+            self.mark_display_dirty();
+        }
         if let Some((w, h)) = self.output_pixel_size() {
             self.wallpaper = None;
             self.refresh_wallpaper(w, h);
@@ -411,7 +415,34 @@ impl Spectre {
             windows,
             profile: self.config.general.profile,
             animations: self.config.effects.window_animations,
+            outputs: self.output_info(),
         }
+    }
+
+    /// The connected displays and what they can do.
+    fn output_info(&self) -> Vec<spectre_ipc::Output> {
+        let to_mode = |mode: smithay::output::Mode| spectre_ipc::Mode {
+            width: mode.size.w,
+            height: mode.size.h,
+            // Smithay carries mHz; the config and the UI speak whole Hz.
+            refresh: (mode.refresh as f64 / 1000.0).round() as u32,
+        };
+
+        self.outputs()
+            .into_iter()
+            .map(|output| {
+                let mut modes: Vec<spectre_ipc::Mode> =
+                    output.modes().into_iter().map(to_mode).collect();
+                modes.sort_by_key(|m| (std::cmp::Reverse(m.width * m.height), std::cmp::Reverse(m.refresh)));
+                modes.dedup();
+                spectre_ipc::Output {
+                    name: output.name(),
+                    modes,
+                    current: output.current_mode().map(to_mode),
+                    scale: output.current_scale().fractional_scale(),
+                }
+            })
+            .collect()
     }
 
     fn window_info(

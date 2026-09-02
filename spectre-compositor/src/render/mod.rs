@@ -201,7 +201,11 @@ fn cursor_elements(
                 location,
                 Scale::from(scale),
                 1.0,
-                Kind::Cursor,
+                // Composited rather than handed to the hardware cursor plane:
+                // on the virtual GPUs this project targets the plane's position
+                // is not always committed, and a pointer that does not move is
+                // worse than one that costs a textured quad.
+                Kind::Unspecified,
             )
             .into_iter()
             .map(WorkspaceElement::Surface)
@@ -220,7 +224,7 @@ fn cursor_elements(
                 None,
                 None,
                 None,
-                Kind::Cursor,
+                Kind::Unspecified,
             )
             .ok()
             .map(WorkspaceElement::Text)
