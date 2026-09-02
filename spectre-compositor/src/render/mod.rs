@@ -4,11 +4,13 @@ pub mod decorations;
 mod pattern;
 mod rounded;
 mod text;
+mod wallpaper;
 
 pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
 pub use rounded::{Corners, RoundedElement};
 pub use text::TextCache;
+pub use wallpaper::Wallpaper;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -132,6 +134,13 @@ pub fn output_elements(
 
     // The backdrop is not part of any workspace: it stays put while they move.
     if let Some(area) = geometry {
+        // A wallpaper replaces the flat backdrop; the desktop pattern is only
+        // drawn when there is none, since contour lines over a photograph read
+        // as dirt on the screen.
+        if let Some(element) = wallpaper_element(state, renderer, area, scale) {
+            elements.push(SpectreElement::Plain(WorkspaceElement::Text(element)));
+            return elements;
+        }
         let backdrop = shader.and_then(|shader| {
             shader.element(
                 &theme.desktop_pattern,
@@ -151,6 +160,26 @@ pub fn output_elements(
     }
 
     elements
+}
+
+/// The wallpaper, if one is loaded for this output size.
+fn wallpaper_element(
+    state: &Spectre,
+    renderer: &mut GlesRenderer,
+    area: Rectangle<i32, Logical>,
+    scale: f64,
+) -> Option<MemoryRenderBufferRenderElement<GlesRenderer>> {
+    let wallpaper = state.wallpaper.as_ref()?;
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        area.loc.to_physical_precise_round(scale),
+        &wallpaper.buffer,
+        None,
+        None,
+        None,
+        Kind::Unspecified,
+    )
+    .ok()
 }
 
 /// The accent a window's pattern is drawn with.

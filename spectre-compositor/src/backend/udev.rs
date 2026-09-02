@@ -248,6 +248,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
 
         tracing::info!(output = %name, mode = ?(w, h), refresh = mode.vrefresh(), "driving connector");
         state.workspaces.map_output(&output, (x, 0).into());
+        state.refresh_wallpaper(w as i32, h as i32);
         // One frame per refresh period. `vrefresh` is in Hz and can be zero on
         // a virtual connector, so fall back to 60.
         let refresh = if mode.vrefresh() == 0 { 60 } else { mode.vrefresh() };

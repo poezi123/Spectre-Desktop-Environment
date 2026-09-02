@@ -108,6 +108,8 @@ pub struct Spectre {
     pub logo_armed: bool,
     /// The launcher process, if one was started and may still be up.
     pub launcher: Option<u32>,
+    /// The wallpaper, prepared for the current output size.
+    pub wallpaper: Option<crate::render::Wallpaper>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
@@ -215,6 +217,7 @@ impl Spectre {
             transition: None,
             logo_armed: false,
             launcher: None,
+            wallpaper: None,
             dirty: true,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),
@@ -282,6 +285,20 @@ impl Spectre {
     /// Current animation phase of the window/panel pattern.
     pub fn pattern_phase(&self) -> f32 {
         self.config.theme.window_pattern.phase(self.elapsed_secs())
+    }
+
+    /// Load or reload the wallpaper for an output of this size.
+    pub fn refresh_wallpaper(&mut self, width: i32, height: i32) {
+        let Some(path) = self.config.desktop.wallpaper_path().map(|p| p.to_owned()) else {
+            self.wallpaper = None;
+            return;
+        };
+        let mode = self.config.desktop.wallpaper_mode;
+        if self.wallpaper.as_ref().is_some_and(|w| w.matches(&path, mode, width, height)) {
+            return;
+        }
+        self.wallpaper = crate::render::Wallpaper::load(&path, mode, width, height);
+        self.mark_dirty();
     }
 
     /// Where the pattern's colour cycle stands.

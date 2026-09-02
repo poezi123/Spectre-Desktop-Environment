@@ -38,6 +38,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 libc = "0.2"
+# Wallpapers only: no filters, no formats beyond what a desktop background
+# is actually shipped as.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 bitflags = "2"
 
 [dependencies.smithay]

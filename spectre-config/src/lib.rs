@@ -13,11 +13,13 @@
 //! assert!(!cfg.effects.blur, "the profile must win over the effect defaults");
 //! ```
 
+pub mod desktop;
 pub mod effects;
 pub mod input;
 pub mod keybind;
 pub mod profile;
 
+pub use desktop::{Desktop, WallpaperMode};
 pub use effects::{Effects, WorkspaceTransition};
 pub use input::{Input, Keyboard, Pointer};
 pub use keybind::{Action, Direction, Keybind, Keybinds, Modifiers};
@@ -126,6 +128,7 @@ impl Default for Panel {
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     pub general: General,
+    pub desktop: Desktop,
     pub effects: Effects,
     pub input: Input,
     pub panel: Panel,

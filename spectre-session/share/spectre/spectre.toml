@@ -28,6 +28,12 @@ workspace-transition = "slide"
 # Strength of the RGB accent glow around the focused window, 0.0 to 1.0.
 rgb-glow = 0.45
 
+# The desktop background. Leave the wallpaper out for the Spectre black.
+# mode: fill | fit | stretch | center
+[desktop]
+# wallpaper = "/usr/share/backgrounds/spectre.png"
+wallpaper-mode = "fill"
+
 [input.keyboard]
 # Empty means "use the system default" (localectl).
 layout = ""

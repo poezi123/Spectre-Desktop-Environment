@@ -54,6 +54,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
     output.set_preferred(mode);
     state.workspaces.map_output(&output, (0, 0).into());
+    state.refresh_wallpaper(mode.size.w, mode.size.h);
 
     init_dmabuf(&mut state, &mut backend);
 
@@ -88,6 +89,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
                     );
                     output.set_preferred(mode);
                     state.workspaces.map_output(&output, (0, 0).into());
+                    state.refresh_wallpaper(mode.size.w, mode.size.h);
                     state.reflow_output(&output);
                 }
                 WinitEvent::Input(event) => state.handle_input(event),
