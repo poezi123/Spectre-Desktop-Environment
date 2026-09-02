@@ -17,9 +17,11 @@ pub const DATE_SIZE: f32 = 9.0;
 /// Thickness of the accent underline beneath the active workspace.
 pub const UNDERLINE: i32 = 2;
 
-/// Glyph used where an icon theme will eventually go. U+25C8 is in every
-/// mainstream font; the power symbol is not, so that one is drawn by hand.
-pub const LAUNCHER_GLYPH: &str = "\u{25c8}";
+/// How much of the launcher button the Spectre mark fills.
+///
+/// The mark is a hexagon with a lot of empty corner, so it needs to run a
+/// little larger than a square icon would to carry the same visual weight.
+const LOGO_FILL: f32 = 0.78;
 
 /// Everything the panel needs to draw itself that is not in the layout.
 pub struct Frame<'a> {
@@ -81,9 +83,7 @@ fn draw_item(
     match &placed.item {
         Item::Launcher => {
             plate(canvas, rect, hovered, palette);
-            centre_label(canvas, text, rect, &Label::new(LAUNCHER_GLYPH)
-                .size(LABEL_SIZE + 2.0)
-                .color(palette.accent.sample(0.35)));
+            spectre_mark(canvas, rect);
         }
         Item::Session => {
             plate(canvas, rect, hovered, palette);
@@ -168,6 +168,22 @@ fn draw_item(
             canvas.draw_image(x, y, &date_image);
         }
     }
+}
+
+/// The Spectre mark, centred in the launcher button.
+///
+/// Rasterised at the size it is drawn at rather than scaled up from a smaller
+/// one, so the contour lines inside the hexagon survive on a tall panel
+/// instead of turning into mush.
+fn spectre_mark(canvas: &mut Canvas, rect: Rect) {
+    let side = ((rect.w.min(rect.h) as f32) * LOGO_FILL).round().max(1.0) as u32;
+    let image = spectre_draw::logo(side);
+    if image.is_empty() {
+        return;
+    }
+    let x = rect.x + (rect.w - image.width as i32) / 2;
+    let y = rect.y + (rect.h - image.height as i32) / 2;
+    canvas.draw_image(x, y, &image);
 }
 
 /// A power symbol: a broken ring with a stroke through the gap.
@@ -300,6 +316,30 @@ mod tests {
             c.as_bytes()[start..start + 26 * 4].to_vec()
         };
         assert_ne!(bottom_row(&active), bottom_row(&inactive));
+    }
+
+    #[test]
+    fn the_launcher_button_carries_the_spectre_mark() {
+        let theme = Theme::default();
+        let mut canvas = Canvas::new(120, 32);
+        let mut text = TextRenderer::new();
+        let rect = Rect::new(4, 1, 30, 30);
+        let items = [Placed { item: Item::Launcher, rect }];
+        draw(&mut canvas, &mut text, &items, &frame(&theme));
+
+        // The mark is the only thing in the button, so any pixel there that is
+        // brighter than the panel behind it came from the logo.
+        let bytes = canvas.as_bytes();
+        let at = |x: i32, y: i32| {
+            let i = (y as usize * 120 + x as usize) * 4;
+            bytes[i] as u32 + bytes[i + 1] as u32 + bytes[i + 2] as u32
+        };
+        let background = at(rect.right() + 20, 16);
+        let lit = (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .filter(|&(x, y)| at(x, y) > background + 40)
+            .count();
+        assert!(lit > 40, "the mark barely showed: {lit} lit pixels");
     }
 
     #[test]

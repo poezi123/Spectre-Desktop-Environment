@@ -15,5 +15,7 @@
 //! ```
 
 mod canvas;
+mod logo;
 
 pub use canvas::{Canvas, Rect};
+pub use logo::logo;

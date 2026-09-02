@@ -90,7 +90,7 @@ The default design should stay close to the usability of a traditional KDE-style
 
 Planned features include:
 
-- Application launcher
+- Application launcher, opened from the Spectre mark in the panel's corner
 - Pinned and running applications
 - System tray
 - Clock and date
@@ -336,8 +336,8 @@ windows with server-side title bars - caption, minimize, maximize and close,
 drag to move, double click to maximize - rounds their corners in a shader,
 draws the topographic pattern across the title bar, routes keyboard and
 pointer input, handles four workspaces and survives VT switching. `spectre-panel` sits at the bottom with
-the workspace indicator, running applications, a CPU and memory readout and
-the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
+the Spectre mark, the workspace indicator, running applications, a CPU and
+memory readout and the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
 `spectre-launcher` opens on `Mod+D`: type to filter the system's applications,
 arrows to move, Enter to launch. `spectre-notify` implements
