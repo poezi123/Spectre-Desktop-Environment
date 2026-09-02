@@ -97,6 +97,7 @@ impl Client {
                 Some(Event::Error { message }) => {
                     return Err(io::Error::other(message));
                 }
+                Some(Event::ConfigChanged) => continue,
                 None => return Ok(None),
             }
         }

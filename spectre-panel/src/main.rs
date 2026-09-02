@@ -54,7 +54,7 @@ const BTN_LEFT: u32 = 0x110;
 fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let (config, error) = Config::load();
+    let (config, error) = Config::load_active();
     if let Some(error) = error {
         tracing::error!(%error, "using built-in defaults");
     }
@@ -283,6 +283,15 @@ impl Panel {
                 Ok(Event::State(desktop)) => {
                     if desktop != self.desktop {
                         self.desktop = desktop;
+                        self.dirty = true;
+                    }
+                }
+                Ok(Event::ConfigChanged) => {
+                    let (config, error) = spectre_config::Config::load_active();
+                    if let Some(error) = error {
+                        tracing::warn!(%error, "keeping the running configuration");
+                    } else {
+                        self.config = config;
                         self.dirty = true;
                     }
                 }

@@ -287,6 +287,13 @@ impl Spectre {
         self.config.theme.window_pattern.phase(self.elapsed_secs())
     }
 
+    /// Pixel size of the first output, for sizing the wallpaper.
+    pub fn output_pixel_size(&self) -> Option<(i32, i32)> {
+        let output = self.outputs().into_iter().next()?;
+        let mode = output.current_mode()?;
+        Some((mode.size.w, mode.size.h))
+    }
+
     /// Load or reload the wallpaper for an output of this size.
     pub fn refresh_wallpaper(&mut self, width: i32, height: i32) {
         let Some(path) = self.config.desktop.wallpaper_path().map(|p| p.to_owned()) else {

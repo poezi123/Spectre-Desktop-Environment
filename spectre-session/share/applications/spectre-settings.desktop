@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Spectre Settings
+Comment=Appearance, pattern, effects and panel
+Exec=spectre-settings
+TryExec=spectre-settings
+Icon=preferences-desktop
+Type=Application
+Categories=Settings;DesktopSettings;
+Keywords=spectre;settings;appearance;wallpaper;

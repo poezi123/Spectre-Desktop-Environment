@@ -28,6 +28,8 @@ pub enum Request {
     SetProfile { profile: Profile },
     /// Turn every animation on or off.
     SetAnimations { enabled: bool },
+    /// Re-read the configuration file and apply it.
+    ReloadConfig,
     /// End the session.
     Quit,
 }
@@ -38,6 +40,8 @@ pub enum Request {
 pub enum Event {
     /// The full desktop state. Sent on subscribe and after every change.
     State(Desktop),
+    /// The configuration was re-read; shell components should reload too.
+    ConfigChanged,
     /// A request could not be carried out. Advisory: the connection stays open.
     Error { message: String },
 }

@@ -2305,6 +2305,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spectre-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "smithay-client-toolkit 0.21.1",
+ "spectre-config",
+ "spectre-draw",
+ "spectre-ipc",
+ "spectre-text",
+ "spectre-theme",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "spectre-text"
 version = "0.1.0"
 dependencies = [

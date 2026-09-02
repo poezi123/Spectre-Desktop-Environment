@@ -22,6 +22,7 @@ COMMANDS:
     close <ID>            Ask a window to close
     profile <NAME>        performance | balanced | spectre | custom
     animations <on|off>   Flip the animation kill switch
+    reload                Re-read the configuration file
     quit                  End the session
 ";
 
@@ -66,6 +67,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     Event::State(state) => {
                         println!("{}", serde_json::to_string(&state).map_err(|e| e.to_string())?)
                     }
+                    Event::ConfigChanged => println!("{{\"event\":\"config-changed\"}}"),
                     Event::Error { message } => eprintln!("compositor: {message}"),
                 }
             }
@@ -85,6 +87,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 other => return Err(format!("`{other}` is not on or off")),
             },
         },
+        ("reload", _) => Request::ReloadConfig,
         ("quit", _) => Request::Quit,
         (cmd, None) => return Err(format!("`{cmd}` needs an argument (try --help)")),
         (cmd, _) => return Err(format!("unknown command `{cmd}` (try --help)")),

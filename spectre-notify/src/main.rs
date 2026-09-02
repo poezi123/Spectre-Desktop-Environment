@@ -48,7 +48,7 @@ const STACK_CAPACITY: usize = 5;
 fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let (config, error) = Config::load();
+    let (config, error) = Config::load_active();
     if let Some(error) = error {
         tracing::error!(%error, "using built-in defaults");
     }

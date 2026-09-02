@@ -194,6 +194,7 @@ impl Default for Keybinds {
 
         bind(logo, "return", Action::Spawn { command: "konsole".into() });
         bind(logo, "d", Action::ToggleLauncher);
+        bind(logo, "comma", Action::Spawn { command: "spectre-settings".into() });
         bind(logo, "q", Action::CloseWindow);
         bind(logo, "f", Action::ToggleFullscreen);
         bind(logo, "m", Action::ToggleMaximize);

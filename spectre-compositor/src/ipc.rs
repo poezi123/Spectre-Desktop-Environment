@@ -284,10 +284,47 @@ impl Spectre {
                 };
                 self.mark_dirty();
             }
+            Request::ReloadConfig => {
+                self.reload_config();
+            }
             Request::Quit => {
                 tracing::info!("session end requested over IPC");
                 self.stop();
             }
+        }
+    }
+
+    /// Re-read the config file and apply everything that can change at runtime.
+    fn reload_config(&mut self) {
+        let (config, error) = spectre_config::Config::load_active();
+        if let Some(error) = error {
+            let message = format!("{error}");
+            tracing::warn!(%message, "config reload failed");
+            self.broadcast(&Event::Error { message });
+            return;
+        }
+
+        self.keybinds =
+            spectre_config::Keybinds::default().merged_with(config.keybinds.clone());
+        self.config = config;
+        if let Some((w, h)) = self.output_pixel_size() {
+            self.wallpaper = None;
+            self.refresh_wallpaper(w, h);
+        }
+        tracing::info!("configuration reloaded");
+        self.mark_dirty();
+        self.broadcast(&Event::ConfigChanged);
+    }
+
+    /// Send one event to every connected client.
+    fn broadcast(&mut self, event: &Event) {
+        let peers: Vec<u64> = self
+            .ipc
+            .as_ref()
+            .map(|i| i.peers.iter().filter(|(_, p)| !p.broken).map(|(id, _)| *id).collect())
+            .unwrap_or_default();
+        for id in peers {
+            self.send_ipc(id, event);
         }
     }
 

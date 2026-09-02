@@ -34,6 +34,8 @@ use spectre_theme::Theme;
 pub const CONFIG_FILE: &str = "spectre.toml";
 /// Directory name under `$XDG_CONFIG_HOME` and `/etc/xdg`.
 pub const CONFIG_DIR: &str = "spectre";
+/// Set by the compositor to the config file the session was started with.
+pub const CONFIG_ENV: &str = "SPECTRE_CONFIG";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -173,6 +175,28 @@ impl Config {
     /// defaults after a typo is the more confusing failure.
     pub fn load() -> (Self, Option<Error>) {
         match Self::config_path() {
+            Some(path) if path.exists() => match Self::load_from(&path) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => (Config::default().resolved(), Some(e)),
+            },
+            _ => (Config::default().resolved(), None),
+        }
+    }
+
+    /// The file the running session was started from.
+    ///
+    /// `$SPECTRE_CONFIG` when the compositor was given `--config`, so every
+    /// component edits the file actually in use rather than the default one.
+    pub fn active_path() -> Option<PathBuf> {
+        match std::env::var_os(CONFIG_ENV) {
+            Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+            _ => Self::config_path(),
+        }
+    }
+
+    /// Load from [`Config::active_path`], falling back to defaults.
+    pub fn load_active() -> (Self, Option<Error>) {
+        match Self::active_path() {
             Some(path) if path.exists() => match Self::load_from(&path) {
                 Ok(cfg) => (cfg, None),
                 Err(e) => (Config::default().resolved(), Some(e)),

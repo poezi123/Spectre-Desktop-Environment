@@ -48,7 +48,7 @@ spectre-desktop
 ├── spectre-notify       # Notification daemon / UI                   [built]
 ├── spectre-draw         # Software canvas for the shell surfaces     [built]
 ├── spectre-session      # Session startup                            [built]
-├── spectre-settings     # Central settings application               [planned]
+├── spectre-settings     # Central settings application               [built]
 └── spectre-lock         # Lock screen                                [planned]
 ```
 
@@ -145,13 +145,11 @@ Example settings concept:
 Appearance → Spectre Pattern
 
 Pattern                 Topographic
-Animation               On / Off
-Animation speed         ━━━━━●━━
-RGB accents             On / Off
-RGB intensity           ━━●━━━━━
-Window decorations      On / Off
-Panel pattern           On / Off
-Desktop pattern         On / Off
+Move the lines          On / Off
+Line speed              ━━━━━●━━
+Animate the RGB         On / Off
+RGB speed               ━━━●━━━━
+Intensity               ━━━━●━━━
 ```
 
 When animation is disabled, the pattern should become static rather than disappear.
@@ -302,6 +300,8 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 - [x] Rounded, pattern-carrying window decorations
 - [x] Animated contour patterns
+- [x] Live RGB colour cycling
+- [x] Wallpapers
 - [x] Workspace animations
 - [ ] 3D workspace effects
 - [x] Performance profiles
@@ -335,21 +335,30 @@ A usable desktop, in the sense that you can log into it and work.
 windows with server-side title bars - caption, minimize, maximize and close,
 drag to move, double click to maximize - rounds their corners in a shader,
 draws the topographic pattern across the title bar, routes keyboard and
-pointer input, handles four workspaces and survives VT switching. `spectre-panel` sits at the bottom with
+pointer input, handles four workspaces, draws the wallpaper and survives VT
+switching. `spectre-panel` sits at the bottom with
 the Spectre mark, the workspace indicator, running applications, a CPU and
 memory readout and the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
-`spectre-launcher` opens on `Mod+D`: type to filter the system's applications,
-arrows to move, Enter to launch. `spectre-notify` implements
+`spectre-launcher` is the application menu: tap the logo key on its own, press
+`Mod+D`, or click the Spectre mark. It lists everything installed under the
+freedesktop categories, and typing searches across all of them.
+
+`spectre-settings` opens on `Mod+,`. Appearance, the Spectre Pattern, effects
+and the panel, including the wallpaper picker. Every change is written to the
+configuration file and applied to the running session immediately over the
+control socket. `spectre-notify` implements
 `org.freedesktop.Notifications`, so anything on the system that notifies -
 `notify-send`, a browser, a backup script - appears in the top-right corner.
 Urgency shows in the accent bar, and critical notifications stay until they
 are clicked away.
 
-Workspace switches animate. `Mod+Shift+A` stops every animation on the spot,
+Workspace switches animate, and the pattern's colours travel along the accent
+whether or not the contour lines themselves move - the cheap half of the
+animation, kept on by default. `Mod+Shift+A` stops every animation on the spot,
 and `Mod+Shift+P` cycles the performance profile without restarting anything.
 
-Next: the settings application, a system tray, and the lock screen.
+Next: a system tray and the lock screen.
 
 ### Building
 
@@ -358,7 +367,8 @@ cargo build --release
 ./target/release/spectre-compositor --backend winit   # nested, for development
 ./target/release/spectre-compositor --backend udev    # real session, from a TTY
 ./target/release/spectre-panel                        # from inside the session
-./target/release/spectre-launcher                     # or press Mod+D
+./target/release/spectre-launcher                     # or tap the logo key
+./target/release/spectre-settings                     # or press Mod+,
 ```
 
 `spectre-panel` and `spectre-notify` are started by the session automatically;
@@ -368,7 +378,9 @@ set `[panel] enabled = false` to run a different panel.
 
 ```text
 Mod+Return        Terminal
-Mod+D             Launcher
+Mod               Application menu (tap the logo key on its own)
+Mod+D             Application menu
+Mod+,             Settings
 Mod+Q             Close window
 Mod+F             Fullscreen
 Mod+M             Maximize

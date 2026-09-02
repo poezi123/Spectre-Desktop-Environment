@@ -31,6 +31,11 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if let Some(path) = &args.config {
+        // Every component reads the same file, so the settings app edits what
+        // the session is actually running.
+        std::env::set_var(spectre_config::CONFIG_ENV, path);
+    }
     let mut config = match &args.config {
         Some(path) => Config::load_from(path).with_context(|| {
             format!("failed to read the configuration at {}", path.display())
