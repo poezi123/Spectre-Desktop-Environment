@@ -1,11 +1,13 @@
 //! Rendering: the element types Spectre adds on top of client surfaces.
 
+pub mod cursor;
 pub mod decorations;
 mod pattern;
 mod rounded;
 mod text;
 mod wallpaper;
 
+pub use cursor::CursorImage;
 pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
 pub use rounded::{Corners, RoundedElement};
@@ -84,6 +86,13 @@ pub fn output_elements(
 
     let mut elements: Vec<SpectreElement> = Vec::new();
 
+    // The pointer sits above everything, including the panel.
+    elements.extend(
+        cursor_elements(state, output, renderer, scale)
+            .into_iter()
+            .map(SpectreElement::Plain),
+    );
+
     // Panels and other layer surfaces belong to the output, not to a
     // workspace: they stay put while workspaces move past underneath, and they
     // must be collected once, because two copies of the same surface in one
@@ -160,6 +169,77 @@ pub fn output_elements(
     }
 
     elements
+}
+
+/// The pointer, drawn from the client's cursor surface or from Spectre's own
+/// arrow when nothing has asked for one.
+fn cursor_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    scale: f64,
+) -> Vec<WorkspaceElement> {
+    use smithay::input::pointer::CursorImageStatus;
+
+    let Some(area) = state.workspaces.output_geometry(output) else {
+        return Vec::new();
+    };
+    let pointer = state.pointer.current_location();
+    if !area.to_f64().contains(pointer) {
+        return Vec::new();
+    }
+    let local = pointer - area.loc.to_f64();
+
+    match &state.cursor_status {
+        CursorImageStatus::Hidden => Vec::new(),
+        CursorImageStatus::Surface(surface) => {
+            let hotspot = cursor_hotspot(surface);
+            let location = (local - hotspot.to_f64()).to_physical_precise_round(scale);
+            smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                renderer,
+                surface,
+                location,
+                Scale::from(scale),
+                1.0,
+                Kind::Cursor,
+            )
+            .into_iter()
+            .map(WorkspaceElement::Surface)
+            .collect()
+        }
+        CursorImageStatus::Named(_) => {
+            let Some(image) = state.cursor.as_ref() else {
+                return Vec::new();
+            };
+            let location: Point<i32, Physical> = local.to_physical_precise_round(scale);
+            let location = location - Point::from(image.hotspot);
+            MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                location.to_f64(),
+                &image.buffer,
+                None,
+                None,
+                None,
+                Kind::Cursor,
+            )
+            .ok()
+            .map(WorkspaceElement::Text)
+            .into_iter()
+            .collect()
+        }
+    }
+}
+
+/// Where a client's cursor surface wants its tip.
+fn cursor_hotspot(surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Point<i32, Logical> {
+    use smithay::input::pointer::CursorImageSurfaceData;
+    smithay::wayland::compositor::with_states(surface, |states| {
+        states
+            .data_map
+            .get::<CursorImageSurfaceData>()
+            .map(|data| data.lock().unwrap().hotspot)
+            .unwrap_or_default()
+    })
 }
 
 /// The wallpaper, if one is loaded for this output size.

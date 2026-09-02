@@ -278,6 +278,8 @@ impl Spectre {
         );
         pointer.frame(self);
         self.follow_mouse_focus();
+        // The pointer is drawn by us, so moving it is a visible change.
+        self.mark_dirty();
     }
 
     fn on_pointer_motion_absolute<B: InputBackend>(&mut self, event: B::PointerMotionAbsoluteEvent) {
@@ -296,6 +298,7 @@ impl Spectre {
         pointer.motion(self, under, &MotionEvent { location, serial, time: event.time_msec() });
         pointer.frame(self);
         self.follow_mouse_focus();
+        self.mark_dirty();
     }
 
     fn on_pointer_button<B: InputBackend>(&mut self, event: B::PointerButtonEvent) {

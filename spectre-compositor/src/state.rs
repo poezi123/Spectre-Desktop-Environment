@@ -110,6 +110,8 @@ pub struct Spectre {
     pub launcher: Option<u32>,
     /// The wallpaper, prepared for the current output size.
     pub wallpaper: Option<crate::render::Wallpaper>,
+    /// Spectre's own pointer, drawn wherever no client has set one.
+    pub cursor: Option<crate::render::CursorImage>,
     /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
     /// Shaped and uploaded labels for title bars and, later, the panel.
@@ -181,6 +183,10 @@ impl Spectre {
         Self::init_display(display, &loop_handle)?;
 
         let keybinds = Keybinds::default().merged_with(config.keybinds.clone());
+        let cursor = crate::render::CursorImage::new(
+            config.theme.palette.text,
+            config.theme.palette.base,
+        );
         let workspaces = Workspaces::new(config.general.workspaces);
 
         Ok(Self {
@@ -218,6 +224,7 @@ impl Spectre {
             logo_armed: false,
             launcher: None,
             wallpaper: None,
+            cursor: Some(cursor),
             dirty: true,
             text: RefCell::new(crate::render::TextCache::new()),
             pending_dmabufs: Vec::new(),

@@ -25,7 +25,7 @@ use smithay_client_toolkit::seat::keyboard::{
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::wlr_layer::{
-    KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -68,10 +68,14 @@ fn main() -> anyhow::Result<()> {
     let surface = compositor.create_surface(&qh);
     let layer =
         layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("spectre-launcher"), None);
-    // Unanchored, so the compositor centres it. Exclusive keyboard: a launcher
-    // that does not get the keystrokes is not a launcher.
+    // Anchored to the corner the Spectre mark sits in, so the menu rises out of
+    // the button that opens it. Anchoring to the bottom also puts it above the
+    // panel's exclusive zone rather than under it. Exclusive keyboard: a
+    // launcher that does not get the keystrokes is not a launcher.
     let (width, height) = ui::window_size(1280, 800, 8);
     layer.set_size(width as u32, height as u32);
+    layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT);
+    layer.set_margin(0, 0, ui::EDGE_MARGIN, ui::EDGE_MARGIN);
     layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
     layer.commit();
 

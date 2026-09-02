@@ -352,6 +352,7 @@ impl SeatHandler for Spectre {
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.cursor_status = image;
+        self.mark_dirty();
     }
 }
 

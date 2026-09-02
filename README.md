@@ -335,13 +335,14 @@ A usable desktop, in the sense that you can log into it and work.
 windows with server-side title bars - caption, minimize, maximize and close,
 drag to move, double click to maximize - rounds their corners in a shader,
 draws the topographic pattern across the title bar, routes keyboard and
-pointer input, handles four workspaces, draws the wallpaper and survives VT
-switching. `spectre-panel` sits at the bottom with
+pointer input, draws the pointer itself, handles four workspaces, draws the
+wallpaper and survives VT switching. `spectre-panel` sits at the bottom with
 the Spectre mark, the workspace indicator, running applications, a CPU and
 memory readout and the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
 `spectre-launcher` is the application menu: tap the logo key on its own, press
-`Mod+D`, or click the Spectre mark. It lists everything installed under the
+`Mod+D`, or click the Spectre mark. It rises out of the corner the mark sits
+in, above the panel. It lists everything installed under the
 freedesktop categories, and typing searches across all of them.
 
 `spectre-settings` opens on `Mod+,`. Appearance, the Spectre Pattern, effects

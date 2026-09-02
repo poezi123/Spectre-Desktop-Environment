@@ -27,6 +27,8 @@ pub const MARKER_WIDTH: i32 = 3;
 pub const SIDEBAR_WIDTH: i32 = 176;
 /// Height of one category row.
 pub const CATEGORY_HEIGHT: i32 = 30;
+/// Gap between the menu and the screen edges it is anchored to.
+pub const EDGE_MARGIN: i32 = 8;
 
 /// Preferred launcher size for an output of the given size.
 ///
