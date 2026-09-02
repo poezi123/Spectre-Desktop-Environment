@@ -4,7 +4,7 @@
 //! Layout, matching `Fensterconcept.png`:
 //!
 //! ```text
-//! +--------------------------------------------------+  <- border (accent when focused)
+//! +--------------------------------------------------+  <- hairline border, rounded
 //! | [icon]        Window title          [_] [#] [x]  |  <- title bar
 //! +--------------------------------------------------+
 //! |                                                  |
@@ -19,10 +19,8 @@ use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use spectre_theme::{Metrics, Palette};
 
-use super::{horizontal_steps, solid};
+use super::solid;
 
-/// Number of solid steps used to fake the accent gradient along an edge.
-const GRADIENT_STEPS: u32 = 12;
 /// Gap between title bar buttons, in logical pixels.
 const BUTTON_GAP: i32 = 2;
 /// Padding at the ends of the title bar.
@@ -147,39 +145,55 @@ pub fn part_at(
     Some(Part::Border)
 }
 
-/// Solid rectangles for one window's frame, front to back.
+/// The hover plate behind a title bar button, if the pointer is on one.
 ///
-/// `hovered` highlights a button under the pointer; `glow` is the RGB accent
-/// intensity, and `0.0` skips the glow ring entirely.
-#[allow(clippy::too_many_arguments)]
-pub fn frame_elements(
+/// The frame itself is drawn by `frame.glsl`; the only solid rectangle left in
+/// the decoration is this plate, which has to sit above the bar and below the
+/// glyph and so cannot live in the frame shader.
+pub fn button_plates(
     frame: &Frame,
     metrics: &Metrics,
     palette: &Palette,
-    focused: bool,
     hovered: Option<Part>,
-    glow: f32,
-    scale: f64,
     alpha: f32,
+    scale: f64,
 ) -> Vec<SolidColorRenderElement> {
     let mut elements = Vec::new();
-    if frame.outer.size.w <= 0 || frame.outer.size.h <= 0 {
-        return elements;
-    }
-
-    // Buttons first so they sit above the title bar background.
     for (part, rect) in buttons(frame, metrics) {
         let Some(color) = button_background(part, hovered, palette) else {
             continue;
         };
         elements.extend(solid(rect, faded(color, alpha), scale));
     }
+    elements
+}
+
+/// A square-cornered frame, used only when `frame.glsl` fails to compile.
+///
+/// Losing the rounded corners is a far smaller regression than losing the
+/// title bar and border entirely, so the fallback keeps the same colours and
+/// the same geometry and simply gives up the curve.
+pub fn fallback_frame(
+    frame: &Frame,
+    palette: &Palette,
+    focused: bool,
+    alpha: f32,
+    scale: f64,
+) -> Vec<SolidColorRenderElement> {
+    let mut elements = Vec::new();
+    if frame.outer.size.w <= 0 || frame.outer.size.h <= 0 {
+        return elements;
+    }
 
     if frame.is_decorated() {
         elements.extend(solid(frame.titlebar, faded(palette.titlebar(focused), alpha), scale));
     }
-
-    elements.extend(border_elements(frame, palette, focused, glow, scale, alpha));
+    if frame.border > 0 {
+        let color = faded(palette.window_border(focused), alpha);
+        for edge in ring_edges(frame.outer, frame.border) {
+            elements.extend(solid(edge, color, scale));
+        }
+    }
     elements
 }
 
@@ -198,67 +212,6 @@ fn button_background(part: Part, hovered: Option<Part>, palette: &Palette) -> Op
         Part::Close => palette.danger,
         _ => palette.overlay,
     })
-}
-
-fn border_elements(
-    frame: &Frame,
-    palette: &Palette,
-    focused: bool,
-    glow: f32,
-    scale: f64,
-    alpha: f32,
-) -> Vec<SolidColorRenderElement> {
-    let width = frame.border;
-    if width <= 0 {
-        return Vec::new();
-    }
-    let outer = frame.outer;
-    let mut elements = Vec::new();
-
-    if focused {
-        // The accent sweeps left to right along the horizontal edges; the
-        // vertical edges take the colour of the corner they meet, so the frame
-        // reads as one continuous gradient rather than four separate strips.
-        let top = Rectangle::new(outer.loc, Size::from((outer.size.w, width)));
-        let bottom = Rectangle::new(
-            Point::from((outer.loc.x, outer.loc.y + outer.size.h - width)),
-            Size::from((outer.size.w, width)),
-        );
-        for edge in [top, bottom] {
-            for (rect, t) in horizontal_steps(edge, GRADIENT_STEPS) {
-                elements.extend(solid(rect, faded(palette.accent.sample(t), alpha), scale));
-            }
-        }
-
-        let inner_h = (outer.size.h - width * 2).max(0);
-        let left = Rectangle::new(
-            Point::from((outer.loc.x, outer.loc.y + width)),
-            Size::from((width, inner_h)),
-        );
-        let right = Rectangle::new(
-            Point::from((outer.loc.x + outer.size.w - width, outer.loc.y + width)),
-            Size::from((width, inner_h)),
-        );
-        elements.extend(solid(left, faded(palette.accent.sample(0.0), alpha), scale));
-        elements.extend(solid(right, faded(palette.accent.sample(1.0), alpha), scale));
-
-        if glow > 0.0 {
-            let ring = Rectangle::new(
-                Point::from((outer.loc.x - width, outer.loc.y - width)),
-                Size::from((outer.size.w + width * 2, outer.size.h + width * 2)),
-            );
-            for (i, edge) in ring_edges(ring, width).into_iter().enumerate() {
-                let t = if i % 2 == 0 { 0.25 } else { 0.75 };
-                elements.extend(solid(edge, faded(palette.accent_glow(t, glow), alpha), scale));
-            }
-        }
-    } else {
-        for edge in ring_edges(outer, width) {
-            elements.extend(solid(edge, faded(palette.border, alpha), scale));
-        }
-    }
-
-    elements
 }
 
 /// The four edges of `rect` as `width`-thick rectangles, without overlapping
@@ -409,23 +362,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unfocused_frame_draws_four_flat_edges_and_no_glow() {
+    fn only_the_hovered_button_gets_a_plate_element() {
         let m = Metrics::default();
         let p = Palette::default();
         let f = frame(400, 300);
-        let with_glow = frame_elements(&f, &m, &p, false, None, 1.0, 1.0, 1.0).len();
-        let without = frame_elements(&f, &m, &p, false, None, 0.0, 1.0, 1.0).len();
-        assert_eq!(with_glow, without, "glow applies to focused windows only");
+        assert!(button_plates(&f, &m, &p, None, 1.0, 1.0).is_empty());
+        assert_eq!(button_plates(&f, &m, &p, Some(Part::Close), 1.0, 1.0).len(), 1);
     }
 
     #[test]
-    fn a_focused_frame_costs_more_elements_with_glow_on() {
-        let m = Metrics::default();
+    fn the_fallback_frame_draws_a_bar_and_four_edges() {
         let p = Palette::default();
         let f = frame(400, 300);
-        let off = frame_elements(&f, &m, &p, true, None, 0.0, 1.0, 1.0).len();
-        let on = frame_elements(&f, &m, &p, true, None, 1.0, 1.0, 1.0).len();
-        assert!(on > off);
+        assert_eq!(fallback_frame(&f, &p, true, 1.0, 1.0).len(), 5);
+    }
+
+    #[test]
+    fn an_undecorated_window_has_nothing_to_fall_back_to() {
+        let p = Palette::default();
+        let f = Frame::new(rect(0, 0, 400, 300), &Metrics::default(), false);
+        assert!(fallback_frame(&f, &p, true, 1.0, 1.0).is_empty());
     }
 
     #[test]

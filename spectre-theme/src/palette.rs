@@ -23,6 +23,9 @@ pub const OVERLAY: Color = Color::hex(0x16171c);
 pub const LINE: Color = Color::hex(0x1c1d23);
 /// Border of an unfocused window.
 pub const BORDER: Color = Color::hex(0x24252c);
+/// Border of the focused window. A lifted neutral rather than an accent: the
+/// colour in Spectre lives in the pattern, not in a ring around every window.
+pub const BORDER_FOCUS: Color = Color::hex(0x3b3d47);
 
 /// Primary text.
 pub const TEXT: Color = Color::hex(0xe6e6ec);
@@ -56,6 +59,7 @@ pub struct Palette {
     pub overlay: Color,
     pub line: Color,
     pub border: Color,
+    pub border_focus: Color,
 
     pub text: Color,
     pub text_dim: Color,
@@ -79,6 +83,7 @@ impl Default for Palette {
             overlay: OVERLAY,
             line: LINE,
             border: BORDER,
+            border_focus: BORDER_FOCUS,
             text: TEXT,
             text_dim: TEXT_DIM,
             text_muted: TEXT_MUTED,
@@ -94,12 +99,13 @@ impl Default for Palette {
 impl Palette {
     /// Border colour for a window in the given focus state.
     ///
-    /// `t` walks the accent gradient so a focused border can be drawn as a real
-    /// gradient by stepping `t` along its perimeter; renderers that only want a
-    /// flat colour pass `0.5`.
-    pub fn window_border(&self, focused: bool, t: f32) -> Color {
+    /// Both are neutral greys. An accent-coloured ring around every window
+    /// turned the desktop into a light show; the accent now lives in the
+    /// pattern inside the title bar, where it reads as material rather than as
+    /// an outline.
+    pub fn window_border(&self, focused: bool) -> Color {
         if focused {
-            self.accent.sample(t)
+            self.border_focus
         } else {
             self.border
         }
@@ -150,11 +156,35 @@ mod tests {
     }
 
     #[test]
-    fn unfocused_border_ignores_the_accent() {
+    fn window_borders_are_neutral_and_tell_focus_apart() {
         let p = Palette::default();
-        assert_eq!(p.window_border(false, 0.0), p.border);
-        assert_eq!(p.window_border(false, 1.0), p.border);
-        assert_ne!(p.window_border(true, 0.0), p.window_border(true, 1.0));
+        assert_eq!(p.window_border(false), p.border);
+        assert_eq!(p.window_border(true), p.border_focus);
+        assert_ne!(p.window_border(true), p.window_border(false));
+    }
+
+    #[test]
+    fn window_borders_stay_grey_rather_than_taking_the_accent() {
+        // A cool tint is wanted - the whole palette leans blue - but the border
+        // must not become a coloured ring. Anything under a tenth of the range
+        // reads as grey next to an accent that spans most of it.
+        let p = Palette::default();
+        let spread = |c: Color| (c.r - c.g).abs() + (c.g - c.b).abs() + (c.r - c.b).abs();
+        for focused in [true, false] {
+            let c = p.window_border(focused);
+            assert!(spread(c) < 0.12, "the border must read as grey, got {c}");
+        }
+        assert!(
+            spread(p.accent.sample(0.0)) > 0.5,
+            "the accent, by contrast, is unmistakably coloured"
+        );
+    }
+
+    #[test]
+    fn the_focused_border_is_the_brighter_one() {
+        let p = Palette::default();
+        let sum = |c: Color| c.r + c.g + c.b;
+        assert!(sum(p.window_border(true)) > sum(p.window_border(false)));
     }
 
     #[test]

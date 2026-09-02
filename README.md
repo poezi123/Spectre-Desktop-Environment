@@ -22,7 +22,8 @@ Spectre is intended to be distribution-independent. **Garuda Spectre** will be t
 - **Low RAM and CPU usage** — suitable for old laptops and low-end systems.
 - **Modern Wayland desktop** — designed around a native Wayland compositor.
 - **Dark by default** — black is the dominant UI color.
-- **Subtle RGB** — color is used as an accent, not as visual noise.
+- **Subtle RGB** — color is used as an accent, not as visual noise. It lives in
+  the pattern rather than in a ring around every window.
 - **Spectre Pattern** — animated contour-line patterns inspired by topographic maps.
 - **Fluid workspaces** — smooth and optional 3D workspace transitions.
 - **Highly customizable** — panel layout, patterns, animations, colors and effects can be changed.
@@ -299,7 +300,7 @@ A dedicated Spectre file manager, terminal or other applications may be consider
 
 ### Phase 3 — Spectre visuals
 
-- [x] RGB window decorations
+- [x] Rounded, pattern-carrying window decorations
 - [x] Animated contour patterns
 - [x] Workspace animations
 - [ ] 3D workspace effects
@@ -332,9 +333,9 @@ A usable desktop, in the sense that you can log into it and work.
 
 `spectre-compositor` runs as a real Wayland session on KMS/DRM. It maps
 windows with server-side title bars - caption, minimize, maximize and close,
-drag to move, double click to maximize - draws the accent focus outline and
-the topographic pattern, routes keyboard and pointer input, handles four
-workspaces and survives VT switching. `spectre-panel` sits at the bottom with
+drag to move, double click to maximize - rounds their corners in a shader,
+draws the topographic pattern across the title bar, routes keyboard and
+pointer input, handles four workspaces and survives VT switching. `spectre-panel` sits at the bottom with
 the workspace indicator, running applications, a CPU and memory readout and
 the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 

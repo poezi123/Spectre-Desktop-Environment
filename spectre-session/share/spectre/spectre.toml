@@ -67,7 +67,7 @@ panel-height = 32
 kind = "topographic"
 animated = true
 speed = 0.6
-intensity = 0.14
+intensity = 0.55
 
 [theme.desktop-pattern]
 kind = "none"

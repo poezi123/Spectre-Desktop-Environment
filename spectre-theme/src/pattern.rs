@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::Color;
+use crate::color::{Color, Gradient};
 
 /// Which pattern family to draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -34,7 +34,7 @@ pub struct Pattern {
     pub animated: bool,
     /// Animation rate as a 0..1 knob; the settings UI shows this as a percentage.
     pub speed: f32,
-    /// Line opacity as a 0..1 knob. The concept keeps this very low on purpose.
+    /// Line opacity as a 0..1 knob.
     pub intensity: f32,
     /// Distance between contour lines, in logical pixels.
     pub line_spacing: f32,
@@ -48,7 +48,7 @@ impl Default for Pattern {
             kind: PatternKind::Topographic,
             animated: true,
             speed: 0.6,
-            intensity: 0.14,
+            intensity: 0.55,
             line_spacing: 26.0,
             line_width: 1.0,
         }
@@ -91,14 +91,34 @@ impl Pattern {
         ((elapsed_secs * self.speed as f64 * 0.06) % 1000.0) as f32
     }
 
+    /// How far the accent is darkened before it is drawn as a contour line.
+    ///
+    /// The pattern is where Spectre's colour lives, but it is texture in the
+    /// material rather than a graphic laid on top: at full accent brightness
+    /// the lines stop reading as topography and start reading as neon.
+    const DARKEN: f32 = 0.62;
+
     /// Colour of the contour lines over `background`.
     pub fn line_color(&self, accent: Color, background: Color) -> Color {
         if self.is_noop() {
             return Color::TRANSPARENT;
         }
-        // Lift the accent slightly towards the surface so the lines read as
-        // texture in the material rather than as drawn-on graphics.
-        accent.mix(background, 0.35).alpha(self.intensity.clamp(0.0, 1.0))
+        accent
+            .scaled(Self::DARKEN)
+            .mix(background, 0.15)
+            .alpha(self.intensity.clamp(0.0, 1.0))
+    }
+
+    /// The two colours the contour lines run between, left to right.
+    ///
+    /// Sampling the accent at both ends rather than in the middle is what puts
+    /// the RGB into the pattern: the lines shift hue across a title bar or a
+    /// panel instead of being one flat tint.
+    pub fn line_gradient(&self, accent: &Gradient, background: Color) -> (Color, Color) {
+        (
+            self.line_color(accent.sample(0.0), background),
+            self.line_color(accent.sample(1.0), background),
+        )
     }
 
     /// Force the pattern static, keeping it visible. Used by the Performance
@@ -257,5 +277,40 @@ mod tests {
         let p = Pattern::default();
         let c = p.line_color(palette::ACCENT_2, palette::SURFACE);
         assert!((c.a - p.intensity).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_lines_are_darker_than_the_accent_they_come_from() {
+        let p = Pattern::default();
+        let accent = palette::ACCENT_0;
+        let line = p.line_color(accent, palette::SURFACE);
+        let brightness = |c: crate::Color| c.r + c.g + c.b;
+        assert!(brightness(line) < brightness(accent), "the pattern must not read as neon");
+    }
+
+    #[test]
+    fn the_lines_keep_the_accent_hue_rather_than_going_grey() {
+        let p = Pattern::default();
+        let line = p.line_color(palette::ACCENT_0, palette::SURFACE);
+        // ACCENT_0 is teal: blue and green well above red.
+        assert!(line.b > line.r && line.g > line.r, "the colour has to survive the darkening");
+    }
+
+    #[test]
+    fn the_gradient_ends_differ_so_the_pattern_shifts_hue() {
+        let p = Pattern::default();
+        let palette = crate::Palette::default();
+        let (start, end) = p.line_gradient(&palette.accent, palette::SURFACE);
+        assert_ne!(start, end);
+        assert!(start.b > start.r, "it starts at the teal end");
+        assert!(end.r > start.r, "and finishes at the purple one");
+    }
+
+    #[test]
+    fn a_disabled_pattern_has_no_gradient_either() {
+        let palette = crate::Palette::default();
+        let (start, end) = Pattern::OFF.line_gradient(&palette.accent, palette::SURFACE);
+        assert_eq!(start, Color::TRANSPARENT);
+        assert_eq!(end, Color::TRANSPARENT);
     }
 }

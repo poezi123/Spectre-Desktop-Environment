@@ -45,7 +45,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
         bounds,
         &panel_pattern(frame.theme),
         palette.surface,
-        palette.accent.sample(0.5),
+        &palette.accent,
         frame.pattern_phase,
         frame.scale,
     );

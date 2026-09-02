@@ -21,8 +21,11 @@ uniform float spectre_phase;
 uniform float spectre_spacing;
 // Contour line thickness, in device pixels.
 uniform float spectre_line_width;
-// Straight-alpha colour of the contour lines.
-uniform vec4 spectre_line;
+// Straight-alpha colour of the contour lines at the left and right edges. The
+// lines shift hue between them, which is where Spectre's colour lives now that
+// the window borders are plain.
+uniform vec4 spectre_line_a;
+uniform vec4 spectre_line_b;
 // Straight-alpha colour of the surface underneath.
 uniform vec4 spectre_bg;
 
@@ -74,8 +77,9 @@ void main() {
     float feather = half_width * 0.9 + 0.015;
     float line = 1.0 - smoothstep(half_width, half_width + feather, dist);
 
-    float coverage = line * spectre_line.a;
-    vec3 rgb = mix(spectre_bg.rgb, spectre_line.rgb, coverage);
+    vec4 line_color = mix(spectre_line_a, spectre_line_b, clamp(v_coords.x, 0.0, 1.0));
+    float coverage = line * line_color.a;
+    vec3 rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
     float a = spectre_bg.a + (1.0 - spectre_bg.a) * coverage;
 
     // smithay's GLES frame blends premultiplied colours.

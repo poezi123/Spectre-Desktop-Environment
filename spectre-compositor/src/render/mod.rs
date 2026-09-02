@@ -2,10 +2,12 @@
 
 pub mod decorations;
 mod pattern;
+mod rounded;
 mod text;
 
 pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
+pub use rounded::{Corners, RoundedElement};
 pub use text::TextCache;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
@@ -35,6 +37,7 @@ render_elements! {
     /// decorations Spectre draws around them.
     pub WorkspaceElement<=GlesRenderer>;
     Surface = SurfaceElement,
+    Rounded = RoundedElement<SurfaceElement>,
     Text = MemoryRenderBufferRenderElement<GlesRenderer>,
     Solid = SolidColorRenderElement,
     Pattern = PixelShaderElement,
@@ -134,7 +137,7 @@ pub fn output_elements(
                 &theme.desktop_pattern,
                 area,
                 theme.palette.base,
-                theme.palette.accent.sample(0.5),
+                &theme.palette.accent,
                 state.pattern_phase(),
                 scale,
             )
@@ -147,6 +150,18 @@ pub fn output_elements(
     }
 
     elements
+}
+
+/// The accent a window's pattern is drawn with.
+///
+/// An unfocused window keeps the pattern but loses most of its colour, which
+/// is what tells the two apart now that the frame itself is plain.
+fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gradient {
+    if focused {
+        theme.palette.accent.clone()
+    } else {
+        theme.palette.accent.scaled(0.35)
+    }
 }
 
 /// Layer surfaces for an output.
@@ -213,7 +228,6 @@ fn workspace_elements(
     let scale = output.current_scale().fractional_scale();
     let theme = &state.config.theme;
     let metrics = theme.metrics;
-    let glow = state.config.effects.rgb_glow * alpha;
 
     let Some(space) = state.workspaces.get(index) else {
         return Vec::new();
@@ -221,28 +235,35 @@ fn workspace_elements(
     let Some(region) = space.output_geometry(output) else {
         return Vec::new();
     };
-    let mut elements: Vec<WorkspaceElement> = Vec::new();
-
-    elements.extend(
-        space
-            .render_elements_for_region(renderer, &region, scale, alpha)
-            .into_iter()
-            .map(WorkspaceElement::Surface),
-    );
 
     let pointer = state.pointer.current_location();
     let phase = state.pattern_phase();
     let mut cache = state.text.borrow_mut();
+    let mut elements: Vec<WorkspaceElement> = Vec::new();
 
-    for window in space.elements() {
+    // Front to back, which is the order the renderer wants.
+    for window in space.elements().rev() {
         let Some(geometry) = space.element_geometry(window) else {
             continue;
         };
+        let Some(location) = space.element_location(window) else {
+            continue;
+        };
         let focused = state.focus.as_ref() == Some(window);
-        let frame = Frame::new(geometry, &metrics, state.is_decorated(window));
-        let hovered = decorations::part_at(&frame, &metrics, pointer);
+        let decorated = state.is_decorated(window);
 
-        if frame.is_decorated() {
+        // Everything below works in output-local coordinates.
+        let local = Rectangle::new(geometry.loc - region.loc, geometry.size);
+        let frame = Frame::new(local, &metrics, decorated);
+        // Hit testing still happens in global coordinates, so the hovered part
+        // is worked out from the untranslated frame.
+        let hovered = decorations::part_at(
+            &Frame::new(geometry, &metrics, decorated),
+            &metrics,
+            pointer,
+        );
+
+        if decorated {
             elements.extend(
                 decoration_text(
                     state, &frame, window, focused, hovered, &mut cache, renderer, scale, alpha,
@@ -250,40 +271,72 @@ fn workspace_elements(
                 .into_iter()
                 .map(WorkspaceElement::Text),
             );
+            elements.extend(
+                decorations::button_plates(&frame, &metrics, &theme.palette, hovered, alpha, scale)
+                    .into_iter()
+                    .map(WorkspaceElement::Solid),
+            );
         }
 
-        // The Spectre Pattern goes in before the frame so it lands *above* the
-        // title bar background and *below* the caption: contour lines read as
-        // texture in the bar rather than as marks drawn over the text.
-        if frame.is_decorated() {
-            if let Some(pattern) = shader.and_then(|shader| {
-                shader.element(
-                    &theme.window_pattern,
-                    frame.titlebar,
-                    theme.palette.titlebar(focused).alpha(alpha),
-                    theme.palette.accent.sample(if focused { 0.5 } else { 0.0 }),
-                    if focused { phase } else { 0.0 },
-                    scale,
-                )
-            }) {
-                elements.push(WorkspaceElement::Pattern(pattern));
+        // The client's own surfaces, clipped to the window's rounded corners.
+        let radius = (metrics.corner_radius as f64 * scale) as f32;
+        let corners = if decorated {
+            // The frame has already rounded the top two.
+            Corners::bottom(radius)
+        } else {
+            Corners::uniform(radius)
+        };
+        let window_physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+        let render_location = location - window.geometry().loc - region.loc;
+
+        let surfaces = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
+            window,
+            renderer,
+            render_location.to_physical_precise_round(scale),
+            Scale::from(scale),
+            alpha,
+        );
+        for surface in surfaces {
+            match RoundedElement::new(
+                surface,
+                shader.and_then(PatternShader::rounded_program),
+                window_physical,
+                corners,
+            ) {
+                Ok(rounded) => elements.push(WorkspaceElement::Rounded(rounded)),
+                Err(plain) => elements.push(WorkspaceElement::Surface(plain)),
             }
         }
 
-        elements.extend(
-            decorations::frame_elements(
-                &frame,
+        if !decorated {
+            continue;
+        }
+
+        // The frame itself: rounded title bar, hairline border, pattern.
+        let titlebar_height = frame.titlebar.size.h + frame.border;
+        let drawn = shader.and_then(|shader| {
+            shader.frame_element(
+                frame.outer,
+                titlebar_height,
                 &metrics,
                 &theme.palette,
+                &theme.window_pattern,
+                &accent_for(theme, focused),
                 focused,
-                hovered,
-                if focused { glow } else { 0.0 },
-                scale,
+                if focused { phase } else { 0.0 },
                 alpha,
+                scale,
             )
-            .into_iter()
-            .map(WorkspaceElement::Solid),
-        );
+        });
+        match drawn {
+            Some(element) => elements.push(WorkspaceElement::Pattern(element)),
+            // No frame shader: square corners rather than no frame at all.
+            None => elements.extend(
+                decorations::fallback_frame(&frame, &theme.palette, focused, alpha, scale)
+                    .into_iter()
+                    .map(WorkspaceElement::Solid),
+            ),
+        }
     }
     drop(cache);
 
@@ -377,32 +430,6 @@ pub fn solid(
     ))
 }
 
-/// Split `area` into `segments` horizontal strips.
-///
-/// Used to fake a gradient with solid rectangles on the accent bar: a real
-/// gradient shader is not worth a second program for a 1px line, and eight
-/// steps are indistinguishable at that thickness.
-pub fn horizontal_steps(
-    area: Rectangle<i32, Logical>,
-    segments: u32,
-) -> impl Iterator<Item = (Rectangle<i32, Logical>, f32)> {
-    let segments = segments.max(1);
-    let width = area.size.w;
-    (0..segments).filter_map(move |i| {
-        let start = (width as i64 * i as i64 / segments as i64) as i32;
-        let end = (width as i64 * (i + 1) as i64 / segments as i64) as i32;
-        if end <= start {
-            return None;
-        }
-        let rect = Rectangle::new(
-            (area.loc.x + start, area.loc.y).into(),
-            (end - start, area.size.h).into(),
-        );
-        let t = if segments == 1 { 0.5 } else { i as f32 / (segments - 1) as f32 };
-        Some((rect, t))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,28 +449,4 @@ mod tests {
         assert!(solid(rect(0, 0, 10, 10), Color::TRANSPARENT, 1.0).is_none());
     }
 
-    #[test]
-    fn steps_tile_the_area_exactly() {
-        let area = rect(10, 4, 101, 2);
-        let steps: Vec<_> = horizontal_steps(area, 8).collect();
-        assert_eq!(steps.first().unwrap().0.loc.x, 10);
-        let last = steps.last().unwrap().0;
-        assert_eq!(last.loc.x + last.size.w, 111, "must reach the right edge");
-        let covered: i32 = steps.iter().map(|(r, _)| r.size.w).sum();
-        assert_eq!(covered, area.size.w, "no gaps and no overlap");
-    }
-
-    #[test]
-    fn steps_walk_the_gradient_from_zero_to_one() {
-        let steps: Vec<_> = horizontal_steps(rect(0, 0, 80, 1), 8).collect();
-        assert_eq!(steps.first().unwrap().1, 0.0);
-        assert_eq!(steps.last().unwrap().1, 1.0);
-    }
-
-    #[test]
-    fn a_narrow_area_never_yields_zero_width_rectangles() {
-        for (r, _) in horizontal_steps(rect(0, 0, 3, 1), 8) {
-            assert!(r.size.w > 0);
-        }
-    }
 }

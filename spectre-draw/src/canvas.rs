@@ -4,7 +4,7 @@
 //! little-endian machine is `[B, G, R, A]` in memory, premultiplied.
 
 use spectre_text::Image;
-use spectre_theme::{Color, Pattern};
+use spectre_theme::{Color, Gradient, Pattern};
 
 /// An integer rectangle in panel-local pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,22 +161,24 @@ impl Canvas {
     ///
     /// Uses [`Pattern::coverage`], the same field the compositor's shader
     /// evaluates, so the panel and the window title bars show one pattern
-    /// rather than two that merely look similar.
+    /// rather than two that merely look similar. The contour lines shift from
+    /// one end of `accent` to the other across the width, the same way the
+    /// shader interpolates them.
     #[allow(clippy::too_many_arguments)]
     pub fn fill_pattern(
         &mut self,
         rect: Rect,
         pattern: &Pattern,
         background: Color,
-        accent: Color,
+        accent: &Gradient,
         phase: f32,
         scale: f32,
     ) {
         self.fill_rect(rect, background);
-        if pattern.is_noop() {
+        if pattern.is_noop() || rect.w <= 0 {
             return;
         }
-        let line = pattern.line_color(accent, background);
+        let (line_a, line_b) = pattern.line_gradient(accent, background);
         let area = rect.intersect(&self.bounds());
         if area.is_empty() {
             return;
@@ -193,6 +195,8 @@ impl Canvas {
                 if coverage <= 0.0 {
                     continue;
                 }
+                let t = (x - rect.x) as f32 / rect.w as f32;
+                let line = line_a.mix(line_b, t);
                 let color = line.alpha(line.a * coverage);
                 let [b, g, r, a] = to_argb(color);
                 self.blend(x, y, b, g, r, a);
@@ -319,7 +323,8 @@ mod tests {
     fn the_pattern_leaves_marks_but_keeps_the_background() {
         let mut c = Canvas::new(120, 32);
         let pattern = Pattern::default();
-        c.fill_pattern(c.bounds(), &pattern, palette::SURFACE, palette::ACCENT_2, 0.0, 1.0);
+        let accent = spectre_theme::Palette::default().accent;
+        c.fill_pattern(c.bounds(), &pattern, palette::SURFACE, &accent, 0.0, 1.0);
         let bg = to_argb(palette::SURFACE);
         let bytes = c.as_bytes();
         assert!(bytes.chunks_exact(4).any(|p| p != bg), "the contour lines must be visible");
@@ -329,7 +334,8 @@ mod tests {
     #[test]
     fn a_disabled_pattern_leaves_a_flat_fill() {
         let mut c = Canvas::new(40, 8);
-        c.fill_pattern(c.bounds(), &Pattern::OFF, palette::SURFACE, palette::ACCENT_2, 0.0, 1.0);
+        let accent = spectre_theme::Palette::default().accent;
+        c.fill_pattern(c.bounds(), &Pattern::OFF, palette::SURFACE, &accent, 0.0, 1.0);
         let bg = to_argb(palette::SURFACE);
         assert!(c.as_bytes().chunks_exact(4).all(|p| p == bg));
     }
