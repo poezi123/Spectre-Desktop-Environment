@@ -139,6 +139,7 @@ pub fn output_elements(
                 theme.palette.base,
                 &theme.palette.accent,
                 state.pattern_phase(),
+                state.color_phase(),
                 scale,
             )
         });
@@ -238,6 +239,7 @@ fn workspace_elements(
 
     let pointer = state.pointer.current_location();
     let phase = state.pattern_phase();
+    let color_phase = state.color_phase();
     let mut cache = state.text.borrow_mut();
     let mut elements: Vec<WorkspaceElement> = Vec::new();
 
@@ -324,6 +326,7 @@ fn workspace_elements(
                 &accent_for(theme, focused),
                 focused,
                 if focused { phase } else { 0.0 },
+                color_phase,
                 alpha,
                 scale,
             )

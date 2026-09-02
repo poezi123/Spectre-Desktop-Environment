@@ -34,11 +34,12 @@ pub const TEXT_DIM: Color = Color::hex(0x8a8a96);
 /// Disabled text and the unfocused title bar caption.
 pub const TEXT_MUTED: Color = Color::hex(0x565662);
 
-/// Accent gradient stops, teal to purple, as sampled from the settings mockup.
-pub const ACCENT_0: Color = Color::hex(0x16a3c8);
-pub const ACCENT_1: Color = Color::hex(0x4376c6);
-pub const ACCENT_2: Color = Color::hex(0x7645ab);
-pub const ACCENT_3: Color = Color::hex(0xb064dc);
+/// Accent stops: electric cyan, blue, violet, magenta. Read as a loop - the
+/// pattern cycles through them and wraps magenta back to cyan.
+pub const ACCENT_0: Color = Color::hex(0x00e5ff);
+pub const ACCENT_1: Color = Color::hex(0x2f7bff);
+pub const ACCENT_2: Color = Color::hex(0x9d3cff);
+pub const ACCENT_3: Color = Color::hex(0xff3ce0);
 
 /// Destructive action: the close button and the "Delete" dialog button.
 pub const DANGER: Color = Color::hex(0xd04a57);

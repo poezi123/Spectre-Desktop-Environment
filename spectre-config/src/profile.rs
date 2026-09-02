@@ -73,17 +73,14 @@ impl Profile {
 
     /// Apply the profile's pattern policy to a theme.
     ///
-    /// Patterns are always drawn; profiles only decide whether they move. That
-    /// is the design rule - a disabled animation makes the pattern static, it
-    /// never makes it disappear.
-    ///
-    /// `Balanced` keeps them static on purpose. An animated pattern means a new
-    /// frame every vblank for the whole output, and on the low-end hardware
-    /// this project treats as a first-class target that cost buys a texture
-    /// most people will not notice moving. `Spectre` is where motion lives.
+    /// Patterns are always drawn; profiles only decide whether they move.
+    /// `Balanced` freezes the contour field - four octaves of noise per pixel
+    /// per frame is what costs on weak hardware - but keeps the colours
+    /// cycling, which is nearly free. `Performance` stops both.
     pub fn apply_to_theme(self, theme: Theme) -> Theme {
         match self {
-            Profile::Performance | Profile::Balanced => theme.without_animation(),
+            Profile::Performance => theme.without_animation(),
+            Profile::Balanced => theme.with_static_lines(),
             Profile::Spectre => Theme {
                 desktop_pattern: spectre_theme::DesktopPattern(Pattern::default()),
                 ..theme
@@ -125,9 +122,10 @@ mod tests {
     }
 
     #[test]
-    fn balanced_shows_the_pattern_without_animating_it() {
+    fn balanced_freezes_the_lines_but_keeps_the_colours_moving() {
         let t = Profile::Balanced.apply_to_theme(Theme::default());
         assert!(!t.window_pattern.is_noop(), "the texture must stay visible");
-        assert!(!t.needs_continuous_redraw(), "no frame may be drawn just to move it");
+        assert_eq!(t.window_pattern.phase(10.0), 0.0, "the field must stand still");
+        assert!(t.window_pattern.cycles_color());
     }
 }

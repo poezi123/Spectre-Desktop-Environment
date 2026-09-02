@@ -7,7 +7,7 @@
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Pattern, Theme};
 
-use spectre_draw::{Canvas, Rect};
+use spectre_draw::{Canvas, PatternMask, Rect};
 use crate::layout::{Item, Placed, CHIP_PADDING};
 
 /// Font size for panel labels, in logical pixels.
@@ -34,8 +34,10 @@ pub struct Frame<'a> {
     pub date: &'a str,
     /// The CPU and memory line.
     pub resources: &'a str,
-    pub pattern_phase: f32,
-    pub scale: f32,
+    /// Cached contour coverage, prepared by the caller for this canvas.
+    pub mask: &'a PatternMask,
+    /// Where the pattern's colour loop stands, 0..1.
+    pub color_phase: f32,
 }
 
 /// Paint the whole panel.
@@ -43,14 +45,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
     let palette = &frame.theme.palette;
     let bounds = canvas.bounds();
 
-    canvas.fill_pattern(
-        bounds,
-        &panel_pattern(frame.theme),
-        palette.surface,
-        &palette.accent,
-        frame.pattern_phase,
-        frame.scale,
-    );
+    canvas.fill_pattern(bounds, frame.mask, palette.surface, &palette.accent, frame.color_phase);
 
     // A hairline along the top edge separates the panel from the desktop even
     // with every effect switched off.
@@ -64,7 +59,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
     }
 }
 
-fn panel_pattern(theme: &Theme) -> Pattern {
+pub fn panel_pattern(theme: &Theme) -> Pattern {
     // The panel is a thin strip: the same line spacing that reads well on a
     // title bar reads well here, so it shares the window pattern outright.
     theme.panel_pattern
@@ -249,16 +244,23 @@ mod tests {
     use super::*;
     use spectre_theme::palette;
 
-    fn frame<'a>(theme: &'a Theme) -> Frame<'a> {
+    fn frame<'a>(theme: &'a Theme, mask: &'a PatternMask) -> Frame<'a> {
         Frame {
             theme,
             pointer: None,
             time: "03:04",
             date: "01.09.26",
             resources: "CPU  4%  MEM 1.2G",
-            pattern_phase: 0.0,
-            scale: 1.0,
+            mask,
+            color_phase: 0.0,
         }
+    }
+
+    /// A mask sized for the canvas the test is about to draw into.
+    fn mask(theme: &Theme, width: i32, height: i32) -> PatternMask {
+        let mut mask = PatternMask::new();
+        mask.prepare(width, height, &panel_pattern(theme), 0.0, 1.0);
+        mask
     }
 
     fn painted(canvas: &Canvas) -> usize {
@@ -269,8 +271,9 @@ mod tests {
     fn an_empty_panel_is_still_filled_and_opaque() {
         let theme = Theme::default();
         let mut canvas = Canvas::new(400, 32);
+        let mask = mask(&theme, 400, 32);
         let mut text = TextRenderer::new();
-        draw(&mut canvas, &mut text, &[], &frame(&theme));
+        draw(&mut canvas, &mut text, &[], &frame(&theme, &mask));
         assert_eq!(painted(&canvas), 400 * 32, "every pixel must be opaque");
     }
 
@@ -278,8 +281,9 @@ mod tests {
     fn the_top_hairline_is_drawn() {
         let theme = Theme::default();
         let mut canvas = Canvas::new(40, 32);
+        let mask = mask(&theme, 40, 32);
         let mut text = TextRenderer::new();
-        draw(&mut canvas, &mut text, &[], &frame(&theme));
+        draw(&mut canvas, &mut text, &[], &frame(&theme, &mask));
         let top = &canvas.as_bytes()[0..4];
         let below = &canvas.as_bytes()[(40 * 4 * 4)..(40 * 4 * 4 + 4)];
         assert_ne!(top, below, "the separator must be distinguishable from the panel");
@@ -292,13 +296,14 @@ mod tests {
         let rect = Rect::new(0, 0, 26, 32);
 
         let mut active = Canvas::new(26, 32);
+        let mask = mask(&theme, 26, 32);
         active.clear(palette::SURFACE);
         draw_item(
             &mut active,
             &mut text,
             &Placed { item: Item::Workspace { index: 1, active: true, occupied: true }, rect },
             false,
-            &frame(&theme),
+            &frame(&theme, &mask),
         );
 
         let mut inactive = Canvas::new(26, 32);
@@ -308,7 +313,7 @@ mod tests {
             &mut text,
             &Placed { item: Item::Workspace { index: 1, active: false, occupied: true }, rect },
             false,
-            &frame(&theme),
+            &frame(&theme, &mask),
         );
 
         let bottom_row = |c: &Canvas| -> Vec<u8> {
@@ -322,10 +327,11 @@ mod tests {
     fn the_launcher_button_carries_the_spectre_mark() {
         let theme = Theme::default();
         let mut canvas = Canvas::new(120, 32);
+        let mask = mask(&theme, 120, 32);
         let mut text = TextRenderer::new();
         let rect = Rect::new(4, 1, 30, 30);
         let items = [Placed { item: Item::Launcher, rect }];
-        draw(&mut canvas, &mut text, &items, &frame(&theme));
+        draw(&mut canvas, &mut text, &items, &frame(&theme, &mask));
 
         // The mark is the only thing in the button, so any pixel there that is
         // brighter than the panel behind it came from the logo.
@@ -350,12 +356,13 @@ mod tests {
         let placed = Placed { item: Item::Launcher, rect };
 
         let mut plain = Canvas::new(30, 32);
+        let mask = mask(&theme, 30, 32);
         plain.clear(palette::SURFACE);
-        draw_item(&mut plain, &mut text, &placed, false, &frame(&theme));
+        draw_item(&mut plain, &mut text, &placed, false, &frame(&theme, &mask));
 
         let mut lit = Canvas::new(30, 32);
         lit.clear(palette::SURFACE);
-        draw_item(&mut lit, &mut text, &placed, true, &frame(&theme));
+        draw_item(&mut lit, &mut text, &placed, true, &frame(&theme, &mask));
 
         assert_ne!(plain.as_bytes(), lit.as_bytes());
     }
@@ -364,13 +371,14 @@ mod tests {
     fn drawing_never_writes_outside_the_canvas() {
         let theme = Theme::default();
         let mut canvas = Canvas::new(20, 32);
+        let mask = mask(&theme, 20, 32);
         let mut text = TextRenderer::new();
         // An item deliberately hanging off both ends.
         let items = [
             Placed { item: Item::Launcher, rect: Rect::new(-40, 0, 30, 32) },
             Placed { item: Item::Clock, rect: Rect::new(500, 0, 60, 32) },
         ];
-        draw(&mut canvas, &mut text, &items, &frame(&theme));
+        draw(&mut canvas, &mut text, &items, &frame(&theme, &mask));
         assert_eq!(canvas.as_bytes().len(), 20 * 32 * 4);
     }
 }

@@ -18,8 +18,12 @@ const FRAME_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_titlebar", UniformType::_1f),
     ("spectre_bg", UniformType::_4f),
     ("spectre_edge", UniformType::_4f),
-    ("spectre_line_a", UniformType::_4f),
-    ("spectre_line_b", UniformType::_4f),
+    ("spectre_line_0", UniformType::_4f),
+    ("spectre_line_1", UniformType::_4f),
+    ("spectre_line_2", UniformType::_4f),
+    ("spectre_line_3", UniformType::_4f),
+    ("spectre_color_phase", UniformType::_1f),
+    ("spectre_color_span", UniformType::_1f),
     ("spectre_phase", UniformType::_1f),
     ("spectre_spacing", UniformType::_1f),
     ("spectre_line_width", UniformType::_1f),
@@ -36,10 +40,28 @@ const UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_phase", UniformType::_1f),
     ("spectre_spacing", UniformType::_1f),
     ("spectre_line_width", UniformType::_1f),
-    ("spectre_line_a", UniformType::_4f),
-    ("spectre_line_b", UniformType::_4f),
+    ("spectre_line_0", UniformType::_4f),
+    ("spectre_line_1", UniformType::_4f),
+    ("spectre_line_2", UniformType::_4f),
+    ("spectre_line_3", UniformType::_4f),
+    ("spectre_color_phase", UniformType::_1f),
+    ("spectre_color_span", UniformType::_1f),
     ("spectre_bg", UniformType::_4f),
 ];
+
+/// How much of the colour loop spans one surface.
+const COLOR_SPAN: f32 = 1.0;
+
+fn stop_uniforms(stops: &[Color; Pattern::STOPS], color_phase: f32) -> Vec<Uniform<'static>> {
+    vec![
+        Uniform::new("spectre_line_0", stops[0].to_array()),
+        Uniform::new("spectre_line_1", stops[1].to_array()),
+        Uniform::new("spectre_line_2", stops[2].to_array()),
+        Uniform::new("spectre_line_3", stops[3].to_array()),
+        Uniform::new("spectre_color_phase", color_phase),
+        Uniform::new("spectre_color_span", COLOR_SPAN),
+    ]
+}
 
 /// Every program Spectre compiles.
 ///
@@ -112,6 +134,7 @@ impl PatternShader {
         accent: &Gradient,
         focused: bool,
         phase: f32,
+        color_phase: f32,
         alpha: f32,
         scale: f64,
     ) -> Option<PixelShaderElement> {
@@ -122,21 +145,19 @@ impl PatternShader {
 
         let background = palette.titlebar(focused).alpha(alpha);
         let edge = palette.window_border(focused).alpha(alpha);
-        let (line_a, line_b) = if pattern.is_noop() {
-            (Color::TRANSPARENT, Color::TRANSPARENT)
+        let stops = if pattern.is_noop() {
+            [Color::TRANSPARENT; Pattern::STOPS]
         } else {
-            pattern.line_gradient(accent, background)
+            pattern.line_stops(accent, background)
         };
         let spacing = (pattern.line_spacing as f64 * scale).max(1.0) as f32;
 
-        let uniforms = vec![
+        let mut uniforms = vec![
             Uniform::new("spectre_radius", (metrics.corner_radius as f64 * scale) as f32),
             Uniform::new("spectre_border", (metrics.border_width as f64 * scale) as f32),
             Uniform::new("spectre_titlebar", (titlebar_height as f64 * scale) as f32),
             Uniform::new("spectre_bg", background.to_array()),
             Uniform::new("spectre_edge", edge.to_array()),
-            Uniform::new("spectre_line_a", line_a.to_array()),
-            Uniform::new("spectre_line_b", line_b.to_array()),
             Uniform::new("spectre_phase", phase),
             Uniform::new("spectre_spacing", if pattern.is_noop() { 0.0 } else { spacing }),
             Uniform::new(
@@ -144,6 +165,7 @@ impl PatternShader {
                 (pattern.line_width as f64 * scale).max(0.5) as f32,
             ),
         ];
+        uniforms.extend(stop_uniforms(&stops, color_phase));
 
         // Rounded corners and a hollow middle: nothing here is opaque.
         Some(PixelShaderElement::new(
@@ -173,13 +195,14 @@ impl PatternShader {
         background: Color,
         accent: &Gradient,
         phase: f32,
+        color_phase: f32,
         scale: f64,
     ) -> Option<PixelShaderElement> {
         if pattern.is_noop() || area.size.w <= 0 || area.size.h <= 0 {
             return None;
         }
 
-        let (line_a, line_b) = pattern.line_gradient(accent, background);
+        let stops = pattern.line_stops(accent, background);
         // Grid is the cheap variant: same shader, but the noise is flattened by
         // pushing the spacing far apart so the level set degenerates to bands.
         let spacing = match pattern.kind {
@@ -188,14 +211,13 @@ impl PatternShader {
         } as f64
             * scale;
 
-        let uniforms = vec![
+        let mut uniforms = vec![
             Uniform::new("spectre_phase", phase),
             Uniform::new("spectre_spacing", spacing.max(1.0) as f32),
             Uniform::new("spectre_line_width", (pattern.line_width as f64 * scale).max(0.5) as f32),
-            Uniform::new("spectre_line_a", line_a.to_array()),
-            Uniform::new("spectre_line_b", line_b.to_array()),
             Uniform::new("spectre_bg", background.to_array()),
         ];
+        uniforms.extend(stop_uniforms(&stops, color_phase));
 
         // The background is opaque, so declaring the whole area opaque lets the
         // damage tracker skip everything behind it.

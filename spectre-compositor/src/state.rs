@@ -277,6 +277,11 @@ impl Spectre {
         self.config.theme.window_pattern.phase(self.elapsed_secs())
     }
 
+    /// Where the pattern's colour cycle stands.
+    pub fn color_phase(&self) -> f32 {
+        self.config.theme.window_pattern.color_phase(self.elapsed_secs())
+    }
+
     /// Note that something visible changed, so the next frame is drawn.
     ///
     /// Shell clients are told as well: focus, workspace and window changes all

@@ -26,9 +26,14 @@ uniform float spectre_titlebar;
 // Title bar fill and border hairline, straight alpha.
 uniform vec4 spectre_bg;
 uniform vec4 spectre_edge;
-// Contour line colours at the left and right edges.
-uniform vec4 spectre_line_a;
-uniform vec4 spectre_line_b;
+// Straight-alpha contour colours, sampled as a loop.
+uniform vec4 spectre_line_0;
+uniform vec4 spectre_line_1;
+uniform vec4 spectre_line_2;
+uniform vec4 spectre_line_3;
+// Where the colour loop stands, 0..1, and how many loops span the surface.
+uniform float spectre_color_phase;
+uniform float spectre_color_span;
 uniform float spectre_phase;
 uniform float spectre_spacing;
 uniform float spectre_line_width;
@@ -64,6 +69,16 @@ float fbm(vec2 p) {
         amp *= 0.5;
     }
     return v;
+}
+
+// The contour colour at `t` along the loop, wrapping. Twin of Pattern::line_at.
+vec4 spectre_line_at(float t) {
+    float u = fract(t) * 4.0;
+    float i = floor(u);
+    float f = u - i;
+    vec4 a = i < 0.5 ? spectre_line_0 : (i < 1.5 ? spectre_line_1 : (i < 2.5 ? spectre_line_2 : spectre_line_3));
+    vec4 b = i < 0.5 ? spectre_line_1 : (i < 1.5 ? spectre_line_2 : (i < 2.5 ? spectre_line_3 : spectre_line_0));
+    return mix(a, b, f);
 }
 
 // Contour line coverage at a point, matching pattern.glsl.
@@ -102,7 +117,7 @@ void main() {
     float bar = inner * (1.0 - below);
     float ring = outer * (1.0 - inner);
 
-    vec4 line_color = mix(spectre_line_a, spectre_line_b, clamp(v_coords.x, 0.0, 1.0));
+    vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
     float coverage = contour(px) * line_color.a;
     vec3 bar_rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
 

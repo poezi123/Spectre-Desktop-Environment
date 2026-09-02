@@ -93,6 +93,7 @@ fn main() -> anyhow::Result<()> {
         exit: false,
         dirty: true,
         canvas: Canvas::new(0, 0),
+        mask: spectre_draw::PatternMask::new(),
         text: TextRenderer::new(),
         config,
         entries,
@@ -143,6 +144,7 @@ struct Launcher {
     dirty: bool,
 
     canvas: Canvas,
+    mask: spectre_draw::PatternMask,
     text: TextRenderer,
     config: Config,
 
@@ -246,19 +248,17 @@ impl Launcher {
         self.canvas.resize(width, height);
 
         let results: Vec<&Entry> = self.results.iter().map(|&i| &self.entries[i]).collect();
-        let phase = self
-            .config
-            .theme
-            .window_pattern
-            .phase(self.started.elapsed().as_secs_f64());
+        let elapsed = self.started.elapsed().as_secs_f64();
+        let pattern = ui::launcher_pattern(&self.config.theme);
+        self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), self.scale as f32);
         let frame = ui::Frame {
             theme: &self.config.theme,
             query: &self.query,
             results: &results,
             selected: self.selected,
             offset: self.offset,
-            pattern_phase: phase,
-            scale: self.scale as f32,
+            mask: &self.mask,
+            color_phase: pattern.color_phase(elapsed),
         };
         ui::draw(&mut self.canvas, &mut self.text, &frame);
 

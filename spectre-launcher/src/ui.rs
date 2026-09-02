@@ -78,8 +78,8 @@ pub struct Frame<'a> {
     pub results: &'a [&'a Entry],
     pub selected: usize,
     pub offset: usize,
-    pub pattern_phase: f32,
-    pub scale: f32,
+    pub mask: &'a spectre_draw::PatternMask,
+    pub color_phase: f32,
 }
 
 /// Paint the launcher.
@@ -88,14 +88,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
     let bounds = canvas.bounds();
     let width = bounds.w;
 
-    canvas.fill_pattern(
-        bounds,
-        &launcher_pattern(frame.theme),
-        palette.surface,
-        &palette.accent,
-        frame.pattern_phase,
-        frame.scale,
-    );
+    canvas.fill_pattern(bounds, frame.mask, palette.surface, &palette.accent, frame.color_phase);
     draw_border(canvas, bounds, palette);
     draw_search(canvas, text, width, frame);
 
@@ -114,7 +107,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
     }
 }
 
-fn launcher_pattern(theme: &Theme) -> Pattern {
+pub fn launcher_pattern(theme: &Theme) -> Pattern {
     theme.window_pattern
 }
 

@@ -65,8 +65,12 @@ panel-height = 32
 # have it on any machine you think can afford it.
 [theme.window-pattern]
 kind = "topographic"
+# Whether the contour lines themselves scroll.
 animated = true
 speed = 0.6
+# Whether the line colours travel along the accent, independently of the lines.
+color-cycle = true
+color-speed = 0.5
 intensity = 0.55
 
 [theme.desktop-pattern]

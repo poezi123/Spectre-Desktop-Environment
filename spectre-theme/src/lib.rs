@@ -68,6 +68,14 @@ impl Theme {
         self
     }
 
+    /// Freeze the contour fields but keep their colours cycling.
+    pub fn with_static_lines(mut self) -> Self {
+        self.window_pattern = self.window_pattern.with_static_lines();
+        self.panel_pattern = self.panel_pattern.with_static_lines();
+        self.desktop_pattern = DesktopPattern(self.desktop_pattern.0.with_static_lines());
+        self
+    }
+
     /// True when any surface needs a new frame every vblank.
     pub fn needs_continuous_redraw(&self) -> bool {
         self.window_pattern.needs_continuous_redraw()

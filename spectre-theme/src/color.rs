@@ -201,6 +201,20 @@ impl Gradient {
         }
     }
 
+    /// Sample at `t` with the stops treated as a loop, so a cycle through the
+    /// gradient has no seam.
+    pub fn sample_cyclic(&self, t: f32) -> Color {
+        match self.stops.len() {
+            0 => Color::TRANSPARENT,
+            1 => self.stops[0],
+            n => {
+                let t = t.rem_euclid(1.0) * n as f32;
+                let i = (t.floor() as usize) % n;
+                self.stops[i].mix(self.stops[(i + 1) % n], t - t.floor())
+            }
+        }
+    }
+
     /// Average colour, for places that need one flat value (a 1px border on a
     /// low-end profile, an icon tint).
     pub fn average(&self) -> Color {

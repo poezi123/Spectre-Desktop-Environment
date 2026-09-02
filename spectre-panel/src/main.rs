@@ -13,6 +13,9 @@ mod readout;
 use std::io::{ErrorKind, Read};
 use std::time::{Duration, Instant};
 
+/// Repaint interval while the pattern is moving: 30 fps.
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(33);
+
 use anyhow::Context;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -97,6 +100,7 @@ fn main() -> anyhow::Result<()> {
         exit: false,
         dirty: true,
         canvas: Canvas::new(0, 0),
+        mask: spectre_draw::PatternMask::new(),
         text: TextRenderer::new(),
         config,
         desktop: Desktop::default(),
@@ -119,6 +123,20 @@ fn main() -> anyhow::Result<()> {
             TimeoutAction::ToDuration(Duration::from_secs(1))
         })
         .map_err(|err| anyhow::anyhow!("could not start the panel clock: {err}"))?;
+
+    // A moving pattern is paced here rather than off frame callbacks: the
+    // panel is a thin strip, and repainting it faster than this only spends
+    // CPU that a laptop on battery would rather keep.
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(ANIMATION_INTERVAL), |_, _, panel: &mut Panel| {
+            if panel.config.theme.panel_pattern.needs_continuous_redraw() {
+                panel.dirty = true;
+                panel.redraw_if_needed();
+            }
+            TimeoutAction::ToDuration(ANIMATION_INTERVAL)
+        })
+        .map_err(|err| anyhow::anyhow!("could not start the panel animation: {err}"))?;
 
     tracing::info!("Spectre panel ready");
     event_loop.run(None, &mut panel, |panel| {
@@ -209,6 +227,7 @@ struct Panel {
     dirty: bool,
 
     canvas: Canvas,
+    mask: spectre_draw::PatternMask,
     text: TextRenderer,
     config: Config,
 
@@ -232,9 +251,6 @@ impl Panel {
             self.dirty = true;
         }
         if self.readout.refresh() {
-            self.dirty = true;
-        }
-        if self.config.theme.panel_pattern.needs_continuous_redraw() {
             self.dirty = true;
         }
         self.redraw_if_needed();
@@ -344,19 +360,17 @@ impl Panel {
             show_resources,
         );
 
-        let phase = self
-            .config
-            .theme
-            .panel_pattern
-            .phase(self.started.elapsed().as_secs_f64());
+        let elapsed = self.started.elapsed().as_secs_f64();
+        let pattern = draw::panel_pattern(&self.config.theme);
+        self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), scale);
         let frame = draw::Frame {
             theme: &self.config.theme,
             pointer: self.pointer_position.map(|(x, y)| (x * self.scale, y * self.scale)),
             time: &time,
             date: &date,
             resources: &resources,
-            pattern_phase: phase,
-            scale,
+            mask: &self.mask,
+            color_phase: pattern.color_phase(elapsed),
         };
         draw::draw(&mut self.canvas, &mut self.text, &items, &frame);
         self.items = items;

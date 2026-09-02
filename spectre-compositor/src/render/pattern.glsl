@@ -21,13 +21,26 @@ uniform float spectre_phase;
 uniform float spectre_spacing;
 // Contour line thickness, in device pixels.
 uniform float spectre_line_width;
-// Straight-alpha colour of the contour lines at the left and right edges. The
-// lines shift hue between them, which is where Spectre's colour lives now that
-// the window borders are plain.
-uniform vec4 spectre_line_a;
-uniform vec4 spectre_line_b;
+// Straight-alpha contour colours, sampled as a loop.
+uniform vec4 spectre_line_0;
+uniform vec4 spectre_line_1;
+uniform vec4 spectre_line_2;
+uniform vec4 spectre_line_3;
+// Where the colour loop stands, 0..1, and how many loops span the surface.
+uniform float spectre_color_phase;
+uniform float spectre_color_span;
 // Straight-alpha colour of the surface underneath.
 uniform vec4 spectre_bg;
+
+// The contour colour at `t` along the loop, wrapping. Twin of Pattern::line_at.
+vec4 spectre_line_at(float t) {
+    float u = fract(t) * 4.0;
+    float i = floor(u);
+    float f = u - i;
+    vec4 a = i < 0.5 ? spectre_line_0 : (i < 1.5 ? spectre_line_1 : (i < 2.5 ? spectre_line_2 : spectre_line_3));
+    vec4 b = i < 0.5 ? spectre_line_1 : (i < 1.5 ? spectre_line_2 : (i < 2.5 ? spectre_line_3 : spectre_line_0));
+    return mix(a, b, f);
+}
 
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -77,7 +90,7 @@ void main() {
     float feather = half_width * 0.9 + 0.015;
     float line = 1.0 - smoothstep(half_width, half_width + feather, dist);
 
-    vec4 line_color = mix(spectre_line_a, spectre_line_b, clamp(v_coords.x, 0.0, 1.0));
+    vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
     float coverage = line * line_color.a;
     vec3 rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
     float a = spectre_bg.a + (1.0 - spectre_bg.a) * coverage;

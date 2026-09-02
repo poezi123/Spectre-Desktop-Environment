@@ -34,6 +34,12 @@ pub struct Pattern {
     pub animated: bool,
     /// Animation rate as a 0..1 knob; the settings UI shows this as a percentage.
     pub speed: f32,
+    /// Whether the contour colours travel along the accent gradient. Separate
+    /// from [`Pattern::animated`]: moving the colour is far cheaper than moving
+    /// the noise field, so the two are switched independently.
+    pub color_cycle: bool,
+    /// Colour cycle rate as a 0..1 knob.
+    pub color_speed: f32,
     /// Line opacity as a 0..1 knob.
     pub intensity: f32,
     /// Distance between contour lines, in logical pixels.
@@ -48,6 +54,8 @@ impl Default for Pattern {
             kind: PatternKind::Topographic,
             animated: true,
             speed: 0.6,
+            color_cycle: true,
+            color_speed: 0.5,
             intensity: 0.55,
             line_spacing: 26.0,
             line_width: 1.0,
@@ -61,6 +69,8 @@ impl Pattern {
         kind: PatternKind::None,
         animated: false,
         speed: 0.0,
+        color_cycle: false,
+        color_speed: 0.0,
         intensity: 0.0,
         line_spacing: 26.0,
         line_width: 1.0,
@@ -76,7 +86,15 @@ impl Pattern {
     /// A static pattern still gets drawn, it just does not need a new frame, so
     /// the compositor can leave the surface out of its damage list.
     pub fn needs_continuous_redraw(&self) -> bool {
-        self.animated && self.speed > 0.0 && !self.is_noop()
+        if self.is_noop() {
+            return false;
+        }
+        (self.animated && self.speed > 0.0) || self.cycles_color()
+    }
+
+    /// True when the colours travel even though the lines may be standing still.
+    pub fn cycles_color(&self) -> bool {
+        self.color_cycle && self.color_speed > 0.0 && !self.is_noop()
     }
 
     /// Phase to feed the shader at `elapsed` seconds since compositor start.
@@ -84,11 +102,20 @@ impl Pattern {
     /// Wrapped into `0.0..1000.0` so an f32 uniform keeps its precision on a
     /// machine that has been up for weeks.
     pub fn phase(&self, elapsed_secs: f64) -> f32 {
-        if !self.needs_continuous_redraw() {
+        if !self.animated || self.speed <= 0.0 || self.is_noop() {
             return 0.0;
         }
         // 0.06 cycles/s at speed 1.0 — slow enough to read as ambient movement.
         ((elapsed_secs * self.speed as f64 * 0.06) % 1000.0) as f32
+    }
+
+    /// Where the colour cycle stands at `elapsed` seconds, in `0.0..1.0`.
+    /// One revolution per 8 seconds at `color_speed = 1.0`.
+    pub fn color_phase(&self, elapsed_secs: f64) -> f32 {
+        if !self.cycles_color() {
+            return 0.0;
+        }
+        ((elapsed_secs * self.color_speed as f64 * 0.125).rem_euclid(1.0)) as f32
     }
 
     /// How far the accent is darkened before it is drawn as a contour line.
@@ -109,22 +136,39 @@ impl Pattern {
             .alpha(self.intensity.clamp(0.0, 1.0))
     }
 
-    /// The two colours the contour lines run between, left to right.
-    ///
-    /// Sampling the accent at both ends rather than in the middle is what puts
-    /// the RGB into the pattern: the lines shift hue across a title bar or a
-    /// panel instead of being one flat tint.
-    pub fn line_gradient(&self, accent: &Gradient, background: Color) -> (Color, Color) {
-        (
-            self.line_color(accent.sample(0.0), background),
-            self.line_color(accent.sample(1.0), background),
-        )
+    /// How many accent stops the renderers carry, matching the shader uniforms.
+    pub const STOPS: usize = 4;
+
+    /// The accent resampled to [`Pattern::STOPS`] contour-line colours.
+    pub fn line_stops(&self, accent: &Gradient, background: Color) -> [Color; Self::STOPS] {
+        let mut out = [Color::TRANSPARENT; Self::STOPS];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let t = i as f32 / Self::STOPS as f32;
+            *slot = self.line_color(accent.sample_cyclic(t), background);
+        }
+        out
+    }
+
+    /// The line colour at `t` along the loop, wrapping. The CPU twin of the
+    /// shaders' `spectre_line_at`.
+    pub fn line_at(stops: &[Color; Self::STOPS], t: f32) -> Color {
+        let u = t.rem_euclid(1.0) * Self::STOPS as f32;
+        let i = (u.floor() as usize) % Self::STOPS;
+        stops[i].mix(stops[(i + 1) % Self::STOPS], u - u.floor())
     }
 
     /// Force the pattern static, keeping it visible. Used by the Performance
     /// profile and by the global animation kill switch.
     pub fn without_animation(mut self) -> Self {
         self.animated = false;
+        self.color_cycle = false;
+        self
+    }
+
+    /// Freeze the contour field but keep the colours travelling.
+    pub fn with_static_lines(mut self) -> Self {
+        self.animated = false;
+        self.color_cycle = true;
         self
     }
 
@@ -297,20 +341,46 @@ mod tests {
     }
 
     #[test]
-    fn the_gradient_ends_differ_so_the_pattern_shifts_hue() {
-        let p = Pattern::default();
+    fn the_stops_differ_so_the_pattern_shifts_hue() {
         let palette = crate::Palette::default();
-        let (start, end) = p.line_gradient(&palette.accent, palette::SURFACE);
-        assert_ne!(start, end);
-        assert!(start.b > start.r, "it starts at the teal end");
-        assert!(end.r > start.r, "and finishes at the purple one");
+        let stops = Pattern::default().line_stops(&palette.accent, palette::SURFACE);
+        assert_ne!(stops[0], stops[2]);
+        assert!(stops[0].b > stops[0].r, "it starts at the cyan end");
+        assert!(stops[3].r > stops[0].r, "and reaches magenta");
     }
 
     #[test]
-    fn a_disabled_pattern_has_no_gradient_either() {
+    fn a_disabled_pattern_has_no_stops_either() {
         let palette = crate::Palette::default();
-        let (start, end) = Pattern::OFF.line_gradient(&palette.accent, palette::SURFACE);
-        assert_eq!(start, Color::TRANSPARENT);
-        assert_eq!(end, Color::TRANSPARENT);
+        let stops = Pattern::OFF.line_stops(&palette.accent, palette::SURFACE);
+        assert!(stops.iter().all(|c| *c == Color::TRANSPARENT));
+    }
+
+    #[test]
+    fn the_colour_loop_wraps_without_a_jump() {
+        let palette = crate::Palette::default();
+        let stops = Pattern::default().line_stops(&palette.accent, palette::SURFACE);
+        let just_before = Pattern::line_at(&stops, 0.999);
+        let wrapped = Pattern::line_at(&stops, 1.001);
+        assert!((just_before.r - wrapped.r).abs() < 0.02);
+        assert!((just_before.g - wrapped.g).abs() < 0.02);
+        assert!((just_before.b - wrapped.b).abs() < 0.02);
+    }
+
+    #[test]
+    fn colours_travel_even_when_the_lines_are_frozen() {
+        let p = Pattern::default().with_static_lines();
+        assert_eq!(p.phase(4.0), 0.0, "the field must stand still");
+        assert!(p.color_phase(4.0) > 0.0, "the colours must not");
+        assert!(p.needs_continuous_redraw());
+    }
+
+    #[test]
+    fn the_kill_switch_stops_both() {
+        let p = Pattern::default().without_animation();
+        assert_eq!(p.phase(4.0), 0.0);
+        assert_eq!(p.color_phase(4.0), 0.0);
+        assert!(!p.needs_continuous_redraw());
+        assert!(!p.is_noop(), "the pattern is still drawn, just still");
     }
 }

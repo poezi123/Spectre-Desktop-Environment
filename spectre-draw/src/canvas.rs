@@ -6,6 +6,8 @@
 use spectre_text::Image;
 use spectre_theme::{Color, Gradient, Pattern};
 
+use crate::PatternMask;
+
 /// An integer rectangle in panel-local pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -159,26 +161,23 @@ impl Canvas {
 
     /// Fill `rect` with the Spectre Pattern over `background`.
     ///
-    /// Uses [`Pattern::coverage`], the same field the compositor's shader
-    /// evaluates, so the panel and the window title bars show one pattern
-    /// rather than two that merely look similar. The contour lines shift from
-    /// one end of `accent` to the other across the width, the same way the
-    /// shader interpolates them.
-    #[allow(clippy::too_many_arguments)]
+    /// The contour coverage comes from `mask`, which is the CPU twin of the
+    /// compositor's `pattern.glsl`, so the panel and the window title bars show
+    /// one pattern rather than two that merely look similar. `color_phase`
+    /// rotates the accent loop the lines are tinted from.
     pub fn fill_pattern(
         &mut self,
         rect: Rect,
-        pattern: &Pattern,
+        mask: &PatternMask,
         background: Color,
         accent: &Gradient,
-        phase: f32,
-        scale: f32,
+        color_phase: f32,
     ) {
         self.fill_rect(rect, background);
-        if pattern.is_noop() || rect.w <= 0 {
+        if mask.is_empty() || rect.w <= 0 {
             return;
         }
-        let (line_a, line_b) = pattern.line_gradient(accent, background);
+        let stops = mask.pattern.line_stops(accent, background);
         let area = rect.intersect(&self.bounds());
         if area.is_empty() {
             return;
@@ -186,17 +185,12 @@ impl Canvas {
 
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
-                let coverage = pattern.coverage(
-                    (x - rect.x) as f32,
-                    (y - rect.y) as f32,
-                    phase,
-                    scale,
-                );
+                let coverage = mask.at(x - rect.x, y - rect.y);
                 if coverage <= 0.0 {
                     continue;
                 }
-                let t = (x - rect.x) as f32 / rect.w as f32;
-                let line = line_a.mix(line_b, t);
+                let t = (x - rect.x) as f32 / rect.w as f32 + color_phase;
+                let line = Pattern::line_at(&stops, t);
                 let color = line.alpha(line.a * coverage);
                 let [b, g, r, a] = to_argb(color);
                 self.blend(x, y, b, g, r, a);
@@ -322,9 +316,10 @@ mod tests {
     #[test]
     fn the_pattern_leaves_marks_but_keeps_the_background() {
         let mut c = Canvas::new(120, 32);
-        let pattern = Pattern::default();
         let accent = spectre_theme::Palette::default().accent;
-        c.fill_pattern(c.bounds(), &pattern, palette::SURFACE, &accent, 0.0, 1.0);
+        let mut mask = PatternMask::new();
+        mask.prepare(120, 32, &Pattern::default(), 0.0, 1.0);
+        c.fill_pattern(c.bounds(), &mask, palette::SURFACE, &accent, 0.0);
         let bg = to_argb(palette::SURFACE);
         let bytes = c.as_bytes();
         assert!(bytes.chunks_exact(4).any(|p| p != bg), "the contour lines must be visible");
@@ -335,9 +330,27 @@ mod tests {
     fn a_disabled_pattern_leaves_a_flat_fill() {
         let mut c = Canvas::new(40, 8);
         let accent = spectre_theme::Palette::default().accent;
-        c.fill_pattern(c.bounds(), &Pattern::OFF, palette::SURFACE, &accent, 0.0, 1.0);
+        let mut mask = PatternMask::new();
+        mask.prepare(40, 8, &Pattern::OFF, 0.0, 1.0);
+        c.fill_pattern(c.bounds(), &mask, palette::SURFACE, &accent, 0.0);
         let bg = to_argb(palette::SURFACE);
         assert!(c.as_bytes().chunks_exact(4).all(|p| p == bg));
+    }
+
+    #[test]
+    fn the_colour_phase_repaints_the_same_lines_in_new_colours() {
+        let accent = spectre_theme::Palette::default().accent;
+        let mut mask = PatternMask::new();
+        mask.prepare(120, 32, &Pattern::default(), 0.0, 1.0);
+
+        let mut a = Canvas::new(120, 32);
+        a.fill_pattern(a.bounds(), &mask, palette::SURFACE, &accent, 0.0);
+        let mut b = Canvas::new(120, 32);
+        b.fill_pattern(b.bounds(), &mask, palette::SURFACE, &accent, 0.4);
+
+        let lit = |c: &Canvas| c.as_bytes().chunks_exact(4).filter(|p| *p != to_argb(palette::SURFACE)).count();
+        assert_eq!(lit(&a), lit(&b), "the lines themselves must not move");
+        assert_ne!(a.as_bytes(), b.as_bytes(), "their colour must have changed");
     }
 
     #[test]
