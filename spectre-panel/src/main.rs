@@ -106,6 +106,7 @@ fn main() -> anyhow::Result<()> {
         desktop: Desktop::default(),
         items: Vec::new(),
         pointer_position: None,
+        dumped: false,
         clock: Clock::now(),
         readout: Readout::new(),
         ipc,
@@ -234,6 +235,7 @@ struct Panel {
     desktop: Desktop,
     items: Vec<Placed>,
     pointer_position: Option<(i32, i32)>,
+    dumped: bool,
     clock: Clock,
     readout: Readout,
     ipc: Option<Client>,
@@ -422,21 +424,18 @@ impl Panel {
             return;
         };
         let bytes = self.canvas.as_bytes();
-        let opaque_rows = (0..height)
-            .filter(|y| {
-                let i = (y * width * 4) as usize;
-                bytes.get(i + 3).is_some_and(|a| *a > 0)
-            })
-            .count();
-        tracing::debug!(
-            width,
-            height,
-            canvas = bytes.len(),
-            slot = target.len(),
-            opaque_rows,
-            items = self.items.len(),
-            "panel buffer"
-        );
+        // `SPECTRE_DUMP=<path>` writes the first frame the panel painted, as
+        // `"<w> <h>\n"` followed by raw Argb8888. It is what proves whether a
+        // gap on screen was already a gap here.
+        if let Some(path) = std::env::var_os("SPECTRE_DUMP") {
+            if !self.dumped {
+                self.dumped = true;
+                let header = format!("{width} {height}\n");
+                let mut out = header.into_bytes();
+                out.extend_from_slice(bytes);
+                let _ = std::fs::write(path, out);
+            }
+        }
         let len = target.len().min(bytes.len());
         target[..len].copy_from_slice(&bytes[..len]);
 

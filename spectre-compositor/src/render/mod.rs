@@ -186,7 +186,7 @@ fn build_output_elements(
         let physical: Rectangle<i32, Physical> =
             area.to_physical_precise_round(Scale::from(scale));
         let base = theme.palette.base.to_premultiplied();
-        let ground = cache.always_damaged_solid(Slot::Backdrop, physical, base);
+        let ground = cache.solid(Slot::Backdrop, physical, base, Kind::Unspecified);
         elements.push(SpectreElement::Plain(WorkspaceElement::Solid(ground)));
     }
 

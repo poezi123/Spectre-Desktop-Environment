@@ -678,6 +678,24 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
         return true;
     };
 
+    // `SPECTRE_DUMP_SCENE=1` lists what a frame is made of. Worth keeping: it
+    // is what settles whether a missing piece of the screen was never handed
+    // to the renderer or was handed over and lost.
+    if std::env::var_os("SPECTRE_DUMP_SCENE").is_some() {
+        use smithay::backend::renderer::element::Element;
+        use smithay::utils::Scale;
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        for (i, element) in elements.iter().enumerate() {
+            tracing::debug!(
+                i,
+                geo = ?element.geometry(scale),
+                opaque = element.opaque_regions(scale).len(),
+                "scene element"
+            );
+        }
+        tracing::debug!(count = elements.len(), "scene end");
+    }
+
     let scene = scene_hash(&elements);
     if scene != surface.last_scene {
         surface.last_scene = scene;
