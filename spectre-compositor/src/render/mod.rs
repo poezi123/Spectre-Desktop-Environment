@@ -3,6 +3,7 @@
 pub mod cursor;
 pub mod decorations;
 mod pattern;
+mod banded;
 mod cache;
 mod rounded;
 mod text;
@@ -11,6 +12,7 @@ mod wallpaper;
 pub use cursor::CursorImage;
 pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
+pub use banded::Banded;
 pub use cache::{RenderCache, Slot};
 pub use rounded::{Corners, RoundedElement};
 pub use text::TextCache;
@@ -46,7 +48,7 @@ render_elements! {
     Rounded = RoundedElement<SurfaceElement>,
     Text = MemoryRenderBufferRenderElement<GlesRenderer>,
     Solid = SolidColorRenderElement,
-    Pattern = PixelShaderElement,
+    Pattern = Banded<PixelShaderElement>,
 }
 
 /// A workspace element moved and scaled for a transition.

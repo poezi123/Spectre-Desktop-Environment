@@ -51,6 +51,8 @@ struct SolidSlot {
 struct ShaderSlot {
     element: PixelShaderElement,
     uniforms: Vec<Uniform<'static>>,
+    /// Where it sat last frame; a move has to be drawn whole, not banded.
+    area: Rectangle<i32, Logical>,
 }
 
 impl RenderCache {
@@ -92,7 +94,9 @@ impl RenderCache {
     /// A pixel-shader element whose identity outlives the frame.
     ///
     /// The stored element is updated in place, so its commit counter only moves
-    /// when the area or a uniform actually differs from the last frame.
+    /// when the area or a uniform actually differs from the last frame. The
+    /// flag says whether the element moved or was resized, which decides
+    /// whether it may be redrawn in part or has to be drawn whole.
     /// `update_uniforms` bumps the counter unconditionally, which is why the
     /// values are kept here and compared first.
     pub fn shader(
@@ -104,16 +108,18 @@ impl RenderCache {
         alpha: f32,
         uniforms: Vec<Uniform<'static>>,
         kind: Kind,
-    ) -> PixelShaderElement {
+    ) -> (PixelShaderElement, bool) {
         self.live.push(slot);
         match self.shaders.get_mut(&slot) {
             Some(entry) => {
+                let moved = entry.area != area;
+                entry.area = area;
                 entry.element.resize(area, opaque);
                 if entry.uniforms != uniforms {
                     entry.element.update_uniforms(uniforms.clone());
                     entry.uniforms = uniforms;
                 }
-                entry.element.clone()
+                (entry.element.clone(), moved)
             }
             None => {
                 let element = PixelShaderElement::new(
@@ -124,8 +130,9 @@ impl RenderCache {
                     uniforms.clone(),
                     kind,
                 );
-                self.shaders.insert(slot, ShaderSlot { element: element.clone(), uniforms });
-                element
+                let slot_entry = ShaderSlot { element: element.clone(), uniforms, area };
+                self.shaders.insert(slot, slot_entry);
+                (element, true)
             }
         }
     }

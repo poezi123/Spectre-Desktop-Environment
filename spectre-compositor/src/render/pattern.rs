@@ -5,9 +5,9 @@ use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{
     GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
 };
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use super::{RenderCache, Slot};
+use super::{Banded, RenderCache, Slot};
 use spectre_theme::{Color, Gradient, Metrics, Palette, Pattern, PatternKind};
 
 const SHADER_SRC: &str = include_str!("pattern.glsl");
@@ -141,7 +141,7 @@ impl PatternShader {
         color_phase: f32,
         alpha: f32,
         scale: f64,
-    ) -> Option<PixelShaderElement> {
+    ) -> Option<Banded<PixelShaderElement>> {
         let program = self.frame.as_ref()?;
         if outer.size.w <= 0 || outer.size.h <= 0 || titlebar_height <= 0 {
             return None;
@@ -172,7 +172,16 @@ impl PatternShader {
         uniforms.extend(stop_uniforms(&stops, color_phase));
 
         // Rounded corners and a hollow middle: nothing here is opaque.
-        Some(cache.shader(slot, program, outer, None, 1.0, uniforms, Kind::Unspecified))
+        let (element, moved) =
+            cache.shader(slot, program, outer, None, 1.0, uniforms, Kind::Unspecified);
+        // The pattern only stirs inside the title bar. Saying so keeps an
+        // animated frame from recompositing the client surface underneath it.
+        let band = (!moved).then(|| {
+            let height = ((titlebar_height as f64 * scale).ceil() as i32).max(1);
+            let width = (outer.size.w as f64 * scale).ceil() as i32;
+            Rectangle::new(Point::from((0, 0)), Size::from((width, height)))
+        });
+        Some(Banded::new(element, band))
     }
 
     /// Build a render element covering `area`.
@@ -196,7 +205,7 @@ impl PatternShader {
         phase: f32,
         color_phase: f32,
         scale: f64,
-    ) -> Option<PixelShaderElement> {
+    ) -> Option<Banded<PixelShaderElement>> {
         if pattern.is_noop() || area.size.w <= 0 || area.size.h <= 0 {
             return None;
         }
@@ -222,6 +231,9 @@ impl PatternShader {
         // damage tracker skip everything behind it.
         let opaque = (background.a >= 1.0).then(|| vec![area]);
 
-        Some(cache.shader(slot, &self.program, area, opaque, 1.0, uniforms, Kind::Unspecified))
+        // This one paints every pixel it covers, so it reports all of itself.
+        let (element, _) =
+            cache.shader(slot, &self.program, area, opaque, 1.0, uniforms, Kind::Unspecified);
+        Some(Banded::whole(element))
     }
 }
