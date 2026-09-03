@@ -66,7 +66,8 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     state.start_ipc();
     tracing::info!(socket = %state.socket_name, "Spectre is up (nested)");
-    let startup = state.config.general.startup_commands(state.config.panel.enabled);
+    state.set_panel_running(state.config.panel.enabled);
+    let startup = state.config.general.startup_commands(false);
     for command in startup {
         state.spawn(&command);
     }

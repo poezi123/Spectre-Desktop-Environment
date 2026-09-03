@@ -30,6 +30,8 @@ pub enum Request {
     SetAnimations { enabled: bool },
     /// Re-read the configuration file and apply it.
     ReloadConfig,
+    /// Open the application menu, or close it if it is already open.
+    ToggleLauncher,
     /// End the session.
     Quit,
 }
@@ -155,6 +157,8 @@ mod tests {
             Request::CloseWindow { id: 7 },
             Request::SetProfile { profile: Profile::Spectre },
             Request::SetAnimations { enabled: false },
+            Request::ReloadConfig,
+            Request::ToggleLauncher,
             Request::Quit,
         ];
         for request in all {

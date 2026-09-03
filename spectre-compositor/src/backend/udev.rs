@@ -56,6 +56,11 @@ struct Surface {
     /// - would otherwise let the compositor render as fast as the CPU allows.
     last_frame: Instant,
     frame_interval: Duration,
+    /// How long the last frame took to draw. On a machine without a real GPU
+    /// one frame can cost a tenth of a second; asking for sixty of those a
+    /// second buries the event loop and the session stops responding. Pacing
+    /// off the measured cost keeps the desktop slow rather than stuck.
+    last_cost: Duration,
 }
 
 /// Everything the native backend owns.
@@ -106,7 +111,8 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     state.start_ipc();
     tracing::info!(socket = %state.socket_name, seat = %seat_name, "Spectre is up (native)");
-    let startup = state.config.general.startup_commands(state.config.panel.enabled);
+    state.set_panel_running(state.config.panel.enabled);
+    let startup = state.config.general.startup_commands(false);
     for command in startup {
         state.spawn(&command);
     }
@@ -273,6 +279,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
                 awaiting_flip: false,
                 last_frame: Instant::now() - Duration::from_secs(1),
                 frame_interval: Duration::from_secs_f64(1.0 / refresh as f64),
+                last_cost: Duration::ZERO,
             },
         );
         x += w as i32;
@@ -546,17 +553,50 @@ fn init_session_events(
     Ok(())
 }
 
+/// A queued page flip that has not been retired after this long is treated as
+/// lost. Without it a single missed vblank - vmwgfx drops one under load -
+/// leaves `awaiting_flip` set forever and the screen never updates again.
+const FLIP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Temporary instrumentation: how many frames the compositor really draws.
+fn frame_counter(elements: usize) {
+    use std::cell::Cell;
+    thread_local! {
+        static COUNT: Cell<u32> = const { Cell::new(0) };
+        static SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+    COUNT.with(|c| c.set(c.get() + 1));
+    SINCE.with(|s| {
+        let start = s.get().unwrap_or_else(Instant::now);
+        if s.get().is_none() {
+            s.set(Some(start));
+        }
+        if start.elapsed() >= Duration::from_secs(1) {
+            let n = COUNT.with(|c| c.replace(0));
+            tracing::debug!(fps = n, elements, "frames drawn in the last second");
+            s.set(Some(Instant::now()));
+        }
+    });
+}
+
 fn render_all(state: &mut Spectre, shared: &Shared) {
     let crtcs: Vec<crtc::Handle> = shared.borrow().surfaces.keys().copied().collect();
     for crtc in crtcs {
-        render_crtc(state, shared, crtc);
+        // A skipped output still owes a frame: putting the dirty flag back is
+        // what stops a paced-away or deferred repaint from being lost, which
+        // would leave the screen showing the frame before the change.
+        if !render_crtc(state, shared, crtc) {
+            state.mark_dirty();
+        }
     }
 }
 
-fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
+/// Draw one output. Returns false when nothing was queued and the frame is
+/// still owed.
+fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool {
     let mut udev = shared.borrow_mut();
     if !udev.active.load(Ordering::SeqCst) {
-        return;
+        return true;
     }
 
     // Resolve any dmabuf imports first; the renderer is right here.
@@ -575,28 +615,36 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
     }
 
     let Some(output) = udev.surfaces.get(&crtc).map(|s| s.output.clone()) else {
-        return;
+        return true;
     };
-    if udev.surfaces.get(&crtc).is_some_and(|s| s.awaiting_flip) {
-        tracing::trace!(?crtc, "skipping render: a page flip is still in flight");
-        return;
-    }
-    // Pace to the output's refresh rate. Rendering faster than the screen can
-    // show costs CPU and changes nothing anyone can see.
     let now = Instant::now();
-    if udev
-        .surfaces
-        .get(&crtc)
-        .is_some_and(|s| now.duration_since(s.last_frame) < s.frame_interval)
-    {
-        return;
+    if let Some(surface) = udev.surfaces.get_mut(&crtc) {
+        if surface.awaiting_flip {
+            if now.duration_since(surface.last_frame) < FLIP_TIMEOUT {
+                tracing::trace!(?crtc, "skipping render: a page flip is still in flight");
+                return false;
+            }
+            tracing::warn!(?crtc, "no vblank for the queued frame; carrying on without it");
+            surface.awaiting_flip = false;
+            if let Err(err) = surface.compositor.reset_state() {
+                tracing::warn!(?err, "could not reset the surface after a lost flip");
+            }
+        }
+        // Pace to the output's refresh rate, and never spend more than half
+        // the wall clock drawing: a frame that took 100 ms buys the machine
+        // 100 ms to answer input before the next one starts.
+        let pace = surface.frame_interval.max(surface.last_cost);
+        if now.duration_since(surface.last_frame) < pace {
+            return false;
+        }
     }
 
+    let started = Instant::now();
     let Udev { renderer, shader, surfaces, .. } = &mut *udev;
     let elements: Vec<SpectreElement> = output_elements(state, &output, renderer, shader.as_ref());
 
     let Some(surface) = surfaces.get_mut(&crtc) else {
-        return;
+        return true;
     };
 
     match surface.compositor.render_frame(renderer, &elements, [0.0; 4], FrameFlags::DEFAULT) {
@@ -604,6 +652,8 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
             Ok(()) => {
                 surface.awaiting_flip = true;
                 surface.last_frame = now;
+                surface.last_cost = started.elapsed();
+                frame_counter(elements.len());
                 tracing::trace!(?crtc, elements = elements.len(), "frame queued");
             }
             Err(err) => tracing::warn!(?err, "could not queue a frame"),
@@ -622,4 +672,5 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) {
     for layer in smithay::desktop::layer_map_for_output(&output).layers() {
         layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));
     }
+    true
 }

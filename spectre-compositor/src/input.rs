@@ -237,6 +237,19 @@ impl Spectre {
     }
 
     /// Open the application menu, or close it if it is already up.
+    /// Start or stop the panel to match `[panel] enabled`.
+    pub fn set_panel_running(&mut self, on: bool) {
+        match on {
+            true if self.panel.is_none() => self.panel = self.spawn_pid("spectre-panel"),
+            false => {
+                if let Some(pid) = self.panel.take() {
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                }
+            }
+            true => {}
+        }
+    }
+
     fn toggle_launcher(&mut self) {
         if let Some(pid) = self.launcher.take() {
             // Signal 0 only asks whether the process is still there.

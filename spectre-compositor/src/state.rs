@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay::desktop::{PopupManager, Window};
 use smithay::input::keyboard::XkbConfig;
@@ -42,6 +42,12 @@ impl ClientData for ClientState {
     fn initialized(&self, _id: ClientId) {}
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
 }
+
+/// How often a purely decorative animation is allowed to redraw the screen.
+///
+/// The contour pattern drifts slowly; sixty frames a second buys nothing that
+/// can be seen and costs a whole core on a machine without a real GPU.
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
 
 /// Everything the compositor owns.
 pub struct Spectre {
@@ -108,6 +114,10 @@ pub struct Spectre {
     pub logo_armed: bool,
     /// The launcher process, if one was started and may still be up.
     pub launcher: Option<u32>,
+    /// When the last animation-only frame was drawn.
+    last_animation: Instant,
+    /// The panel process, so the settings app can switch it off and on.
+    pub panel: Option<u32>,
     /// The wallpaper, prepared for the current output size.
     pub wallpaper: Option<crate::render::Wallpaper>,
     /// Spectre's own pointer, drawn wherever no client has set one.
@@ -225,6 +235,8 @@ impl Spectre {
             transition: None,
             logo_armed: false,
             launcher: None,
+            last_animation: Instant::now(),
+            panel: None,
             wallpaper: None,
             cursor: Some(cursor),
             dirty: true,
@@ -347,7 +359,23 @@ impl Spectre {
     }
 
     pub fn take_dirty(&mut self) -> bool {
-        std::mem::replace(&mut self.dirty, false) || self.needs_animation_frames()
+        if std::mem::replace(&mut self.dirty, false) {
+            self.last_animation = Instant::now();
+            return true;
+        }
+        // An animation that nobody is interacting with does not need a frame
+        // per vblank. Every frame repaints the whole output, which on a
+        // software renderer is the difference between an idle desktop and a
+        // busy core.
+        if !self.needs_animation_frames() {
+            return false;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.last_animation) < ANIMATION_INTERVAL {
+            return false;
+        }
+        self.last_animation = now;
+        true
     }
 
     /// Whether an animation currently on screen needs a new frame every tick.

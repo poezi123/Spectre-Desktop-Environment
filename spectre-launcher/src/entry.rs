@@ -30,10 +30,14 @@ impl Entry {
     /// Parse the `[Desktop Entry]` group of a `.desktop` file.
     ///
     /// Returns `None` for anything that is not a visible application: links,
-    /// directories, `NoDisplay=true`, `Hidden=true`, and entries with no
-    /// `Exec`. Those are not launcher results, and showing them would be worse
-    /// than leaving them out.
+    /// directories, `NoDisplay=true`, `Hidden=true`, entries meant for another
+    /// desktop, and entries with no `Exec`.
     pub fn parse(id: &str, contents: &str) -> Option<Entry> {
+        Entry::parse_for(id, contents, &current_desktops())
+    }
+
+    /// Like [`Entry::parse`], against an explicit `XDG_CURRENT_DESKTOP` list.
+    pub fn parse_for(id: &str, contents: &str, desktops: &[String]) -> Option<Entry> {
         let group = desktop_entry_group(contents)?;
         let get = |key: &str| group.get(key).map(String::as_str).unwrap_or_default();
 
@@ -41,6 +45,9 @@ impl Entry {
             return None;
         }
         if is_true(get("NoDisplay")) || is_true(get("Hidden")) {
+            return None;
+        }
+        if !shown_in(get("OnlyShowIn"), get("NotShowIn"), desktops) {
             return None;
         }
 
@@ -66,14 +73,43 @@ impl Entry {
     /// A file that fails to parse is skipped rather than fatal: one broken
     /// `.desktop` file in a package must not empty the launcher.
     pub fn load_all() -> Vec<Entry> {
+        let desktops = current_desktops();
         let mut by_id: HashMap<String, Entry> = HashMap::new();
         for dir in application_dirs() {
-            collect_dir(&dir, &dir, &mut by_id);
+            collect_dir(&dir, &dir, &desktops, &mut by_id);
         }
         let mut entries: Vec<Entry> = by_id.into_values().collect();
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         entries
     }
+}
+
+/// The desktops this session counts as, from `XDG_CURRENT_DESKTOP`.
+///
+/// The variable is colon-separated so a desktop can claim compatibility with
+/// another; Spectre claims only itself, which is what makes another desktop's
+/// `OnlyShowIn=KDE` control panel disappear from our menu.
+fn current_desktops() -> Vec<String> {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_else(|_| String::from("Spectre"))
+        .split(':')
+        .map(|d| d.trim().to_ascii_lowercase())
+        .filter(|d| !d.is_empty())
+        .collect()
+}
+
+/// Whether an entry with these `OnlyShowIn`/`NotShowIn` values belongs here.
+fn shown_in(only: &str, not: &str, desktops: &[String]) -> bool {
+    let listed = |list: &str| {
+        list.split(';')
+            .map(|d| d.trim().to_ascii_lowercase())
+            .filter(|d| !d.is_empty())
+            .any(|d| desktops.contains(&d))
+    };
+    if !only.trim().is_empty() {
+        return listed(only);
+    }
+    !listed(not)
 }
 
 /// `$XDG_DATA_HOME/applications` first, then the system directories.
@@ -90,14 +126,14 @@ fn application_dirs() -> Vec<PathBuf> {
     out
 }
 
-fn collect_dir(root: &Path, dir: &Path, out: &mut HashMap<String, Entry>) {
+fn collect_dir(root: &Path, dir: &Path, desktops: &[String], out: &mut HashMap<String, Entry>) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
     for item in read.flatten() {
         let path = item.path();
         if path.is_dir() {
-            collect_dir(root, &path, out);
+            collect_dir(root, &path, desktops, out);
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
@@ -113,7 +149,7 @@ fn collect_dir(root: &Path, dir: &Path, out: &mut HashMap<String, Entry>) {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('/', "-");
-        if let Some(entry) = Entry::parse(&id, &contents) {
+        if let Some(entry) = Entry::parse_for(&id, &contents, desktops) {
             out.insert(id, entry);
         }
     }
@@ -183,6 +219,34 @@ pub fn strip_field_codes(exec: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spectre() -> Vec<String> {
+        vec![String::from("spectre")]
+    }
+
+    #[test]
+    fn an_entry_meant_for_another_desktop_is_left_out() {
+        let file = "[Desktop Entry]\nType=Application\nName=System Settings\nExec=systemsettings\nOnlyShowIn=KDE;";
+        assert!(Entry::parse_for("kde.desktop", file, &spectre()).is_none());
+    }
+
+    #[test]
+    fn an_entry_that_excludes_us_is_left_out() {
+        let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing\nNotShowIn=Spectre;GNOME;";
+        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_none());
+    }
+
+    #[test]
+    fn an_entry_that_names_us_is_kept() {
+        let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing\nOnlyShowIn=Spectre;";
+        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_some());
+    }
+
+    #[test]
+    fn an_entry_with_no_desktop_restriction_is_kept() {
+        let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing";
+        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_some());
+    }
 
     const KONSOLE: &str = "\
 [Desktop Entry]

@@ -284,6 +284,9 @@ impl Spectre {
                 };
                 self.mark_dirty();
             }
+            Request::ToggleLauncher => {
+                self.run_action(spectre_config::Action::ToggleLauncher);
+            }
             Request::ReloadConfig => {
                 self.reload_config();
             }
@@ -307,13 +310,22 @@ impl Spectre {
         self.keybinds =
             spectre_config::Keybinds::default().merged_with(config.keybinds.clone());
         let display_changed = self.config.display != config.display;
+        let desktop_changed = self.config.desktop != config.desktop;
+        let panel_was_on = self.config.panel.enabled;
         self.config = config;
         if display_changed {
             self.mark_display_dirty();
         }
-        if let Some((w, h)) = self.output_pixel_size() {
-            self.wallpaper = None;
-            self.refresh_wallpaper(w, h);
+        // Decoding a wallpaper costs a good fraction of a second; only a
+        // change to the background is worth paying it for.
+        if desktop_changed {
+            if let Some((w, h)) = self.output_pixel_size() {
+                self.wallpaper = None;
+                self.refresh_wallpaper(w, h);
+            }
+        }
+        if self.config.panel.enabled != panel_was_on {
+            self.set_panel_running(self.config.panel.enabled);
         }
         tracing::info!("configuration reloaded");
         self.mark_dirty();

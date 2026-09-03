@@ -327,7 +327,7 @@ impl Panel {
                 }
             }
             Item::Session => self.send(Request::Quit),
-            Item::Launcher => tracing::info!("the launcher is not implemented yet"),
+            Item::Launcher => self.send(Request::ToggleLauncher),
             Item::Resources | Item::Clock => {}
         }
     }
