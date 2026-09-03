@@ -229,7 +229,7 @@ impl App {
         };
         // Stepping rather than assigning keeps one definition of a step size
         // and of each field's range.
-        let delta = ((value - current) / 0.05).round() as i32;
+        let delta = ((value - current) / 0.001).round() as i32;
         let mut changed = false;
         for _ in 0..delta.abs() {
             changed |= self.settings.step(row.field, delta.signum());

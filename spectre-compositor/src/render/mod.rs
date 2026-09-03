@@ -182,7 +182,7 @@ fn build_output_elements(
         let element = backdrop.map(WorkspaceElement::Pattern);
         elements.extend(element.map(SpectreElement::Plain));
 
-        // Under everything, and always damaged: see `always_damaged_solid`.
+        // Under everything: a flat ground for the corners a wallpaper cannot fill.
         let physical: Rectangle<i32, Physical> =
             area.to_physical_precise_round(Scale::from(scale));
         let base = theme.palette.base.to_premultiplied();

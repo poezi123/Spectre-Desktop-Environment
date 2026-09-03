@@ -35,6 +35,8 @@ use smithay::reexports::wayland_server::Display;
 use smithay::utils::DeviceFd;
 use spectre_config::Config;
 
+use smithay::backend::drm::compositor::PrimaryPlaneElement;
+
 use crate::render::{output_elements, PatternShader, RenderCache, SpectreElement};
 use crate::state::Spectre;
 
@@ -703,16 +705,32 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
     }
 
     match surface.compositor.render_frame(renderer, &elements, [0.0; 4], SCANOUT) {
-        Ok(frame) if !frame.is_empty => match surface.compositor.queue_frame(()) {
-            Ok(()) => {
-                surface.awaiting_flip = true;
-                surface.last_frame = now;
-                surface.last_cost = started.elapsed();
-                frame_counter(elements.len());
-                tracing::trace!(?crtc, elements = elements.len(), "frame queued");
+        Ok(frame) if !frame.is_empty => {
+            // Rendering is asynchronous. Where the driver cannot fence - vmwgfx
+            // cannot, it answers a syncobj with "operation not supported" - it
+            // is the caller's job to wait, and flipping without waiting scans
+            // out a half-drawn frame: the finished part of the screen is
+            // correct and the rest is whatever the buffer held before. That is
+            // the black boxes behind the pointer and the panel that came up
+            // missing its left end.
+            if frame.needs_sync() {
+                if let PrimaryPlaneElement::Swapchain(element) = &frame.primary_element {
+                    if let Err(err) = element.sync.wait() {
+                        tracing::warn!(?err, "could not wait for the frame to finish");
+                    }
+                }
             }
-            Err(err) => tracing::warn!(?err, "could not queue a frame"),
-        },
+            match surface.compositor.queue_frame(()) {
+                Ok(()) => {
+                    surface.awaiting_flip = true;
+                    surface.last_frame = now;
+                    surface.last_cost = started.elapsed();
+                    frame_counter(elements.len());
+                    tracing::trace!(?crtc, elements = elements.len(), "frame queued");
+                }
+                Err(err) => tracing::warn!(?err, "could not queue a frame"),
+            }
+        }
         Ok(_) => tracing::trace!(?crtc, elements = elements.len(), "nothing to redraw"),
         Err(err) => tracing::error!(?err, "frame failed"),
     }
