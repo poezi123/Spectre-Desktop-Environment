@@ -214,6 +214,12 @@ impl Spectre {
         if let Some(socket) = self.ipc_socket_path() {
             cmd.env(spectre_ipc::SOCKET_ENV, socket);
         }
+        // The shell components must read the same file the session was started
+        // from, or a compositor run with `-c` ends up with a panel configured
+        // from somewhere else entirely.
+        if let Some(path) = spectre_config::Config::active_path() {
+            cmd.env(spectre_config::CONFIG_ENV, path);
+        }
         cmd.args(args)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("XDG_SESSION_TYPE", "wayland")

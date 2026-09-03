@@ -66,6 +66,33 @@ impl RenderCache {
         self.shaders.retain(|slot, _| live.contains(slot));
     }
 
+    /// Like [`RenderCache::solid`], but reported as damaged every frame.
+    ///
+    /// The backdrop is the only element that has to be: the DRM backend clears
+    /// regions it is about to repaint, and on drivers that lose a plane update
+    /// - vmwgfx does - a region can be cleared and then left at the clear
+    /// colour, which is a black box on the desktop. A background that is
+    /// always damaged means every cleared pixel is painted again.
+    pub fn always_damaged_solid(
+        &mut self,
+        slot: Slot,
+        geometry: Rectangle<i32, Physical>,
+        color: [f32; 4],
+    ) -> SolidColorRenderElement {
+        let element = self.solid(slot, geometry, color, Kind::Unspecified);
+        if let Some(entry) = self.solids.get_mut(&slot) {
+            entry.commit.increment();
+            return SolidColorRenderElement::new(
+                entry.id.clone(),
+                geometry,
+                entry.commit,
+                color,
+                Kind::Unspecified,
+            );
+        }
+        element
+    }
+
     /// A solid colour rectangle whose identity outlives the frame.
     pub fn solid(
         &mut self,

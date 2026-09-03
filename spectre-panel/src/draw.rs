@@ -4,6 +4,7 @@
 //! decides *where* anything goes - that is [`crate::layout`] - so a change to
 //! the look cannot move a click target.
 
+use spectre_config::PanelPosition;
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Pattern, Theme};
 
@@ -32,12 +33,24 @@ pub struct Frame<'a> {
     pub time: &'a str,
     /// The line under the clock.
     pub date: &'a str,
-    /// The CPU and memory line.
+    /// The CPU and memory line, for a panel wide enough to show it in one.
     pub resources: &'a str,
+    /// The same two readings on their own, for a panel on its side.
+    pub cpu: &'a str,
+    pub memory: &'a str,
     /// Cached contour coverage, prepared by the caller for this canvas.
     pub mask: &'a PatternMask,
     /// Where the pattern's colour loop stands, 0..1.
     pub color_phase: f32,
+    /// Which edge the panel sits on. A panel on its side is one button wide,
+    /// so its widgets stack and their labels shrink to fit.
+    pub position: PanelPosition,
+}
+
+impl Frame<'_> {
+    fn vertical(&self) -> bool {
+        matches!(self.position, PanelPosition::Left | PanelPosition::Right)
+    }
 }
 
 /// Paint the whole panel.
@@ -47,9 +60,15 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
 
     canvas.fill_pattern(bounds, frame.mask, palette.surface, &palette.accent, frame.color_phase);
 
-    // A hairline along the top edge separates the panel from the desktop even
-    // with every effect switched off.
-    canvas.fill_rect(Rect::new(0, 0, bounds.w, 1), palette.line);
+    // A hairline along the edge that faces the desktop separates the panel
+    // from it even with every effect switched off.
+    let hairline = match frame.position {
+        PanelPosition::Bottom => Rect::new(0, 0, bounds.w, 1),
+        PanelPosition::Top => Rect::new(0, bounds.h - 1, bounds.w, 1),
+        PanelPosition::Left => Rect::new(bounds.w - 1, 0, 1, bounds.h),
+        PanelPosition::Right => Rect::new(0, 0, 1, bounds.h),
+    };
+    canvas.fill_rect(hairline, palette.line);
 
     for placed in items {
         let hovered = frame
@@ -113,33 +132,68 @@ fn draw_item(
                 (false, true) => palette.text_muted,
                 (false, false) => palette.text_dim,
             };
-            let budget = (rect.w - CHIP_PADDING).max(1) as u32;
-            let label = Label::new(title)
-                .size(LABEL_SIZE)
-                .color(color)
-                .bold(*focused)
-                .max_width(budget)
-                .ellipsis(EllipsisSide::End);
-            let image = text.rasterise(&label);
-            let x = rect.x + CHIP_PADDING / 2;
-            let y = rect.y + (rect.h - image.height as i32) / 2;
-            canvas.draw_image(x, y, &image);
+            if frame.vertical() {
+                // One button wide: a title has nowhere to go, so the window
+                // is named by its initial the way a dock names it by its icon.
+                let initial = initial_of(title);
+                centre_label(
+                    canvas,
+                    text,
+                    rect,
+                    &Label::new(&initial).size(LABEL_SIZE).color(color).bold(*focused),
+                );
+            } else {
+                let budget = (rect.w - CHIP_PADDING).max(1) as u32;
+                let label = Label::new(title)
+                    .size(LABEL_SIZE)
+                    .color(color)
+                    .bold(*focused)
+                    .max_width(budget)
+                    .ellipsis(EllipsisSide::End);
+                let image = text.rasterise(&label);
+                let x = rect.x + CHIP_PADDING / 2;
+                let y = rect.y + (rect.h - image.height as i32) / 2;
+                canvas.draw_image(x, y, &image);
+            }
             if *focused {
                 accent_underline(canvas, rect, palette);
             }
         }
         Item::Resources => {
-            centre_label(
-                canvas,
-                text,
-                rect,
-                &Label::new(frame.resources)
-                    .size(DATE_SIZE + 1.0)
-                    .color(palette.text_dim)
-                    .family(spectre_text::FontFamily::Monospace),
-            );
+            if frame.vertical() {
+                stacked(
+                    canvas,
+                    text,
+                    rect,
+                    (frame.cpu, DATE_SIZE, palette.text_dim),
+                    (frame.memory, DATE_SIZE, palette.text_muted),
+                );
+            } else {
+                centre_label(
+                    canvas,
+                    text,
+                    rect,
+                    &Label::new(frame.resources)
+                        .size(DATE_SIZE + 1.0)
+                        .color(palette.text_dim)
+                        .family(spectre_text::FontFamily::Monospace),
+                );
+            }
         }
         Item::Clock => {
+            if frame.vertical() {
+                // `HH:MM` does not fit across a button, so the hours sit over
+                // the minutes and the date goes; the panel has no room for it.
+                let (hours, minutes) = frame.time.split_once(':').unwrap_or((frame.time, ""));
+                stacked(
+                    canvas,
+                    text,
+                    rect,
+                    (hours, LABEL_SIZE, palette.text),
+                    (minutes, LABEL_SIZE, palette.text_dim),
+                );
+                return;
+            }
             // Time over date, both monospace so the panel does not twitch as
             // the digits change.
             let time = Label::new(frame.time)
@@ -163,6 +217,42 @@ fn draw_item(
             canvas.draw_image(x, y, &date_image);
         }
     }
+}
+
+/// Two monospace lines centred in `rect`, one over the other.
+fn stacked(
+    canvas: &mut Canvas,
+    text: &mut TextRenderer,
+    rect: Rect,
+    top: (&str, f32, Color),
+    bottom: (&str, f32, Color),
+) {
+    fn line<'a>(t: (&'a str, f32, Color)) -> Label<'a> {
+        Label::new(t.0).size(t.1).color(t.2).family(spectre_text::FontFamily::Monospace)
+    }
+    let a = text.rasterise(&line(top));
+    let b = text.rasterise(&line(bottom));
+    let total = a.height as i32 + b.height as i32;
+    let mut y = rect.y + (rect.h - total) / 2;
+    canvas.draw_image(rect.x + (rect.w - a.width as i32) / 2, y, &a);
+    y += a.height as i32;
+    canvas.draw_image(rect.x + (rect.w - b.width as i32) / 2, y, &b);
+}
+
+/// The letter that stands for a window on a panel too narrow for its title.
+///
+/// Toolkits put the application's name last - `~ : fish - Konsole` - so the
+/// tail of the title is what names the window, not its head.
+fn initial_of(title: &str) -> String {
+    let tail = title
+        .rsplit(['\u{2014}', '\u{2013}', '|'])
+        .map(str::trim)
+        .find(|part| !part.is_empty())
+        .unwrap_or(title);
+    tail.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| String::from("?"))
 }
 
 /// The Spectre mark, centred in the launcher button.
@@ -251,8 +341,11 @@ mod tests {
             time: "03:04",
             date: "01.09.26",
             resources: "CPU  4%  MEM 1.2G",
+            cpu: "4%",
+            memory: "1.2G",
             mask,
             color_phase: 0.0,
+            position: PanelPosition::Bottom,
         }
     }
 
@@ -365,6 +458,41 @@ mod tests {
         draw_item(&mut lit, &mut text, &placed, true, &frame(&theme, &mask));
 
         assert_ne!(plain.as_bytes(), lit.as_bytes());
+    }
+
+    #[test]
+    fn a_window_is_named_by_its_application_not_by_its_document() {
+        assert_eq!(initial_of("~ : fish \u{2014} Konsole"), "K");
+        assert_eq!(initial_of("spectre.rs \u{2014} Visual Studio Code"), "V");
+        assert_eq!(initial_of("Firefox"), "F");
+        assert_eq!(initial_of(""), "?");
+        assert_eq!(initial_of("\u{2014}"), "?");
+    }
+
+    #[test]
+    fn a_panel_on_its_side_stacks_its_widgets_and_still_paints() {
+        let theme = Theme::default();
+        let (w, h) = (32, 400);
+        let mask = mask(&theme, w, h);
+        let mut canvas = Canvas::new(w, h);
+        let mut text = TextRenderer::new();
+        let desktop = spectre_ipc::Desktop {
+            workspaces: vec![spectre_ipc::Workspace { index: 1, active: true, windows: 1 }],
+            windows: vec![spectre_ipc::Window {
+                id: 1,
+                title: "Konsole".into(),
+                app_id: "org.kde.konsole".into(),
+                workspace: 1,
+                focused: true,
+                minimized: false,
+            }],
+            ..Default::default()
+        };
+
+        let items = crate::layout::layout_vertical(w, h, &desktop, true);
+        let side = Frame { position: PanelPosition::Left, ..frame(&theme, &mask) };
+        draw(&mut canvas, &mut text, &items, &side);
+        assert!(painted(&canvas) > 0, "a vertical panel must draw something");
     }
 
     #[test]

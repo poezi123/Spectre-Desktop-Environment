@@ -145,10 +145,19 @@ impl Readout {
     /// Every field is padded to its widest form. A readout that changes width
     /// would shove the clock sideways once a second.
     pub fn label(&self) -> String {
+        // Padded so the panel does not twitch as the numbers change width.
         format!(
             "CPU {:>3.0}%  MEM {:>4.1}G",
             (self.cpu * 100.0).min(100.0),
             self.memory.used_gib().min(999.9)
+        )
+    }
+
+    /// The two readings on their own, for a panel too narrow for one line.
+    pub fn parts(&self) -> (String, String) {
+        (
+            format!("{:.0}%", (self.cpu * 100.0).min(100.0)),
+            format!("{:.1}G", self.memory.used_gib().min(999.9)),
         )
     }
 }

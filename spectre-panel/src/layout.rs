@@ -23,6 +23,12 @@ pub const WORKSPACE_WIDTH: i32 = 26;
 pub const TASK_MAX_WIDTH: i32 = 190;
 /// Narrowest a task chip may shrink to before tasks start being dropped.
 pub const TASK_MIN_WIDTH: i32 = 56;
+/// Height of a workspace pip on a vertical panel.
+pub const WORKSPACE_HEIGHT: i32 = 26;
+/// Height of the stacked CPU/memory readout on a vertical panel.
+pub const RESOURCES_HEIGHT: i32 = 30;
+/// Height of the stacked clock on a vertical panel.
+pub const CLOCK_HEIGHT: i32 = 34;
 
 /// Something the panel draws and, mostly, something the user can click.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +129,75 @@ pub fn layout(
     items
 }
 
+/// Lay a vertical panel out down `length` pixels.
+///
+/// Nothing is elastic here: a panel on its edge is only as wide as one button,
+/// so every widget is a square stacked under the last and the titles give way
+/// to initials. Tasks take what is left between the workspaces and the clock.
+pub fn layout_vertical(
+    thickness: i32,
+    length: i32,
+    desktop: &Desktop,
+    show_resources: bool,
+) -> Vec<Placed> {
+    let mut top = Vec::new();
+    let mut cursor = EDGE_PADDING;
+    let push = |items: &mut Vec<Placed>, cursor: &mut i32, item: Item, h: i32| {
+        items.push(Placed { item, rect: Rect::new(0, *cursor, thickness, h) });
+        *cursor += h + GAP;
+    };
+
+    push(&mut top, &mut cursor, Item::Launcher, thickness);
+    for workspace in &desktop.workspaces {
+        push(
+            &mut top,
+            &mut cursor,
+            Item::Workspace {
+                index: workspace.index,
+                active: workspace.active,
+                occupied: workspace.windows > 0,
+            },
+            WORKSPACE_HEIGHT,
+        );
+    }
+    let tasks_start = cursor;
+
+    let mut bottom = Vec::new();
+    let mut edge = length - EDGE_PADDING;
+    let push_bottom = |items: &mut Vec<Placed>, edge: &mut i32, item: Item, h: i32| {
+        *edge -= h;
+        items.push(Placed { item, rect: Rect::new(0, *edge, thickness, h) });
+        *edge -= GAP;
+    };
+
+    push_bottom(&mut bottom, &mut edge, Item::Session, thickness);
+    push_bottom(&mut bottom, &mut edge, Item::Clock, CLOCK_HEIGHT);
+    if show_resources {
+        push_bottom(&mut bottom, &mut edge, Item::Resources, RESOURCES_HEIGHT);
+    }
+
+    let mut items = top;
+    let mut cursor = tasks_start;
+    for window in desktop.visible_windows() {
+        if cursor + thickness > edge {
+            break;
+        }
+        items.push(Placed {
+            item: Item::Task {
+                id: window.id,
+                title: window.title.clone(),
+                focused: window.focused,
+                minimized: window.minimized,
+            },
+            rect: Rect::new(0, cursor, thickness, thickness),
+        });
+        cursor += thickness + GAP;
+    }
+    items.extend(bottom);
+    items.retain(|p| !p.rect.is_empty() && p.rect.y < length);
+    items
+}
+
 /// Fit as many task chips as will go between `start` and `end`.
 fn place_tasks(
     desktop: &Desktop,
@@ -204,6 +279,52 @@ mod tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_vertical_panel_stacks_everything_in_one_column() {
+        let d = desktop(4, 2);
+        let items = layout_vertical(32, 500, &d, true);
+        assert!(items.iter().any(|p| p.item == Item::Launcher));
+        assert!(items.iter().any(|p| p.item == Item::Clock));
+        assert!(items.iter().any(|p| p.item == Item::Session));
+        for placed in &items {
+            assert_eq!(placed.rect.x, 0, "{:?} is not in the column", placed.item);
+            assert_eq!(placed.rect.w, 32, "{:?} is not a button wide", placed.item);
+            assert!(placed.rect.bottom() <= 500, "{:?} runs off the end", placed.item);
+        }
+    }
+
+    #[test]
+    fn a_vertical_stack_never_overlaps_itself() {
+        let mut items = layout_vertical(32, 500, &desktop(4, 3), true);
+        items.sort_by_key(|p| p.rect.y);
+        for pair in items.windows(2) {
+            assert!(
+                pair[0].rect.bottom() <= pair[1].rect.y,
+                "{:?} overlaps {:?}",
+                pair[0].item,
+                pair[1].item
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_vertical_panel_drops_tasks_rather_than_the_clock() {
+        let items = layout_vertical(32, 200, &desktop(4, 6), false);
+        assert!(items.iter().any(|p| p.item == Item::Clock), "the clock must survive");
+        assert!(items.iter().any(|p| p.item == Item::Session), "so must the session button");
+        for placed in &items {
+            assert!(placed.rect.bottom() <= 200, "{:?} runs off the end", placed.item);
+        }
+    }
+
+    #[test]
+    fn a_vertical_panel_finds_the_item_under_a_click() {
+        let items = layout_vertical(32, 500, &desktop(4, 1), true);
+        let launcher = items.iter().find(|p| p.item == Item::Launcher).unwrap().rect;
+        let hit = item_at(&items, launcher.x + 4, launcher.y + 4).unwrap();
+        assert_eq!(hit.item, Item::Launcher);
     }
 
     fn measured() -> Measured {

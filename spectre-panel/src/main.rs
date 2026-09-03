@@ -291,7 +291,21 @@ impl Panel {
                     if let Some(error) = error {
                         tracing::warn!(%error, "keeping the running configuration");
                     } else {
+                        // The edge and the thickness live on the layer surface,
+                        // not in the drawing: without re-anchoring, moving the
+                        // panel in the settings would change nothing on screen.
+                        let moved = self.config.panel.position != config.panel.position
+                            || self.config.theme.metrics.panel_height
+                                != config.theme.metrics.panel_height;
                         self.config = config;
+                        if moved {
+                            configure_layer(
+                                &self.layer,
+                                &self.config,
+                                self.config.theme.metrics.panel_height as i32,
+                            );
+                            self.layer.commit();
+                        }
                         self.dirty = true;
                     }
                 }
@@ -347,7 +361,16 @@ impl Panel {
         let time = self.clock.time.clone();
         let date = self.clock.date.clone();
         let resources = self.readout.label();
-        let show_resources = width >= 900 * self.scale;
+        let (cpu, memory) = self.readout.parts();
+        let vertical = matches!(
+            self.config.panel.position,
+            PanelPosition::Left | PanelPosition::Right
+        );
+        let show_resources = if vertical {
+            height >= 420 * self.scale
+        } else {
+            width >= 900 * self.scale
+        };
 
         let mut mono = |text: &str, size: f32| -> i32 {
             let label =
@@ -360,14 +383,18 @@ impl Panel {
         };
 
         let text = &mut self.text;
-        let items = layout::layout(
-            width,
-            height,
-            &self.desktop,
-            &measured,
-            |title| text.measure(&Label::new(title).size(draw::LABEL_SIZE * scale)).0 as i32,
-            show_resources,
-        );
+        let items = if vertical {
+            layout::layout_vertical(width, height, &self.desktop, show_resources)
+        } else {
+            layout::layout(
+                width,
+                height,
+                &self.desktop,
+                &measured,
+                |title| text.measure(&Label::new(title).size(draw::LABEL_SIZE * scale)).0 as i32,
+                show_resources,
+            )
+        };
 
         let elapsed = self.started.elapsed().as_secs_f64();
         let pattern = draw::panel_pattern(&self.config.theme);
@@ -378,8 +405,11 @@ impl Panel {
             time: &time,
             date: &date,
             resources: &resources,
+            cpu: &cpu,
+            memory: &memory,
             mask: &self.mask,
             color_phase: pattern.color_phase(elapsed),
+            position: self.config.panel.position,
         };
         draw::draw(&mut self.canvas, &mut self.text, &items, &frame);
         self.items = items;
@@ -392,6 +422,21 @@ impl Panel {
             return;
         };
         let bytes = self.canvas.as_bytes();
+        let opaque_rows = (0..height)
+            .filter(|y| {
+                let i = (y * width * 4) as usize;
+                bytes.get(i + 3).is_some_and(|a| *a > 0)
+            })
+            .count();
+        tracing::debug!(
+            width,
+            height,
+            canvas = bytes.len(),
+            slot = target.len(),
+            opaque_rows,
+            items = self.items.len(),
+            "panel buffer"
+        );
         let len = target.len().min(bytes.len());
         target[..len].copy_from_slice(&bytes[..len]);
 

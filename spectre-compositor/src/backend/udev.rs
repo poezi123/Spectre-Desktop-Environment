@@ -56,6 +56,12 @@ struct Surface {
     /// - would otherwise let the compositor render as fast as the CPU allows.
     last_frame: Instant,
     frame_interval: Duration,
+    /// Hash of the elements the last frame was built from. When the scene
+    /// gains or loses something the damage history is thrown away, because a
+    /// region that was only ever painted into one buffer of the swapchain
+    /// shows the frame before it in the others - which is how a panel that had
+    /// just been mapped stayed half missing.
+    last_scene: u64,
     /// How long the last frame took to draw. On a machine without a real GPU
     /// one frame can cost a tenth of a second; asking for sixty of those a
     /// second buries the event loop and the session stops responding. Pacing
@@ -282,6 +288,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
                 awaiting_flip: false,
                 last_frame: Instant::now() - Duration::from_secs(1),
                 frame_interval: Duration::from_secs_f64(1.0 / refresh as f64),
+                last_scene: 0,
                 last_cost: Duration::ZERO,
             },
         );
@@ -556,10 +563,30 @@ fn init_session_events(
     Ok(())
 }
 
+/// Which DRM planes a frame may be handed to: none of them.
+///
+/// Handing an element straight to a plane skips compositing it, which is free
+/// when the driver honours it. Several do not - vmwgfx, which is what a VM
+/// gets, among them: the element vanishes and the region it should have
+/// covered keeps the clear colour, which is how the panel came up half
+/// missing and the pointer left black boxes behind it.
+const SCANOUT: FrameFlags = FrameFlags::empty();
+
 /// A queued page flip that has not been retired after this long is treated as
 /// lost. Without it a single missed vblank - vmwgfx drops one under load -
 /// leaves `awaiting_flip` set forever and the screen never updates again.
 const FLIP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// What the frame is made of: every element's identity, in drawing order.
+fn scene_hash(elements: &[SpectreElement]) -> u64 {
+    use smithay::backend::renderer::element::Element;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for element in elements {
+        element.id().hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 /// Temporary instrumentation: how many frames the compositor really draws.
 fn frame_counter(elements: usize) {
@@ -651,7 +678,13 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
         return true;
     };
 
-    match surface.compositor.render_frame(renderer, &elements, [0.0; 4], FrameFlags::DEFAULT) {
+    let scene = scene_hash(&elements);
+    if scene != surface.last_scene {
+        surface.last_scene = scene;
+        surface.compositor.reset_buffer_ages();
+    }
+
+    match surface.compositor.render_frame(renderer, &elements, [0.0; 4], SCANOUT) {
         Ok(frame) if !frame.is_empty => match surface.compositor.queue_frame(()) {
             Ok(()) => {
                 surface.awaiting_flip = true;

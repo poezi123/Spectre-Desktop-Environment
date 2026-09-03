@@ -179,12 +179,15 @@ fn build_output_elements(
                 scale,
             )
         });
-        let element = match backdrop {
-            Some(pattern) => Some(WorkspaceElement::Pattern(pattern)),
-            None => solid(cache, Slot::Backdrop, area, theme.palette.base, scale)
-                .map(WorkspaceElement::Solid),
-        };
+        let element = backdrop.map(WorkspaceElement::Pattern);
         elements.extend(element.map(SpectreElement::Plain));
+
+        // Under everything, and always damaged: see `always_damaged_solid`.
+        let physical: Rectangle<i32, Physical> =
+            area.to_physical_precise_round(Scale::from(scale));
+        let base = theme.palette.base.to_premultiplied();
+        let ground = cache.always_damaged_solid(Slot::Backdrop, physical, base);
+        elements.push(SpectreElement::Plain(WorkspaceElement::Solid(ground)));
     }
 
     elements
