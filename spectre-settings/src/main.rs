@@ -38,7 +38,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
-use crate::model::{Control, Settings};
+use crate::model::{Control, Field, Settings};
 
 const BTN_LEFT: u32 = 0x110;
 /// Repaint interval while the pattern is moving.
@@ -111,6 +111,7 @@ fn main() -> anyhow::Result<()> {
         settings,
         section: 0,
         row: 0,
+        dragging: None,
         status: String::new(),
         ipc,
         started: Instant::now(),
@@ -169,6 +170,8 @@ struct App {
     settings: Settings,
     section: usize,
     row: usize,
+    /// The slider the button is being held down on, if any.
+    dragging: Option<Field>,
     status: String,
     ipc: Option<Client>,
     started: Instant,
@@ -221,23 +224,14 @@ impl App {
         let Some(section) = self.sections().into_iter().nth(self.section) else {
             return;
         };
+
         let Some(row) = section.rows.get(self.row) else {
             return;
         };
-        let Control::Slider { value: current, .. } = row.control else {
-            return;
-        };
-        // Stepping rather than assigning keeps one definition of a step size
-        // and of each field's range.
-        let delta = ((value - current) / 0.001).round() as i32;
-        let mut changed = false;
-        for _ in 0..delta.abs() {
-            changed |= self.settings.step(row.field, delta.signum());
+
+        if self.settings.set_slider(row.field, value) {
+            self.dirty = true;
         }
-        if changed {
-            self.apply();
-        }
-        self.dirty = true;
     }
 
     /// Write the config and ask the session to re-read it.
@@ -436,12 +430,30 @@ impl PointerHandler for App {
                 (event.position.0 as i32 * self.scale, event.position.1 as i32 * self.scale);
             let (w, h) = (self.width * self.scale, self.height * self.scale);
             match event.kind {
-                PointerEventKind::Motion { .. } => {
-                    if let Some(row) = ui::row_at(w, h, x, y) {
-                        if row < self.rows_in_section() && row != self.row {
-                            self.row = row;
-                            self.dirty = true;
+                PointerEventKind::Motion { .. } => match self.dragging {
+                    // Held on a slider: follow the pointer. Writing the file
+                    // on every pixel would be a hundred saves per drag, so it
+                    // waits for the button to come up.
+                    Some(field) => {
+                        let rect = ui::control_rect(ui::row_rect(w, self.row));
+                        self.settings.set_slider(field, ui::slider_value_at(rect, x));
+                        self.dirty = true;
+                    }
+                    None => {
+                        if let Some(row) = ui::row_at(w, h, x, y) {
+                            if row < self.rows_in_section() && row != self.row {
+                                self.row = row;
+                                self.dirty = true;
+                            }
                         }
+                    }
+                },
+                PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
+                    if self.dragging.take().is_some() {
+                        self.apply();
+                        // `apply` leaves a word in the status line; without a
+                        // redraw nobody ever reads it.
+                        self.dirty = true;
                     }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
@@ -482,7 +494,8 @@ impl App {
 
         match &row.control {
             Control::Slider { .. } if control.contains(x, y) => {
-                self.set_slider(ui::slider_value_at(control, x))
+                self.dragging = Some(row.field);
+                self.set_slider(ui::slider_value_at(control, x));
             }
             // Clicking the left half of a choice steps back, the right half
             // forward, which is what the arrows drawn there promise.

@@ -86,6 +86,68 @@ impl Settings {
         Self { config, wallpapers, resolutions: vec![AUTO.to_owned()] }
     }
 
+    /// The ends of a slider field's range, in the field's own units.
+    /// `None` for anything that is not a slider.
+    pub fn slider_range(&self, field: Field) -> Option<(f32, f32)> {
+        match field {
+            Field::OutputScale => Some((MIN_SCALE as f32, MAX_SCALE as f32)),
+
+            Field::CornerRadius => Some((0.0, MAX_RADIUS as f32)),
+            Field::TitlebarHeight => Some((0.0, MAX_TITLEBAR as f32)),
+            Field::BorderWidth => Some((0.0, MAX_BORDER as f32)),
+
+            Field::PatternSpeed => Some((0.0, 1.0)),
+            Field::ColorSpeed => Some((0.0, 1.0)),
+            Field::PatternIntensity => Some((0.0, 1.0)),
+
+            Field::AnimationSpeed => Some((0.0, MAX_SPEED)),
+
+            Field::PanelOpacity => Some((0.0, 1.0)),
+
+            _ => None,
+        }
+    }
+    /// Set a slider field straight to `value`, given as 0..1 of its range.
+    ///
+    /// Assigning rather than stepping is what makes dragging one smooth; the
+    /// range still comes from one place, so a slider and the arrow keys cannot
+    /// disagree about where the ends are.
+    pub fn set_slider(&mut self, field: Field, value: f32) -> bool {
+        let Some((min, max)) = self.slider_range(field) else {
+            return false;
+        };
+        let before = self.config.clone();
+        // `f32::clamp` hands NaN straight back, and a slider whose control is
+        // zero pixels wide produces one; treat it as the low end.
+        let t = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+        let scaled = min + t * (max - min);
+        let pixels = |v: f32| v.round().clamp(0.0, u32::MAX as f32) as u32;
+
+        match field {
+            // Two decimals: finer is below what the output can be driven at.
+            Field::OutputScale => {
+                self.config.display.scale = ((scaled as f64) * 100.0).round() / 100.0
+            }
+            Field::CornerRadius => self.config.theme.metrics.corner_radius = pixels(scaled),
+            Field::TitlebarHeight => self.config.theme.metrics.titlebar_height = pixels(scaled),
+            Field::BorderWidth => self.config.theme.metrics.border_width = pixels(scaled),
+
+            Field::PatternSpeed => self.set_patterns(|p| p.speed = scaled),
+            Field::ColorSpeed => self.set_patterns(|p| p.color_speed = scaled),
+            Field::PatternIntensity => self.set_patterns(|p| p.intensity = scaled),
+
+            Field::AnimationSpeed => {
+                self.custom();
+                self.config.effects.animation_speed = scaled.max(0.1);
+            }
+            Field::PanelOpacity => self.config.panel.opacity = scaled.max(0.1),
+
+            // slider_range answered, so every slider is covered above.
+            _ => return false,
+        }
+        before != self.config
+    }
+
     /// Take the modes the compositor reported for its first output.
     pub fn set_modes(&mut self, modes: &[spectre_ipc::Mode]) {
         let mut list = vec![AUTO.to_owned()];
@@ -600,6 +662,73 @@ mod tests {
             s.step(Field::OutputScale, -1);
         }
         assert_eq!(s.config.display.scale, 0.5);
+    }
+
+    #[test]
+    fn a_slider_can_be_set_straight_to_a_value() {
+        let mut s = settings();
+        assert!(s.set_slider(Field::PatternIntensity, 0.5));
+        assert_eq!(s.config.theme.window_pattern.intensity, 0.5);
+    }
+
+    #[test]
+    fn a_value_outside_the_range_is_clamped_rather_than_wrapped() {
+        let mut s = settings();
+        s.set_slider(Field::PatternIntensity, 4.0);
+        assert_eq!(s.config.theme.window_pattern.intensity, 1.0);
+        s.set_slider(Field::PatternIntensity, -4.0);
+        assert_eq!(s.config.theme.window_pattern.intensity, 0.0);
+        s.set_slider(Field::PatternIntensity, f32::NAN);
+        assert!(s.config.theme.window_pattern.intensity.is_finite(), "NaN must not get through");
+    }
+
+    #[test]
+    fn setting_a_slider_that_is_not_one_changes_nothing() {
+        let mut s = settings();
+        let before = s.config.clone();
+        assert!(!s.set_slider(Field::Blur, 1.0));
+        assert!(!s.set_slider(Field::Profile, 1.0));
+        assert_eq!(s.config, before);
+    }
+
+    #[test]
+    fn setting_the_same_value_twice_reports_a_change_only_once() {
+        let mut s = settings();
+        assert!(s.set_slider(Field::PanelOpacity, 0.5));
+        assert!(!s.set_slider(Field::PanelOpacity, 0.5));
+    }
+
+    #[test]
+    fn a_slider_in_pixels_lands_on_whole_pixels() {
+        let mut s = settings();
+        s.set_slider(Field::CornerRadius, 0.5);
+        let (_, max) = s.slider_range(Field::CornerRadius).unwrap();
+        assert_eq!(s.config.theme.metrics.corner_radius, (max * 0.5).round() as u32);
+    }
+
+    #[test]
+    fn every_slider_has_a_range_and_nothing_else_does() {
+        let s = settings();
+        for section in s.sections() {
+            for row in section.rows {
+                let is_slider = matches!(row.control, Control::Slider { .. });
+                assert_eq!(
+                    s.slider_range(row.field).is_some(),
+                    is_slider,
+                    "{} disagrees about being a slider",
+                    row.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dragging_a_slider_reaches_both_ends() {
+        let mut s = settings();
+        s.set_slider(Field::PatternSpeed, 0.0);
+        assert_eq!(s.config.theme.window_pattern.speed, 0.0);
+        s.set_slider(Field::PatternSpeed, 1.0);
+        assert_eq!(s.config.theme.window_pattern.speed, 1.0);
     }
 
     #[test]
