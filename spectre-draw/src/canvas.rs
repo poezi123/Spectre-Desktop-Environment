@@ -348,8 +348,22 @@ mod tests {
         let mut b = Canvas::new(120, 32);
         b.fill_pattern(b.bounds(), &mask, palette::SURFACE, &accent, 0.4);
 
-        let lit = |c: &Canvas| c.as_bytes().chunks_exact(4).filter(|p| *p != to_argb(palette::SURFACE)).count();
-        assert_eq!(lit(&a), lit(&b), "the lines themselves must not move");
+        // Counting pixels that differ from the background is not the test:
+        // a line colour can land exactly on the background at one phase and
+        // not at another. What must hold is that nothing is painted outside
+        // the mask, because the mask is the only thing that places the lines
+        // and the colour phase never reaches it.
+        let bg = to_argb(palette::SURFACE);
+        for y in 0..32 {
+            for x in 0..120 {
+                let i = (y * 120 + x) * 4;
+                let covered = mask.at(x as i32, y as i32) > 0.0;
+                for canvas in [&a, &b] {
+                    let painted = canvas.as_bytes()[i..i + 4] != bg[..];
+                    assert!(!painted || covered, "painted outside the mask at ({x}, {y})");
+                }
+            }
+        }
         assert_ne!(a.as_bytes(), b.as_bytes(), "their colour must have changed");
     }
 

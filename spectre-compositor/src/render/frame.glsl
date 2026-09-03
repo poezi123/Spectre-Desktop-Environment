@@ -45,8 +45,13 @@ float sd_round_box(vec2 p, vec2 half_size, float radius) {
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
+// A polynomial hash rather than the usual sin() one: a transcendental per
+// noise sample, sixteen of them per pixel, is what made this shader cost a
+// tenth of a second per frame on software GL.
 float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
+    q += dot(q, vec3(q.y, q.z, q.x) + 33.33);
+    return fract((q.x + q.y) * q.z);
 }
 
 float value_noise(vec2 p) {
@@ -117,9 +122,16 @@ void main() {
     float bar = inner * (1.0 - below);
     float ring = outer * (1.0 - inner);
 
-    vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
-    float coverage = contour(px) * line_color.a;
-    vec3 bar_rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
+    // The contour field is the expensive half of this shader and only the
+    // title bar shows it. Computing it for the client area as well - four
+    // fifths of a window - and then multiplying it by zero was costing more
+    // than everything else in the frame put together.
+    vec3 bar_rgb = spectre_bg.rgb;
+    if (bar > 0.0) {
+        vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
+        float coverage = contour(px) * line_color.a;
+        bar_rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
+    }
 
     vec3 rgb = bar_rgb * bar + spectre_edge.rgb * ring;
     float a = spectre_bg.a * bar + spectre_edge.a * ring;

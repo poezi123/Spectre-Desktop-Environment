@@ -3,6 +3,7 @@
 pub mod cursor;
 pub mod decorations;
 mod pattern;
+mod cache;
 mod rounded;
 mod text;
 mod wallpaper;
@@ -10,6 +11,7 @@ mod wallpaper;
 pub use cursor::CursorImage;
 pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
+pub use cache::{RenderCache, Slot};
 pub use rounded::{Corners, RoundedElement};
 pub use text::TextCache;
 pub use wallpaper::Wallpaper;
@@ -78,6 +80,20 @@ pub fn output_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
     shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+) -> Vec<SpectreElement> {
+    cache.begin_frame();
+    let elements = build_output_elements(state, output, renderer, shader, cache);
+    cache.end_frame();
+    elements
+}
+
+fn build_output_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
 ) -> Vec<SpectreElement> {
     let scale = output.current_scale().fractional_scale();
     let theme = &state.config.theme;
@@ -115,7 +131,7 @@ pub fn output_elements(
                     continue;
                 }
                 let workspace =
-                    workspace_elements(state, output, renderer, shader, index, placement.alpha);
+                    workspace_elements(state, output, renderer, shader, cache, index, placement.alpha);
                 elements.extend(
                     workspace
                         .into_iter()
@@ -127,7 +143,7 @@ pub fn output_elements(
         None => {
             let index = state.workspaces.active_index();
             elements.extend(
-                workspace_elements(state, output, renderer, shader, index, 1.0)
+                workspace_elements(state, output, renderer, shader, cache, index, 1.0)
                     .into_iter()
                     .map(SpectreElement::Plain),
             );
@@ -152,6 +168,8 @@ pub fn output_elements(
         }
         let backdrop = shader.and_then(|shader| {
             shader.element(
+                cache,
+                Slot::DesktopPattern,
                 &theme.desktop_pattern,
                 area,
                 theme.palette.base,
@@ -163,7 +181,8 @@ pub fn output_elements(
         });
         let element = match backdrop {
             Some(pattern) => Some(WorkspaceElement::Pattern(pattern)),
-            None => solid(area, theme.palette.base, scale).map(WorkspaceElement::Solid),
+            None => solid(cache, Slot::Backdrop, area, theme.palette.base, scale)
+                .map(WorkspaceElement::Solid),
         };
         elements.extend(element.map(SpectreElement::Plain));
     }
@@ -184,7 +203,7 @@ fn cursor_elements(
     let Some(area) = state.workspaces.output_geometry(output) else {
         return Vec::new();
     };
-    let pointer = state.pointer.current_location();
+    let pointer = state.pointer_position();
     if !area.to_f64().contains(pointer) {
         return Vec::new();
     }
@@ -336,6 +355,7 @@ fn workspace_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
     shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
     index: usize,
     alpha: f32,
 ) -> Vec<WorkspaceElement> {
@@ -350,10 +370,10 @@ fn workspace_elements(
         return Vec::new();
     };
 
-    let pointer = state.pointer.current_location();
+    let pointer = state.pointer_position();
     let phase = state.pattern_phase();
     let color_phase = state.color_phase();
-    let mut cache = state.text.borrow_mut();
+    let mut text = state.text.borrow_mut();
     let mut elements: Vec<WorkspaceElement> = Vec::new();
 
     // Front to back, which is the order the renderer wants.
@@ -366,6 +386,9 @@ fn workspace_elements(
         };
         let focused = state.focus.as_ref() == Some(window);
         let decorated = state.is_decorated(window);
+        // The surface's protocol id is stable for as long as the window lives,
+        // which is exactly how long its cached render elements should live.
+        let key = element_key(window);
 
         // Everything below works in output-local coordinates.
         let local = Rectangle::new(geometry.loc - region.loc, geometry.size);
@@ -381,15 +404,17 @@ fn workspace_elements(
         if decorated {
             elements.extend(
                 decoration_text(
-                    state, &frame, window, focused, hovered, &mut cache, renderer, scale, alpha,
+                    state, &frame, window, focused, hovered, &mut text, renderer, scale, alpha,
                 )
                 .into_iter()
                 .map(WorkspaceElement::Text),
             );
             elements.extend(
-                decorations::button_plates(&frame, &metrics, &theme.palette, hovered, alpha, scale)
-                    .into_iter()
-                    .map(WorkspaceElement::Solid),
+                decorations::button_plates(
+                    cache, key, &frame, &metrics, &theme.palette, hovered, alpha, scale,
+                )
+                .into_iter()
+                .map(WorkspaceElement::Solid),
             );
         }
 
@@ -431,6 +456,8 @@ fn workspace_elements(
         let titlebar_height = frame.titlebar.size.h + frame.border;
         let drawn = shader.and_then(|shader| {
             shader.frame_element(
+                cache,
+                Slot::Frame(key),
                 frame.outer,
                 titlebar_height,
                 &metrics,
@@ -448,13 +475,15 @@ fn workspace_elements(
             Some(element) => elements.push(WorkspaceElement::Pattern(element)),
             // No frame shader: square corners rather than no frame at all.
             None => elements.extend(
-                decorations::fallback_frame(&frame, &theme.palette, focused, alpha, scale)
-                    .into_iter()
-                    .map(WorkspaceElement::Solid),
+                decorations::fallback_frame(
+                    cache, key, &frame, &theme.palette, focused, alpha, scale,
+                )
+                .into_iter()
+                .map(WorkspaceElement::Solid),
             ),
         }
     }
-    drop(cache);
+    drop(text);
 
     elements
 }
@@ -523,11 +552,24 @@ fn decoration_text(
     out
 }
 
+/// A stable per-window key for [`Slot`], taken from the toplevel surface.
+fn element_key(window: &smithay::desktop::Window) -> u32 {
+    use smithay::reexports::wayland_server::Resource;
+    use smithay::wayland::shell::xdg::ToplevelSurface;
+    window
+        .toplevel()
+        .map(ToplevelSurface::wl_surface)
+        .map(|s| s.id().protocol_id())
+        .unwrap_or(0)
+}
+
 /// A filled rectangle in logical coordinates.
 ///
 /// Kept as a helper because decoration drawing needs a dozen of these per
 /// window and the physical conversion is easy to get subtly wrong.
 pub fn solid(
+    cache: &mut RenderCache,
+    slot: Slot,
     area: Rectangle<i32, Logical>,
     color: Color,
     scale: f64,
@@ -537,13 +579,7 @@ pub fn solid(
     }
     let scale = Scale::from(scale);
     let geometry: Rectangle<i32, Physical> = area.to_physical_precise_round(scale);
-    Some(SolidColorRenderElement::new(
-        smithay::backend::renderer::element::Id::new(),
-        geometry,
-        smithay::backend::renderer::utils::CommitCounter::default(),
-        color.to_premultiplied(),
-        Kind::Unspecified,
-    ))
+    Some(cache.solid(slot, geometry, color.to_premultiplied(), Kind::Unspecified))
 }
 
 #[cfg(test)]
@@ -556,13 +592,13 @@ mod tests {
 
     #[test]
     fn empty_rectangles_produce_no_element() {
-        assert!(solid(rect(0, 0, 0, 10), Color::hex(0xffffff), 1.0).is_none());
-        assert!(solid(rect(0, 0, 10, 0), Color::hex(0xffffff), 1.0).is_none());
+        assert!(solid(&mut RenderCache::default(), Slot::Backdrop, rect(0, 0, 0, 10), Color::hex(0xffffff), 1.0).is_none());
+        assert!(solid(&mut RenderCache::default(), Slot::Backdrop, rect(0, 0, 10, 0), Color::hex(0xffffff), 1.0).is_none());
     }
 
     #[test]
     fn fully_transparent_colours_produce_no_element() {
-        assert!(solid(rect(0, 0, 10, 10), Color::TRANSPARENT, 1.0).is_none());
+        assert!(solid(&mut RenderCache::default(), Slot::Backdrop, rect(0, 0, 10, 10), Color::TRANSPARENT, 1.0).is_none());
     }
 
 }

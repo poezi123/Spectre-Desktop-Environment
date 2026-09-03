@@ -16,7 +16,7 @@ use smithay::reexports::wayland_server::Display;
 use smithay::utils::{Rectangle, Transform};
 use spectre_config::Config;
 
-use crate::render::{output_elements, PatternShader};
+use crate::render::{output_elements, PatternShader, RenderCache};
 use crate::state::Spectre;
 
 /// Nominal frame interval. The nested window has no vblank to follow, so the
@@ -63,6 +63,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         tracing::warn!("running without the Spectre Pattern");
     }
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    let mut cache = RenderCache::default();
 
     state.start_ipc();
     tracing::info!(socket = %state.socket_name, "Spectre is up (nested)");
@@ -121,8 +122,14 @@ pub fn run(config: Config) -> anyhow::Result<()> {
             }
 
             if state.take_dirty() {
-                if let Err(err) = draw(state, &mut backend, &output, &mut damage_tracker, shader.as_ref())
-                {
+                if let Err(err) = draw(
+                    state,
+                    &mut backend,
+                    &output,
+                    &mut damage_tracker,
+                    shader.as_ref(),
+                    &mut cache,
+                ) {
                     tracing::error!(?err, "frame failed");
                 }
             }
@@ -194,10 +201,11 @@ fn draw(
     output: &Output,
     damage_tracker: &mut OutputDamageTracker,
     shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
 ) -> anyhow::Result<()> {
     let elements = {
         let renderer = backend.renderer();
-        output_elements(state, output, renderer, shader)
+        output_elements(state, output, renderer, shader, cache)
     };
 
     // Bind first: querying the buffer age before the surface is current makes

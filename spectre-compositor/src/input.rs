@@ -271,7 +271,8 @@ impl Spectre {
     fn on_pointer_motion<B: InputBackend>(&mut self, event: B::PointerMotionEvent) {
         let serial = SERIAL_COUNTER.next_serial();
         let delta = event.delta();
-        let location = self.clamp_to_outputs(self.pointer.current_location() + delta);
+        let location = self.clamp_to_outputs(self.pointer_position() + delta);
+        self.set_pointer_position(location);
         let under = self.surface_under_pointer();
 
         let pointer = self.pointer.clone();
@@ -305,6 +306,7 @@ impl Spectre {
 
         let serial = SERIAL_COUNTER.next_serial();
         let location = geometry.loc.to_f64() + event.position_transformed(geometry.size);
+        self.set_pointer_position(location);
         let under = self.surface_under_pointer();
 
         let pointer = self.pointer.clone();
@@ -404,7 +406,7 @@ impl Spectre {
         let start_data = GrabStartData {
             focus: None,
             button: BTN_LEFT,
-            location: self.pointer.current_location(),
+            location: self.pointer_position(),
         };
         let grab = MoveGrab::new(start_data, window.clone(), location);
         let pointer = self.pointer.clone();

@@ -6,6 +6,8 @@ use smithay::backend::renderer::gles::{
     GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
 };
 use smithay::utils::{Logical, Rectangle};
+
+use super::{RenderCache, Slot};
 use spectre_theme::{Color, Gradient, Metrics, Palette, Pattern, PatternKind};
 
 const SHADER_SRC: &str = include_str!("pattern.glsl");
@@ -126,6 +128,8 @@ impl PatternShader {
     #[allow(clippy::too_many_arguments)]
     pub fn frame_element(
         &self,
+        cache: &mut RenderCache,
+        slot: Slot,
         outer: Rectangle<i32, Logical>,
         titlebar_height: i32,
         metrics: &Metrics,
@@ -168,14 +172,7 @@ impl PatternShader {
         uniforms.extend(stop_uniforms(&stops, color_phase));
 
         // Rounded corners and a hollow middle: nothing here is opaque.
-        Some(PixelShaderElement::new(
-            program.clone(),
-            outer,
-            None,
-            1.0,
-            uniforms,
-            Kind::Unspecified,
-        ))
+        Some(cache.shader(slot, program, outer, None, 1.0, uniforms, Kind::Unspecified))
     }
 
     /// Build a render element covering `area`.
@@ -190,6 +187,8 @@ impl PatternShader {
     #[allow(clippy::too_many_arguments)]
     pub fn element(
         &self,
+        cache: &mut RenderCache,
+        slot: Slot,
         pattern: &Pattern,
         area: Rectangle<i32, Logical>,
         background: Color,
@@ -223,13 +222,6 @@ impl PatternShader {
         // damage tracker skip everything behind it.
         let opaque = (background.a >= 1.0).then(|| vec![area]);
 
-        Some(PixelShaderElement::new(
-            self.program.clone(),
-            area,
-            opaque,
-            1.0,
-            uniforms,
-            Kind::Unspecified,
-        ))
+        Some(cache.shader(slot, &self.program, area, opaque, 1.0, uniforms, Kind::Unspecified))
     }
 }

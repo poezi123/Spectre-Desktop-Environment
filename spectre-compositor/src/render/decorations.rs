@@ -19,7 +19,7 @@ use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use spectre_theme::{Metrics, Palette};
 
-use super::solid;
+use super::{solid, RenderCache, Slot};
 
 /// Gap between title bar buttons, in logical pixels.
 const BUTTON_GAP: i32 = 2;
@@ -150,7 +150,10 @@ pub fn part_at(
 /// The frame itself is drawn by `frame.glsl`; the only solid rectangle left in
 /// the decoration is this plate, which has to sit above the bar and below the
 /// glyph and so cannot live in the frame shader.
+#[allow(clippy::too_many_arguments)]
 pub fn button_plates(
+    cache: &mut RenderCache,
+    key: u32,
     frame: &Frame,
     metrics: &Metrics,
     palette: &Palette,
@@ -159,11 +162,12 @@ pub fn button_plates(
     scale: f64,
 ) -> Vec<SolidColorRenderElement> {
     let mut elements = Vec::new();
-    for (part, rect) in buttons(frame, metrics) {
+    for (index, (part, rect)) in buttons(frame, metrics).into_iter().enumerate() {
         let Some(color) = button_background(part, hovered, palette) else {
             continue;
         };
-        elements.extend(solid(rect, faded(color, alpha), scale));
+        let slot = Slot::Decoration(key, index as u8);
+        elements.extend(solid(cache, slot, rect, faded(color, alpha), scale));
     }
     elements
 }
@@ -174,6 +178,8 @@ pub fn button_plates(
 /// title bar and border entirely, so the fallback keeps the same colours and
 /// the same geometry and simply gives up the curve.
 pub fn fallback_frame(
+    cache: &mut RenderCache,
+    key: u32,
     frame: &Frame,
     palette: &Palette,
     focused: bool,
@@ -185,13 +191,18 @@ pub fn fallback_frame(
         return elements;
     }
 
+    // Numbered above the button plates so the two never share a slot.
+    const FIRST: u8 = 16;
     if frame.is_decorated() {
-        elements.extend(solid(frame.titlebar, faded(palette.titlebar(focused), alpha), scale));
+        let slot = Slot::Decoration(key, FIRST);
+        let color = faded(palette.titlebar(focused), alpha);
+        elements.extend(solid(cache, slot, frame.titlebar, color, scale));
     }
     if frame.border > 0 {
         let color = faded(palette.window_border(focused), alpha);
-        for edge in ring_edges(frame.outer, frame.border) {
-            elements.extend(solid(edge, color, scale));
+        for (index, edge) in ring_edges(frame.outer, frame.border).into_iter().enumerate() {
+            let slot = Slot::Decoration(key, FIRST + 1 + index as u8);
+            elements.extend(solid(cache, slot, edge, color, scale));
         }
     }
     elements
@@ -366,22 +377,22 @@ mod tests {
         let m = Metrics::default();
         let p = Palette::default();
         let f = frame(400, 300);
-        assert!(button_plates(&f, &m, &p, None, 1.0, 1.0).is_empty());
-        assert_eq!(button_plates(&f, &m, &p, Some(Part::Close), 1.0, 1.0).len(), 1);
+        assert!(button_plates(&mut RenderCache::default(), 1, &f, &m, &p, None, 1.0, 1.0).is_empty());
+        assert_eq!(button_plates(&mut RenderCache::default(), 1, &f, &m, &p, Some(Part::Close), 1.0, 1.0).len(), 1);
     }
 
     #[test]
     fn the_fallback_frame_draws_a_bar_and_four_edges() {
         let p = Palette::default();
         let f = frame(400, 300);
-        assert_eq!(fallback_frame(&f, &p, true, 1.0, 1.0).len(), 5);
+        assert_eq!(fallback_frame(&mut RenderCache::default(), 1, &f, &p, true, 1.0, 1.0).len(), 5);
     }
 
     #[test]
     fn an_undecorated_window_has_nothing_to_fall_back_to() {
         let p = Palette::default();
         let f = Frame::new(rect(0, 0, 400, 300), &Metrics::default(), false);
-        assert!(fallback_frame(&f, &p, true, 1.0, 1.0).is_empty());
+        assert!(fallback_frame(&mut RenderCache::default(), 1, &f, &p, true, 1.0, 1.0).is_empty());
     }
 
     #[test]

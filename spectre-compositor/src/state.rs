@@ -112,6 +112,13 @@ pub struct Spectre {
     /// Set while the logo key is held and nothing else has been pressed, so a
     /// tap of it on its own can open the application menu.
     pub logo_armed: bool,
+    /// Where the pointer is, mirrored out of the seat.
+    ///
+    /// Never read it back from the `PointerHandle`: that takes the seat's
+    /// internal lock, and a [`PointerGrab`](smithay::input::pointer::PointerGrab)
+    /// runs with the lock already held. Asking the handle from inside a grab -
+    /// a window being dragged, say - deadlocks the whole session.
+    pointer_location: smithay::utils::Point<f64, smithay::utils::Logical>,
     /// The launcher process, if one was started and may still be up.
     pub launcher: Option<u32>,
     /// When the last animation-only frame was drawn.
@@ -234,6 +241,7 @@ impl Spectre {
             layer_focus: None,
             transition: None,
             logo_armed: false,
+            pointer_location: (0.0, 0.0).into(),
             launcher: None,
             last_animation: Instant::now(),
             panel: None,
@@ -328,6 +336,20 @@ impl Spectre {
         }
         self.wallpaper = crate::render::Wallpaper::load(&path, mode, width, height);
         self.mark_dirty();
+    }
+
+    /// Where the pointer is. Safe to call from inside a pointer grab.
+    pub fn pointer_position(&self) -> smithay::utils::Point<f64, smithay::utils::Logical> {
+        self.pointer_location
+    }
+
+    /// Record the pointer's new position. Must happen before the seat is told,
+    /// so a grab handler already sees the position it is reacting to.
+    pub fn set_pointer_position(
+        &mut self,
+        location: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        self.pointer_location = location;
     }
 
     /// Where the pattern's colour cycle stands.

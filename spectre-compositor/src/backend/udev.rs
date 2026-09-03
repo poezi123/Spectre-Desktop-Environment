@@ -35,7 +35,7 @@ use smithay::reexports::wayland_server::Display;
 use smithay::utils::DeviceFd;
 use spectre_config::Config;
 
-use crate::render::{output_elements, PatternShader, SpectreElement};
+use crate::render::{output_elements, PatternShader, RenderCache, SpectreElement};
 use crate::state::Spectre;
 
 /// One driven connector: its output, its DRM compositor and its damage state.
@@ -78,6 +78,8 @@ struct Udev {
     drm: DrmDevice,
     surfaces: HashMap<crtc::Handle, Surface>,
     shader: Option<PatternShader>,
+    /// Render-element identities, so an unchanged screen damages nothing.
+    cache: RenderCache,
     /// libseat can take the session away when the user switches VT.
     active: Arc<AtomicBool>,
 }
@@ -171,6 +173,7 @@ fn open_primary_gpu(
             drm,
             surfaces: HashMap::new(),
             shader,
+            cache: RenderCache::default(),
             active: Arc::new(AtomicBool::new(true)),
         },
         drm_notifier,
@@ -573,7 +576,7 @@ fn frame_counter(elements: usize) {
         }
         if start.elapsed() >= Duration::from_secs(1) {
             let n = COUNT.with(|c| c.replace(0));
-            tracing::debug!(fps = n, elements, "frames drawn in the last second");
+            tracing::trace!(fps = n, elements, "frames drawn in the last second");
             s.set(Some(Instant::now()));
         }
     });
@@ -640,8 +643,9 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
     }
 
     let started = Instant::now();
-    let Udev { renderer, shader, surfaces, .. } = &mut *udev;
-    let elements: Vec<SpectreElement> = output_elements(state, &output, renderer, shader.as_ref());
+    let Udev { renderer, shader, surfaces, cache, .. } = &mut *udev;
+    let elements: Vec<SpectreElement> =
+        output_elements(state, &output, renderer, shader.as_ref(), cache);
 
     let Some(surface) = surfaces.get_mut(&crtc) else {
         return true;

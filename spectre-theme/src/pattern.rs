@@ -188,7 +188,7 @@ impl Pattern {
         let height = fbm(q.0, q.1);
 
         let levels = height * 16.0;
-        let dist = (levels.fract().abs() - 0.5).abs();
+        let dist = (fract(levels) - 0.5).abs();
         let half_width = ((self.line_width * scale) / spacing).clamp(0.004, 0.4);
         let feather = half_width * 0.9 + 0.015;
         1.0 - smoothstep(half_width, half_width + feather, dist)
@@ -203,9 +203,20 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// GLSL's `fract`: always the positive fractional part, unlike `f32::fract`.
+fn fract(v: f32) -> f32 {
+    v - v.floor()
+}
+
+/// Twin of the shaders' `hash`. Polynomial rather than sine-based, because the
+/// same function runs per pixel on the CPU for the panel.
 fn hash(x: f32, y: f32) -> f32 {
-    let d = x * 127.1 + y * 311.7;
-    (d.sin() * 43758.547).fract().abs()
+    let mut q = [fract(x * 0.1031), fract(y * 0.1031), fract(x * 0.1031)];
+    let d = q[0] * (q[1] + 33.33) + q[1] * (q[2] + 33.33) + q[2] * (q[0] + 33.33);
+    q[0] += d;
+    q[1] += d;
+    q[2] += d;
+    fract((q[0] + q[1]) * q[2])
 }
 
 fn value_noise(x: f32, y: f32) -> f32 {

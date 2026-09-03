@@ -23,7 +23,7 @@ const MOVE_STEP: i32 = 64;
 impl Spectre {
     /// Output the pointer is on, else the first mapped output.
     pub fn active_output(&self) -> Option<Output> {
-        let pos = self.pointer.current_location();
+        let pos = self.pointer_position();
         self.workspaces
             .active()
             .output_under(pos)
@@ -474,7 +474,7 @@ impl Spectre {
     /// Decorations are not client surfaces, so they are hit-tested here rather
     /// than through `Space`, and always win over the window stacked below them.
     pub fn decoration_under_pointer(&self) -> Option<(Window, Part)> {
-        let pointer = self.pointer.current_location();
+        let pointer = self.pointer_position();
         let metrics = self.config.theme.metrics;
         let space = self.workspaces.active();
 
@@ -500,7 +500,7 @@ impl Spectre {
 
     /// Window under the pointer in the active workspace.
     pub fn window_under_pointer(&self) -> Option<Window> {
-        let pos = self.pointer.current_location();
+        let pos = self.pointer_position();
         self.workspaces
             .active()
             .element_under(pos)
@@ -514,7 +514,7 @@ impl Spectre {
         smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
         Point<f64, Logical>,
     )> {
-        let pos = self.pointer.current_location();
+        let pos = self.pointer_position();
         let output = self.active_output()?;
         let output_geo = self.workspaces.output_geometry(&output)?;
         let layers = layer_map_for_output(&output);

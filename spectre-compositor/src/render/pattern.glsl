@@ -42,8 +42,13 @@ vec4 spectre_line_at(float t) {
     return mix(a, b, f);
 }
 
+// A polynomial hash rather than the usual sin() one: a transcendental per
+// noise sample, sixteen of them per pixel, is what made this shader cost a
+// tenth of a second per frame on software GL.
 float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
+    q += dot(q, vec3(q.y, q.z, q.x) + 33.33);
+    return fract((q.x + q.y) * q.z);
 }
 
 // Value noise with a smoothstep interpolant.
