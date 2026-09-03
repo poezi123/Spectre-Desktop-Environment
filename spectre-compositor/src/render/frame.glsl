@@ -86,13 +86,20 @@ vec4 spectre_line_at(float t) {
     return mix(a, b, f);
 }
 
+// The ground the lines sit on, tinted by the colour passing overhead: near
+// black at the cyan end of the accent, a deep magenta at the other. Twin of
+// Pattern::ground.
+vec3 spectre_ground(vec3 base, vec3 line) {
+    return mix(base, line * 0.20, 0.30);
+}
+
 // Contour line coverage at a point, matching pattern.glsl.
 float contour(vec2 px) {
     if (spectre_spacing < 0.5) {
         return 0.0;
     }
     vec2 q = px / max(spectre_spacing * 6.0, 1.0);
-    float height = fbm(q + vec2(spectre_phase, spectre_phase * 0.6));
+    float height = fbm(q + vec2(spectre_phase, 0.0));
     float levels = height * 16.0;
     float dist = abs(fract(levels) - 0.5);
     float half_width = clamp(spectre_line_width / max(spectre_spacing, 1.0), 0.004, 0.4);
@@ -130,7 +137,7 @@ void main() {
     if (bar > 0.0) {
         vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
         float coverage = contour(px) * line_color.a;
-        bar_rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
+        bar_rgb = mix(spectre_ground(spectre_bg.rgb, line_color.rgb), line_color.rgb, coverage);
     }
 
     vec3 rgb = bar_rgb * bar + spectre_edge.rgb * ring;

@@ -42,6 +42,13 @@ vec4 spectre_line_at(float t) {
     return mix(a, b, f);
 }
 
+// The ground the lines sit on, tinted by the colour passing overhead: near
+// black at the cyan end of the accent, a deep magenta at the other. Twin of
+// Pattern::ground.
+vec3 spectre_ground(vec3 base, vec3 line) {
+    return mix(base, line * 0.20, 0.30);
+}
+
 // A polynomial hash rather than the usual sin() one: a transcendental per
 // noise sample, sixteen of them per pixel, is what made this shader cost a
 // tenth of a second per frame on software GL.
@@ -82,7 +89,7 @@ void main() {
     // One noise cell every ~6 contour spacings keeps the ridges broad and the
     // lines readable at panel height as well as at full-screen size.
     vec2 q = px / max(spectre_spacing * 6.0, 1.0);
-    float height = fbm(q + vec2(spectre_phase, spectre_phase * 0.6));
+    float height = fbm(q + vec2(spectre_phase, 0.0));
 
     // Slice the height field into levels; the isolines are the level crossings.
     float levels = height * 16.0;
@@ -97,7 +104,7 @@ void main() {
 
     vec4 line_color = spectre_line_at(v_coords.x * spectre_color_span + spectre_color_phase);
     float coverage = line * line_color.a;
-    vec3 rgb = mix(spectre_bg.rgb, line_color.rgb, coverage);
+    vec3 rgb = mix(spectre_ground(spectre_bg.rgb, line_color.rgb), line_color.rgb, coverage);
     float a = spectre_bg.a + (1.0 - spectre_bg.a) * coverage;
 
     // smithay's GLES frame blends premultiplied colours.

@@ -155,6 +155,8 @@ impl Spectre {
             Action::PrevWorkspace => {
                 self.switch_workspace_relative(-1);
             }
+            Action::MoveToNextWorkspace => self.carry_window(1),
+            Action::MoveToPrevWorkspace => self.carry_window(-1),
             Action::ToggleAnimations => self.toggle_animations(),
             Action::CycleProfile => self.cycle_profile(),
             Action::ToggleLauncher => self.toggle_launcher(),
@@ -237,6 +239,23 @@ impl Spectre {
     }
 
     /// Open the application menu, or close it if it is already up.
+    /// Take the focused window to the neighbouring workspace and follow it.
+    fn carry_window(&mut self, delta: isize) {
+        let count = self.workspaces.count();
+        if count == 0 {
+            return;
+        }
+        let target =
+            (self.workspaces.active_index() as isize + delta).rem_euclid(count as isize) as usize;
+        if let Some(window) = self.focus.clone() {
+            self.workspaces.move_window(&window, target);
+        }
+        self.switch_workspace_relative(delta);
+        if let Some(window) = self.workspaces.active().elements().last().cloned() {
+            self.focus_window(Some(&window));
+        }
+    }
+
     /// Start or stop the panel to match `[panel] enabled`.
     pub fn set_panel_running(&mut self, on: bool) {
         match on {

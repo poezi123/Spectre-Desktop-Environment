@@ -184,7 +184,7 @@ impl Pattern {
             return 0.0;
         }
         let spacing = (self.line_spacing * scale).max(1.0);
-        let q = (x / (spacing * 6.0) + phase, y / (spacing * 6.0) + phase * 0.6);
+        let q = (x / (spacing * 6.0) + phase, y / (spacing * 6.0));
         let height = fbm(q.0, q.1);
 
         let levels = height * 16.0;
@@ -192,6 +192,22 @@ impl Pattern {
         let half_width = ((self.line_width * scale) / spacing).clamp(0.004, 0.4);
         let feather = half_width * 0.9 + 0.015;
         1.0 - smoothstep(half_width, half_width + feather, dist)
+    }
+}
+
+/// The ground the lines sit on, tinted by the colour passing overhead.
+///
+/// Twin of `spectre_ground` in the shaders: near black at the cyan end of the
+/// accent, a deep magenta at the other, which is what gives the bar its depth
+/// instead of a flat fill.
+pub fn ground(base: Color, line: Color) -> Color {
+    const TINT: f32 = 0.20;
+    const MIX: f32 = 0.30;
+    Color {
+        r: base.r + (line.r * TINT - base.r) * MIX,
+        g: base.g + (line.g * TINT - base.g) * MIX,
+        b: base.b + (line.b * TINT - base.b) * MIX,
+        a: base.a,
     }
 }
 

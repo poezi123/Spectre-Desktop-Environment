@@ -27,17 +27,13 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// Parse the `[Desktop Entry]` group of a `.desktop` file.
+    /// Parse the `[Desktop Entry]` group of a `.desktop` file, for the desktops
+    /// this session counts as.
     ///
     /// Returns `None` for anything that is not a visible application: links,
     /// directories, `NoDisplay=true`, `Hidden=true`, entries meant for another
     /// desktop, and entries with no `Exec`.
-    pub fn parse(id: &str, contents: &str) -> Option<Entry> {
-        Entry::parse_for(id, contents, &current_desktops())
-    }
-
-    /// Like [`Entry::parse`], against an explicit `XDG_CURRENT_DESKTOP` list.
-    pub fn parse_for(id: &str, contents: &str, desktops: &[String]) -> Option<Entry> {
+    pub fn parse(id: &str, contents: &str, desktops: &[String]) -> Option<Entry> {
         let group = desktop_entry_group(contents)?;
         let get = |key: &str| group.get(key).map(String::as_str).unwrap_or_default();
 
@@ -149,7 +145,7 @@ fn collect_dir(root: &Path, dir: &Path, desktops: &[String], out: &mut HashMap<S
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('/', "-");
-        if let Some(entry) = Entry::parse_for(&id, &contents, desktops) {
+        if let Some(entry) = Entry::parse(&id, &contents, desktops) {
             out.insert(id, entry);
         }
     }
@@ -227,25 +223,25 @@ mod tests {
     #[test]
     fn an_entry_meant_for_another_desktop_is_left_out() {
         let file = "[Desktop Entry]\nType=Application\nName=System Settings\nExec=systemsettings\nOnlyShowIn=KDE;";
-        assert!(Entry::parse_for("kde.desktop", file, &spectre()).is_none());
+        assert!(Entry::parse("kde.desktop", file, &spectre()).is_none());
     }
 
     #[test]
     fn an_entry_that_excludes_us_is_left_out() {
         let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing\nNotShowIn=Spectre;GNOME;";
-        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_none());
+        assert!(Entry::parse("t.desktop", file, &spectre()).is_none());
     }
 
     #[test]
     fn an_entry_that_names_us_is_kept() {
         let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing\nOnlyShowIn=Spectre;";
-        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_some());
+        assert!(Entry::parse("t.desktop", file, &spectre()).is_some());
     }
 
     #[test]
     fn an_entry_with_no_desktop_restriction_is_kept() {
         let file = "[Desktop Entry]\nType=Application\nName=Thing\nExec=thing";
-        assert!(Entry::parse_for("t.desktop", file, &spectre()).is_some());
+        assert!(Entry::parse("t.desktop", file, &spectre()).is_some());
     }
 
     const KONSOLE: &str = "\
@@ -265,7 +261,7 @@ Exec=konsole --new-tab
 
     #[test]
     fn a_normal_entry_parses() {
-        let e = Entry::parse("org.kde.konsole.desktop", KONSOLE).unwrap();
+        let e = Entry::parse("org.kde.konsole.desktop", KONSOLE, &spectre()).unwrap();
         assert_eq!(e.name, "Konsole");
         assert_eq!(e.comment, "Terminal emulator");
         assert_eq!(e.exec, "konsole");
@@ -275,7 +271,7 @@ Exec=konsole --new-tab
 
     #[test]
     fn only_the_desktop_entry_group_is_read() {
-        let e = Entry::parse("x", KONSOLE).unwrap();
+        let e = Entry::parse("x", KONSOLE, &spectre()).unwrap();
         assert_eq!(e.exec, "konsole", "an action's Exec must not win");
         assert_eq!(e.name, "Konsole", "an action's Name must not win");
     }
@@ -284,39 +280,39 @@ Exec=konsole --new-tab
     fn hidden_entries_are_left_out() {
         for flag in ["NoDisplay=true", "Hidden=true", "NoDisplay=True"] {
             let file = format!("[Desktop Entry]\nType=Application\nName=X\nExec=x\n{flag}\n");
-            assert!(Entry::parse("x", &file).is_none(), "{flag}");
+            assert!(Entry::parse("x", &file, &spectre()).is_none(), "{flag}");
         }
     }
 
     #[test]
     fn non_applications_are_left_out() {
         let link = "[Desktop Entry]\nType=Link\nName=Site\nURL=https://example.com\n";
-        assert!(Entry::parse("x", link).is_none());
+        assert!(Entry::parse("x", link, &spectre()).is_none());
         let dir = "[Desktop Entry]\nType=Directory\nName=Games\n";
-        assert!(Entry::parse("x", dir).is_none());
+        assert!(Entry::parse("x", dir, &spectre()).is_none());
     }
 
     #[test]
     fn entries_without_a_name_or_command_are_left_out() {
-        assert!(Entry::parse("x", "[Desktop Entry]\nType=Application\nExec=x\n").is_none());
-        assert!(Entry::parse("x", "[Desktop Entry]\nType=Application\nName=X\n").is_none());
+        assert!(Entry::parse("x", "[Desktop Entry]\nType=Application\nExec=x\n", &spectre()).is_none());
+        assert!(Entry::parse("x", "[Desktop Entry]\nType=Application\nName=X\n", &spectre()).is_none());
         assert!(
-            Entry::parse("x", "[Desktop Entry]\nType=Application\nName=X\nExec=%f\n").is_none(),
+            Entry::parse("x", "[Desktop Entry]\nType=Application\nName=X\nExec=%f\n", &spectre()).is_none(),
             "an Exec that is nothing but a field code launches nothing"
         );
     }
 
     #[test]
     fn junk_input_is_rejected_rather_than_guessed() {
-        assert!(Entry::parse("x", "").is_none());
-        assert!(Entry::parse("x", "not a desktop file at all").is_none());
-        assert!(Entry::parse("x", "[Other Group]\nName=X\n").is_none());
+        assert!(Entry::parse("x", "", &spectre()).is_none());
+        assert!(Entry::parse("x", "not a desktop file at all", &spectre()).is_none());
+        assert!(Entry::parse("x", "[Other Group]\nName=X\n", &spectre()).is_none());
     }
 
     #[test]
     fn comments_and_blank_lines_are_ignored() {
         let file = "# a comment\n\n[Desktop Entry]\n# another\nType=Application\nName=X\nExec=x\n";
-        assert!(Entry::parse("x", file).is_some());
+        assert!(Entry::parse("x", file, &spectre()).is_some());
     }
 
     #[test]
@@ -339,6 +335,6 @@ Exec=konsole --new-tab
     #[test]
     fn terminal_applications_are_flagged() {
         let file = "[Desktop Entry]\nType=Application\nName=htop\nExec=htop\nTerminal=true\n";
-        assert!(Entry::parse("x", file).unwrap().terminal);
+        assert!(Entry::parse("x", file, &spectre()).unwrap().terminal);
     }
 }

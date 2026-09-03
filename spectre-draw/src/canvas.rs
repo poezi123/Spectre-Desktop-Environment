@@ -183,14 +183,18 @@ impl Canvas {
             return;
         }
 
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
+        // One colour per column: the accent runs across the width, not down.
+        for x in area.x..area.right() {
+            let t = (x - rect.x) as f32 / rect.w as f32 + color_phase;
+            let line = Pattern::line_at(&stops, t);
+            let ground = spectre_theme::pattern::ground(background, line);
+            let [gb, gg, gr, ga] = to_argb(ground);
+            for y in area.y..area.bottom() {
+                self.blend(x, y, gb, gg, gr, ga);
                 let coverage = mask.at(x - rect.x, y - rect.y);
                 if coverage <= 0.0 {
                     continue;
                 }
-                let t = (x - rect.x) as f32 / rect.w as f32 + color_phase;
-                let line = Pattern::line_at(&stops, t);
                 let color = line.alpha(line.a * coverage);
                 let [b, g, r, a] = to_argb(color);
                 self.blend(x, y, b, g, r, a);
@@ -348,19 +352,20 @@ mod tests {
         let mut b = Canvas::new(120, 32);
         b.fill_pattern(b.bounds(), &mask, palette::SURFACE, &accent, 0.4);
 
-        // Counting pixels that differ from the background is not the test:
-        // a line colour can land exactly on the background at one phase and
-        // not at another. What must hold is that nothing is painted outside
-        // the mask, because the mask is the only thing that places the lines
-        // and the colour phase never reaches it.
-        let bg = to_argb(palette::SURFACE);
-        for y in 0..32 {
+        // The ground travels with the colour, so a pixel off the lines is its
+        // column's ground and nothing else. What must hold is that no line is
+        // painted outside the mask: the mask alone places them, and the colour
+        // phase never reaches it.
+        let stops = mask.pattern.line_stops(&accent, palette::SURFACE);
+        for (canvas, phase) in [(&a, 0.0f32), (&b, 0.4f32)] {
             for x in 0..120 {
-                let i = (y * 120 + x) * 4;
-                let covered = mask.at(x as i32, y as i32) > 0.0;
-                for canvas in [&a, &b] {
-                    let painted = canvas.as_bytes()[i..i + 4] != bg[..];
-                    assert!(!painted || covered, "painted outside the mask at ({x}, {y})");
+                let line = Pattern::line_at(&stops, x as f32 / 120.0 + phase);
+                let ground = to_argb(spectre_theme::pattern::ground(palette::SURFACE, line));
+                for y in 0..32 {
+                    let i = (y * 120 + x) * 4;
+                    let painted = canvas.as_bytes()[i..i + 4] != ground[..];
+                    let covered = mask.at(x as i32, y as i32) > 0.0;
+                    assert!(!painted || covered, "a line outside the mask at ({x}, {y})");
                 }
             }
         }

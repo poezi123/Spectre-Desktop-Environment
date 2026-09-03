@@ -142,6 +142,9 @@ pub enum Action {
     MoveToWorkspace { index: u8 },
     NextWorkspace,
     PrevWorkspace,
+    /// Take the focused window along to the next or previous workspace.
+    MoveToNextWorkspace,
+    MoveToPrevWorkspace,
     /// Flip the global animation kill switch.
     ToggleAnimations,
     /// Cycle Performance -> Balanced -> Spectre.
@@ -206,6 +209,14 @@ impl Default for Keybinds {
         bind(logo_shift, "a", Action::ToggleAnimations);
         bind(logo_shift, "p", Action::CycleProfile);
         bind(Modifiers::NONE, "print", Action::Screenshot);
+
+        // The way every other desktop moves between workspaces.
+        let logo_ctrl = Modifiers { ctrl: true, ..logo };
+        bind(logo_ctrl, "left", Action::PrevWorkspace);
+        bind(logo_ctrl, "right", Action::NextWorkspace);
+        let logo_ctrl_shift = Modifiers { shift: true, ..logo_ctrl };
+        bind(logo_ctrl_shift, "left", Action::MoveToPrevWorkspace);
+        bind(logo_ctrl_shift, "right", Action::MoveToNextWorkspace);
 
         for (key, dir) in [
             ("left", Direction::Left),
