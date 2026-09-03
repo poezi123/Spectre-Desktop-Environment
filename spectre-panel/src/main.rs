@@ -13,8 +13,12 @@ mod readout;
 use std::io::{ErrorKind, Read};
 use std::time::{Duration, Instant};
 
-/// Repaint interval while the pattern is moving: 30 fps.
-const ANIMATION_INTERVAL: Duration = Duration::from_millis(33);
+/// Repaint interval while the pattern is moving.
+///
+/// Fifteen a second, not sixty: the contour field drifts a few pixels per
+/// second, and every repaint recomputes the whole strip on the CPU. Pelzify,
+/// which the pattern comes from, settled on sixteen for the same reason.
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
 
 use anyhow::Context;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
