@@ -414,22 +414,27 @@ impl Spectre {
             }
         }
 
-        // Layer surfaces get the same treatment, sized to their output.
+        // Layer surfaces are laid out again on every commit, not only on the
+        // first: a panel that moves to another edge changes its anchor and its
+        // size on a surface that is already mapped, and without a fresh
+        // arrange it would keep the geometry it was given when it started.
         for output in self.outputs() {
             let mut map = layer_map_for_output(&output);
-            let needs_arrange = map
-                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-                .map(|layer| !initial_configure_sent(layer.wl_surface()))
-                .unwrap_or(false);
-            if needs_arrange {
-                map.arrange();
-                if let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL) {
-                    layer.layer_surface().send_configure();
-                }
-                drop(map);
-                self.reflow_output(&output);
-                break;
+            if map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL).is_none() {
+                continue;
             }
+            map.arrange();
+            let configured = map
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                // Only when something actually changed, or client and
+                // compositor would configure each other in a circle.
+                .and_then(|layer| layer.layer_surface().send_pending_configure())
+                .is_some();
+            drop(map);
+            if configured || !initial_configure_sent(surface) {
+                self.reflow_output(&output);
+            }
+            break;
         }
     }
 
