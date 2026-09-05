@@ -143,7 +143,6 @@ fn start_dbus(
         .context("could not publish the notification interface")?
         .build()
         .context("could not connect to the session bus")
-        .map_err(Into::into)
 }
 
 struct Daemon {

@@ -99,6 +99,7 @@ impl RenderCache {
     /// whether it may be redrawn in part or has to be drawn whole.
     /// `update_uniforms` bumps the counter unconditionally, which is why the
     /// values are kept here and compared first.
+    #[allow(clippy::too_many_arguments)]
     pub fn shader(
         &mut self,
         slot: Slot,

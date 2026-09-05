@@ -229,7 +229,7 @@ impl Default for Keybinds {
             ("j", Direction::Down),
         ] {
             // Mod+L is the lock binding above; direction gets the arrow only.
-            if !(key == "l") {
+            if key != "l" {
                 bind(logo, key, Action::FocusDirection { direction: dir });
             }
             bind(logo_shift, key, Action::MoveDirection { direction: dir });

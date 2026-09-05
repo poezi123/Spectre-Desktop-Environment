@@ -85,7 +85,7 @@ impl Category {
 }
 
 /// The entries in `category`, keeping the order they came in.
-pub fn filter<'a>(category: Category, entries: &'a [Entry]) -> Vec<&'a Entry> {
+pub fn filter(category: Category, entries: &[Entry]) -> Vec<&Entry> {
     entries.iter().filter(|e| category.contains(e)).collect()
 }
 

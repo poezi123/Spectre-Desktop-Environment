@@ -58,7 +58,7 @@ impl Metrics {
     /// focus outline entirely on a fractional scale would be a usability bug,
     /// and the project rules say the desktop stays usable without effects.
     pub fn scaled(self, scale: f64) -> Self {
-        let s = |v: u32| ((v as f64 * scale).round() as u32).max(0);
+        let s = |v: u32| (v as f64 * scale).round() as u32;
         Self {
             titlebar_height: s(self.titlebar_height),
             border_width: if self.border_width == 0 { 0 } else { s(self.border_width).max(1) },

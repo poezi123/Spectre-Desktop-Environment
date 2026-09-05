@@ -206,9 +206,7 @@ impl Spectre {
             tracing::warn!(%command, "unbalanced quotes in spawn command");
             return None;
         };
-        let Some((program, args)) = argv.split_first() else {
-            return None;
-        };
+        let (program, args) = argv.split_first()?;
 
         let mut cmd = std::process::Command::new(program);
         if let Some(socket) = self.ipc_socket_path() {

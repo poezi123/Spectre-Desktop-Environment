@@ -75,7 +75,7 @@ impl Entry {
             collect_dir(&dir, &dir, &desktops, &mut by_id);
         }
         let mut entries: Vec<Entry> = by_id.into_values().collect();
-        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        entries.sort_by_key(|a| a.name.to_lowercase());
         entries
     }
 }
