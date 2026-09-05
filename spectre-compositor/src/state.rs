@@ -43,11 +43,14 @@ impl ClientData for ClientState {
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
 }
 
-/// How often a purely decorative animation is allowed to redraw the screen.
+/// How often a workspace transition is allowed to redraw the screen.
 ///
-/// The contour pattern drifts slowly; sixty frames a second buys nothing that
-/// can be seen and costs a whole core on a machine without a real GPU.
-const ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
+/// A transition is the one animation worth spending frames on, because the
+/// whole screen is travelling; the patterns are paced by what they can
+/// actually be seen to do, which [`Pattern::redraw_interval`] works out.
+///
+/// [`Pattern::redraw_interval`]: spectre_theme::Pattern::redraw_interval
+const TRANSITION_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Everything the compositor owns.
 pub struct Spectre {
@@ -389,31 +392,52 @@ impl Spectre {
         // per vblank. Every frame repaints the whole output, which on a
         // software renderer is the difference between an idle desktop and a
         // busy core.
-        if !self.needs_animation_frames() {
+        let Some(interval) = self.animation_interval() else {
             return false;
-        }
+        };
         let now = Instant::now();
-        if now.duration_since(self.last_animation) < ANIMATION_INTERVAL {
+        if now.duration_since(self.last_animation) < interval {
             return false;
         }
         self.last_animation = now;
         true
     }
 
-    /// Whether an animation currently on screen needs a new frame every tick.
+    /// How long the screen may be left alone, or `None` when nothing on it is
+    /// moving by itself.
     ///
-    /// Both patterns the compositor draws are asked, but the window pattern
-    /// only counts while a decorated window is actually mapped: an empty
-    /// desktop must fall back to zero frames per second.
-    pub fn needs_animation_frames(&self) -> bool {
+    /// Both patterns the compositor draws are asked, and the one that changes
+    /// soonest sets the pace. The window pattern only counts while a decorated
+    /// window is actually mapped: an empty desktop must fall back to zero
+    /// frames per second.
+    pub fn animation_interval(&self) -> Option<Duration> {
         if self.transition.is_some() {
-            return true;
+            return Some(TRANSITION_INTERVAL);
         }
-        if self.config.theme.desktop_pattern.needs_continuous_redraw() {
-            return true;
+        let scale = self.animation_scale();
+        let theme = &self.config.theme;
+        let desktop = theme.desktop_pattern.redraw_interval(scale);
+        let window = self
+            .workspaces
+            .active()
+            .elements()
+            .any(|w| self.is_decorated(w))
+            .then(|| theme.window_pattern.redraw_interval(scale))
+            .flatten();
+        match (desktop, window) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (only, None) | (None, only) => only,
         }
-        self.config.theme.window_pattern.needs_continuous_redraw()
-            && self.workspaces.active().elements().any(|w| self.is_decorated(w))
+    }
+
+    /// The scale the pattern is drawn at, which decides how many device pixels
+    /// its drift covers in a second. Outputs rarely differ, and where they do
+    /// the densest one has to set the pace or it would stutter.
+    fn animation_scale(&self) -> f32 {
+        self.outputs()
+            .into_iter()
+            .map(|output| output.current_scale().fractional_scale() as f32)
+            .fold(1.0f32, f32::max)
     }
 
     /// Ask the event loop to stop; the session ends after the current iteration.

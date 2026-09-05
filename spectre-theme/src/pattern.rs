@@ -7,6 +7,8 @@
 //! what makes the "Performance" profile cheap: the same struct just reports
 //! `animated == false` and the shader stops sampling time.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Color, Gradient};
@@ -97,6 +99,18 @@ impl Pattern {
         self.color_cycle && self.color_speed > 0.0 && !self.is_noop()
     }
 
+    /// Cycles of the noise field per second at `speed == 1.0`. Slow enough to
+    /// read as ambient movement rather than as something happening.
+    const DRIFT_PER_SECOND: f64 = 0.06;
+
+    /// Revolutions of the colour loop per second at `color_speed == 1.0`.
+    const COLOR_REVS_PER_SECOND: f64 = 0.125;
+
+    /// How many noise cells one contour spacing is worth. The shaders divide by
+    /// the same number; it is what keeps the ridges broad enough to read as a
+    /// contour map at panel height as well as full screen.
+    const CELL_SPACINGS: f32 = 6.0;
+
     /// Phase to feed the shader at `elapsed` seconds since compositor start.
     ///
     /// Wrapped into `0.0..1000.0` so an f32 uniform keeps its precision on a
@@ -105,8 +119,7 @@ impl Pattern {
         if !self.animated || self.speed <= 0.0 || self.is_noop() {
             return 0.0;
         }
-        // 0.06 cycles/s at speed 1.0 — slow enough to read as ambient movement.
-        ((elapsed_secs * self.speed as f64 * 0.06) % 1000.0) as f32
+        ((elapsed_secs * self.speed as f64 * Self::DRIFT_PER_SECOND) % 1000.0) as f32
     }
 
     /// Where the colour cycle stands at `elapsed` seconds, in `0.0..1.0`.
@@ -115,7 +128,63 @@ impl Pattern {
         if !self.cycles_color() {
             return 0.0;
         }
-        ((elapsed_secs * self.color_speed as f64 * 0.125).rem_euclid(1.0)) as f32
+        ((elapsed_secs * self.color_speed as f64 * Self::COLOR_REVS_PER_SECOND).rem_euclid(1.0))
+            as f32
+    }
+
+    /// Samples of one colour revolution that still read as a continuous sweep.
+    ///
+    /// The colour travels along a gradient rather than across pixels, so the
+    /// criterion is not travel but banding: below this many steps the sweep
+    /// starts to look like it is changing in jumps.
+    const COLOR_STEPS: f64 = 120.0;
+
+    /// Fastest and slowest a moving pattern is redrawn, whatever the settings
+    /// say. The lower bound is there so a pattern turned up to its limit cannot
+    /// ask for more frames than a display can show; the upper bound keeps a
+    /// pattern turned right down still visibly creeping.
+    const FASTEST_REDRAW: Duration = Duration::from_millis(16);
+    const SLOWEST_REDRAW: Duration = Duration::from_millis(500);
+
+    /// How long this pattern may be left alone before the picture changes.
+    ///
+    /// Both movements are far slower than a display refresh, so a frame per
+    /// vblank draws the same image several times over - and on a machine
+    /// without a GPU each of those frames is a repaint of the whole surface.
+    ///
+    /// The field drifts [`Pattern::DRIFT_PER_SECOND`] noise cells a second at
+    /// full speed and a cell is `line_spacing * CELL_SPACINGS` device pixels
+    /// across, which gives the travel in pixels per second: one frame per pixel
+    /// of travel is all the movement there is to show. The colours are judged
+    /// by [`Pattern::COLOR_STEPS`] instead, since they move through a gradient
+    /// rather than across the screen.
+    ///
+    /// `None` means the pattern is standing still and needs no frames at all.
+    pub fn redraw_interval(&self, scale: f32) -> Option<Duration> {
+        if !self.needs_continuous_redraw() {
+            return None;
+        }
+        let mut per_second: f64 = 0.0;
+
+        if self.animated && self.speed > 0.0 {
+            let cell = (self.line_spacing * scale).max(1.0) * Self::CELL_SPACINGS;
+            let pixels_per_second = self.speed as f64 * Self::DRIFT_PER_SECOND * cell as f64;
+            per_second = per_second.max(pixels_per_second);
+        }
+        if self.cycles_color() {
+            let steps_per_second =
+                self.color_speed as f64 * Self::COLOR_REVS_PER_SECOND * Self::COLOR_STEPS;
+            per_second = per_second.max(steps_per_second);
+        }
+
+        if !per_second.is_finite() || per_second <= 0.0 {
+            return Some(Self::SLOWEST_REDRAW);
+        }
+        let seconds = (1.0 / per_second).clamp(
+            Self::FASTEST_REDRAW.as_secs_f64(),
+            Self::SLOWEST_REDRAW.as_secs_f64(),
+        );
+        Some(Duration::from_secs_f64(seconds))
     }
 
     /// How far the accent is darkened before it is drawn as a contour line.
@@ -184,7 +253,8 @@ impl Pattern {
             return 0.0;
         }
         let spacing = (self.line_spacing * scale).max(1.0);
-        let q = (x / (spacing * 6.0) + phase, y / (spacing * 6.0));
+        let cell = spacing * Self::CELL_SPACINGS;
+        let q = (x / cell + phase, y / cell);
         let height = fbm(q.0, q.1);
 
         let levels = height * 16.0;
@@ -341,6 +411,74 @@ mod tests {
             let c = p.coverage(100.0, 20.0, 0.0, scale);
             assert!(c.is_finite() && (0.0..=1.0).contains(&c));
         }
+    }
+
+    #[test]
+    fn a_still_pattern_asks_for_no_frames_at_all() {
+        assert_eq!(Pattern::default().without_animation().redraw_interval(1.0), None);
+        assert_eq!(Pattern::OFF.redraw_interval(1.0), None);
+    }
+
+    #[test]
+    fn the_default_pattern_is_redrawn_far_slower_than_a_display_refreshes() {
+        let interval = Pattern::default().redraw_interval(1.0).expect("it moves");
+        assert!(
+            interval > Duration::from_millis(66),
+            "sixty frames a second buys nothing that can be seen: {interval:?}"
+        );
+        assert!(interval <= Pattern::SLOWEST_REDRAW);
+    }
+
+    #[test]
+    fn a_faster_pattern_is_redrawn_more_often() {
+        let slow = Pattern { speed: 0.2, color_cycle: false, ..Default::default() };
+        let fast = Pattern { speed: 1.0, color_cycle: false, ..Default::default() };
+        assert!(fast.redraw_interval(1.0) < slow.redraw_interval(1.0));
+    }
+
+    #[test]
+    fn wider_spacing_moves_the_field_faster_and_so_is_redrawn_more_often() {
+        // A cell is measured in contour spacings, so wider lines mean the field
+        // travels further per second in device pixels.
+        let tight = Pattern { line_spacing: 8.0, color_cycle: false, ..Default::default() };
+        let wide = Pattern { line_spacing: 64.0, color_cycle: false, ..Default::default() };
+        assert!(wide.redraw_interval(1.0) < tight.redraw_interval(1.0));
+    }
+
+    #[test]
+    fn a_doubled_scale_halves_the_interval() {
+        let p = Pattern { color_cycle: false, ..Default::default() };
+        let one = p.redraw_interval(1.0).unwrap().as_secs_f64();
+        let two = p.redraw_interval(2.0).unwrap().as_secs_f64();
+        assert!((one / two - 2.0).abs() < 0.01, "{one} vs {two}");
+    }
+
+    #[test]
+    fn frozen_lines_are_still_redrawn_for_the_colours() {
+        let p = Pattern::default().with_static_lines();
+        let interval = p.redraw_interval(1.0).expect("the colours travel");
+        assert!(interval < Pattern::SLOWEST_REDRAW);
+    }
+
+    #[test]
+    fn no_pattern_ever_asks_for_more_than_a_display_can_show() {
+        for speed in [1.0, 100.0] {
+            for spacing in [1.0, 1000.0] {
+                for scale in [1.0, 4.0] {
+                    let p = Pattern { speed, line_spacing: spacing, color_speed: speed,
+                                      ..Default::default() };
+                    let interval = p.redraw_interval(scale).unwrap();
+                    assert!(interval >= Pattern::FASTEST_REDRAW, "{interval:?}");
+                    assert!(interval <= Pattern::SLOWEST_REDRAW, "{interval:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_nonsense_setting_still_yields_an_interval() {
+        let p = Pattern { line_spacing: f32::NAN, ..Default::default() };
+        assert!(p.redraw_interval(1.0).is_some());
     }
 
     #[test]
