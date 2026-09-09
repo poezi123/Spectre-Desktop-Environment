@@ -114,6 +114,16 @@ impl PatternMask {
         self.coverage.is_empty()
     }
 
+    /// Coverage as one byte per pixel, row by row. Empty when the pattern
+    /// draws nothing.
+    pub fn bytes(&self) -> &[u8] {
+        &self.coverage
+    }
+
+    pub fn size(&self) -> (i32, i32) {
+        (self.width, self.height)
+    }
+
     /// Coverage at a mask-local pixel, in `0.0..=1.0`.
     pub fn at(&self, x: i32, y: i32) -> f32 {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {

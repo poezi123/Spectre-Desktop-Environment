@@ -5,6 +5,7 @@ pub mod decorations;
 mod pattern;
 mod banded;
 mod cache;
+mod contour;
 mod rounded;
 mod text;
 mod wallpaper;
@@ -14,6 +15,7 @@ pub use decorations::{Frame, Part};
 pub use pattern::PatternShader;
 pub use banded::Banded;
 pub use cache::{RenderCache, Slot};
+pub use contour::{ContourField, Contoured};
 pub use rounded::{Corners, RoundedElement};
 pub use text::TextCache;
 pub use wallpaper::Wallpaper;
@@ -49,6 +51,7 @@ render_elements! {
     Text = MemoryRenderBufferRenderElement<GlesRenderer>,
     Solid = SolidColorRenderElement,
     Pattern = Banded<PixelShaderElement>,
+    Contour = Contoured<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
 
 /// A workspace element moved and scaled for a transition.
@@ -168,21 +171,29 @@ fn build_output_elements(
             elements.push(SpectreElement::Plain(WorkspaceElement::Text(element)));
             return elements;
         }
-        let backdrop = shader.and_then(|shader| {
-            shader.element(
-                cache,
-                Slot::DesktopPattern,
-                &theme.desktop_pattern,
-                area,
-                theme.palette.base,
-                &theme.palette.accent,
-                state.pattern_phase(),
-                state.color_phase(),
-                scale,
-            )
-        });
-        let element = backdrop.map(WorkspaceElement::Pattern);
-        elements.extend(element.map(SpectreElement::Plain));
+        // The baked field first: it is the same picture for a fraction of the
+        // cost. The shader is the fallback for a driver that would not compile
+        // the colouring program.
+        let backdrop = contour_element(state, renderer, cache, shader, area, scale);
+        match backdrop {
+            Some(element) => elements.push(SpectreElement::Plain(element)),
+            None => {
+                let drawn = shader.and_then(|shader| {
+                    shader.element(
+                        cache,
+                        Slot::DesktopPattern,
+                        &theme.desktop_pattern,
+                        area,
+                        theme.palette.base,
+                        &theme.palette.accent,
+                        state.desktop_phase(),
+                        state.desktop_color_phase(),
+                        scale,
+                    )
+                });
+                elements.extend(drawn.map(WorkspaceElement::Pattern).map(SpectreElement::Plain));
+            }
+        }
 
         // Under everything: a flat ground for the corners a wallpaper cannot fill.
         let physical: Rectangle<i32, Physical> =
@@ -193,6 +204,64 @@ fn build_output_elements(
     }
 
     elements
+}
+
+/// The desktop pattern, drawn from the field baked into a texture.
+///
+/// `None` when there is no pattern to draw, no shader to colour it with, or the
+/// buffer could not be handed to the renderer - the caller then falls back to
+/// working the noise out per pixel.
+fn contour_element(
+    state: &Spectre,
+    renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
+    shader: Option<&PatternShader>,
+    area: Rectangle<i32, Logical>,
+    scale: f64,
+) -> Option<WorkspaceElement> {
+    let theme = &state.config.theme;
+    let pattern = &theme.desktop_pattern;
+    // `SPECTRE_NO_CONTOUR=1` forces the per-pixel shader instead. Worth
+    // keeping: it is the only way to put the two paths side by side, and that
+    // comparison is what turned up the precision bug in the shaders.
+    if std::env::var_os("SPECTRE_NO_CONTOUR").is_some() {
+        return None;
+    }
+    let program = shader?.contour_program()?;
+
+    let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(Scale::from(scale));
+    let field = ContourField::prepare(
+        cache.contour(),
+        pattern,
+        physical.size,
+        scale,
+        state.desktop_phase(),
+    )?;
+
+    let element = MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        physical.loc.to_f64(),
+        field.buffer(),
+        None,
+        Some(field.source()),
+        Some(area.size),
+        Kind::Unspecified,
+    )
+    .ok()?;
+
+    let stops = pattern.line_stops(&theme.palette.accent, theme.palette.base);
+    Contoured::new(
+        element,
+        Some(program),
+        field.commit(),
+        &stops,
+        state.desktop_color_phase(),
+        PatternShader::COLOR_SPAN,
+        theme.palette.base,
+        field.uv_window(),
+    )
+    .ok()
+    .map(WorkspaceElement::Contour)
 }
 
 /// The pointer, drawn from the client's cursor surface or from Spectre's own

@@ -364,6 +364,17 @@ impl Spectre {
         self.config.theme.window_pattern.phase(self.animation_clock())
     }
 
+    /// Current animation phase of the desktop pattern, which is configured
+    /// separately from the one on window title bars.
+    pub fn desktop_phase(&self) -> f32 {
+        self.config.theme.desktop_pattern.phase(self.animation_clock())
+    }
+
+    /// Where the desktop pattern's colour cycle stands.
+    pub fn desktop_color_phase(&self) -> f32 {
+        self.config.theme.desktop_pattern.color_phase(self.animation_clock())
+    }
+
     /// Pixel size of the first output, for sizing the wallpaper.
     pub fn output_pixel_size(&self) -> Option<(i32, i32)> {
         let output = self.outputs().into_iter().next()?;

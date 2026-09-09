@@ -17,6 +17,8 @@ use smithay::backend::renderer::gles::{GlesPixelProgram, Uniform};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::utils::{Logical, Physical, Rectangle};
 
+use super::ContourField;
+
 /// What a cached element belongs to, so two different things never collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
@@ -37,6 +39,8 @@ pub struct RenderCache {
     shaders: HashMap<Slot, ShaderSlot>,
     /// Slots touched while building the current frame.
     live: Vec<Slot>,
+    /// The desktop's contour field, baked once and scrolled.
+    contour: Option<ContourField>,
 }
 
 #[derive(Debug)]
@@ -56,6 +60,14 @@ struct ShaderSlot {
 }
 
 impl RenderCache {
+    /// The slot the baked contour field lives in.
+    ///
+    /// It is not keyed like the others: there is one desktop, and the field
+    /// knows for itself when what it holds no longer matches what is wanted.
+    pub fn contour(&mut self) -> &mut Option<ContourField> {
+        &mut self.contour
+    }
+
     /// Start a frame. Slots not asked for before [`RenderCache::end_frame`] are
     /// dropped, so a closed window does not keep its frame alive forever.
     pub fn begin_frame(&mut self) {

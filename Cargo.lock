@@ -2222,6 +2222,7 @@ dependencies = [
  "libc",
  "smithay",
  "spectre-config",
+ "spectre-draw",
  "spectre-ipc",
  "spectre-text",
  "spectre-theme",

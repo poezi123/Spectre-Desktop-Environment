@@ -13,6 +13,7 @@ use spectre_theme::{Color, Gradient, Metrics, Palette, Pattern, PatternKind};
 const SHADER_SRC: &str = include_str!("pattern.glsl");
 const FRAME_SRC: &str = include_str!("frame.glsl");
 const ROUNDED_SRC: &str = include_str!("rounded.glsl");
+const CONTOUR_SRC: &str = include_str!("contour.glsl");
 
 const FRAME_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_radius", UniformType::_1f),
@@ -29,6 +30,18 @@ const FRAME_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_phase", UniformType::_1f),
     ("spectre_spacing", UniformType::_1f),
     ("spectre_line_width", UniformType::_1f),
+];
+
+const CONTOUR_UNIFORMS: &[(&str, UniformType)] = &[
+    ("spectre_line_0", UniformType::_4f),
+    ("spectre_line_1", UniformType::_4f),
+    ("spectre_line_2", UniformType::_4f),
+    ("spectre_line_3", UniformType::_4f),
+    ("spectre_color_phase", UniformType::_1f),
+    ("spectre_color_span", UniformType::_1f),
+    ("spectre_bg", UniformType::_4f),
+    ("spectre_uv_origin", UniformType::_1f),
+    ("spectre_uv_span", UniformType::_1f),
 ];
 
 const ROUNDED_UNIFORMS: &[(&str, UniformType)] = &[
@@ -76,6 +89,7 @@ pub struct PatternShader {
     program: GlesPixelProgram,
     frame: Option<GlesPixelProgram>,
     rounded: Option<GlesTexProgram>,
+    contour: Option<GlesTexProgram>,
 }
 
 impl PatternShader {
@@ -112,13 +126,29 @@ impl PatternShader {
             })
             .ok();
 
-        Some(Self { program, frame, rounded })
+        let contour = renderer
+            .compile_custom_texture_shader(CONTOUR_SRC, &names(CONTOUR_UNIFORMS))
+            .inspect_err(|err| {
+                tracing::warn!(?err, "the contour colouring shader did not compile; \
+                                      the desktop pattern falls back to the slow path")
+            })
+            .ok();
+
+        Some(Self { program, frame, rounded, contour })
     }
 
     /// The program that rounds a client surface, if it compiled.
     pub fn rounded_program(&self) -> Option<&GlesTexProgram> {
         self.rounded.as_ref()
     }
+
+    /// The program that colours a baked contour field, if it compiled.
+    pub fn contour_program(&self) -> Option<&GlesTexProgram> {
+        self.contour.as_ref()
+    }
+
+    /// How much of the colour loop spans one surface.
+    pub const COLOR_SPAN: f32 = COLOR_SPAN;
 
     /// The window frame: rounded title bar, hairline border and the pattern,
     /// with the client area left transparent.
