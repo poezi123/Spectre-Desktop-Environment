@@ -1,10 +1,3 @@
-//! The Spectre panel.
-//!
-//! A `wlr-layer-shell` client that draws itself into shared memory and talks to
-//! the compositor over the Spectre control socket. No GPU context, no toolkit:
-//! at 1920x32 the whole surface is a quarter of a megabyte, and keeping it on
-//! the CPU is what lets the panel cost single-digit megabytes of memory.
-
 mod clock;
 mod draw;
 mod layout;
@@ -13,12 +6,9 @@ mod readout;
 use std::io::{ErrorKind, Read};
 use std::time::{Duration, Instant};
 
-/// Repaint interval while the pattern is moving.
-///
-/// Fifteen a second, not sixty: the contour field drifts a few pixels per
-/// second, and every repaint recomputes the whole strip on the CPU. Pelzify,
-/// which the pattern comes from, settled on sixteen for the same reason.
-const ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
+const IDLE_INTERVAL: Duration = Duration::from_secs(1);
+
+const READOUT_INTERVAL: Duration = Duration::from_secs(2);
 
 use anyhow::Context;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
@@ -48,11 +38,10 @@ use wayland_client::{Connection, QueueHandle};
 use spectre_draw::Canvas;
 use crate::clock::Clock;
 use crate::layout::{Item, Placed};
-use crate::readout::Readout;
+use crate::readout::{system_monitor, Readout};
 
 use smithay_client_toolkit::reexports::client as wayland_client;
 
-/// Left mouse button, from `linux/input-event-codes.h`.
 const BTN_LEFT: u32 = 0x110;
 
 fn main() -> anyhow::Result<()> {
@@ -113,14 +102,13 @@ fn main() -> anyhow::Result<()> {
         dumped: false,
         clock: Clock::now(),
         readout: Readout::new(),
+        spawned: Vec::new(),
         ipc,
         started: Instant::now(),
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
-    // One tick a second is enough for a clock that shows minutes and a load
-    // readout; anything faster would be the panel burning power to say nothing.
     event_loop
         .handle()
         .insert_source(Timer::from_duration(Duration::from_secs(1)), |_, _, panel: &mut Panel| {
@@ -129,17 +117,25 @@ fn main() -> anyhow::Result<()> {
         })
         .map_err(|err| anyhow::anyhow!("could not start the panel clock: {err}"))?;
 
-    // A moving pattern is paced here rather than off frame callbacks: the
-    // panel is a thin strip, and repainting it faster than this only spends
-    // CPU that a laptop on battery would rather keep.
     event_loop
         .handle()
-        .insert_source(Timer::from_duration(ANIMATION_INTERVAL), |_, _, panel: &mut Panel| {
-            if panel.config.theme.panel_pattern.needs_continuous_redraw() {
-                panel.dirty = true;
-                panel.redraw_if_needed();
+        .insert_source(Timer::from_duration(READOUT_INTERVAL), |_, _, panel: &mut Panel| {
+            panel.sample();
+            TimeoutAction::ToDuration(READOUT_INTERVAL)
+        })
+        .map_err(|err| anyhow::anyhow!("could not start the load readout: {err}"))?;
+
+    event_loop
+        .handle()
+        .insert_source(Timer::immediate(), |_, _, panel: &mut Panel| {
+            match panel.config.theme.panel_pattern.redraw_interval(panel.scale as f32) {
+                Some(interval) => {
+                    panel.dirty = true;
+                    panel.redraw_if_needed();
+                    TimeoutAction::ToDuration(interval)
+                }
+                None => TimeoutAction::ToDuration(IDLE_INTERVAL),
             }
-            TimeoutAction::ToDuration(ANIMATION_INTERVAL)
         })
         .map_err(|err| anyhow::anyhow!("could not start the panel animation: {err}"))?;
 
@@ -160,7 +156,6 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
-/// Anchor the panel to its configured edge and reserve room for it.
 fn configure_layer(layer: &LayerSurface, config: &Config, height: i32) {
     let (anchor, size) = match config.panel.position {
         PanelPosition::Top => (Anchor::TOP | Anchor::LEFT | Anchor::RIGHT, (0, height as u32)),
@@ -172,12 +167,10 @@ fn configure_layer(layer: &LayerSurface, config: &Config, height: i32) {
     };
     layer.set_anchor(anchor);
     layer.set_size(size.0, size.1);
-    // Windows must not end up underneath the panel.
     layer.set_exclusive_zone(height);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
 }
 
-/// Connect to the compositor and subscribe, if a session is running.
 fn connect_ipc(event_loop: &EventLoop<'static, Panel>) -> Option<Client> {
     let mut client = match Client::connect() {
         Ok(client) => client,
@@ -203,8 +196,6 @@ fn connect_ipc(event_loop: &EventLoop<'static, Panel>) -> Option<Client> {
     let inserted = event_loop.handle().insert_source(
         Generic::new(socket, Interest::READ, Mode::Level),
         |_, socket, panel: &mut Panel| {
-            // `Generic` guards the fd against being closed twice, so read
-            // through a borrow of the inner socket rather than the wrapper.
             panel.read_ipc(&mut &**socket);
             Ok(PostAction::Continue)
         },
@@ -244,25 +235,53 @@ struct Panel {
     readout: Readout,
     ipc: Option<Client>,
     started: Instant,
+    spawned: Vec<std::process::Child>,
 }
 
 impl Panel {
     fn loop_stop(&self) {}
 
-    /// Once-a-second work: the clock and the load readout.
     fn tick(&mut self) {
         let clock = Clock::now();
         if clock != self.clock {
             self.clock = clock;
             self.dirty = true;
         }
-        if self.readout.refresh() {
-            self.dirty = true;
-        }
+        self.spawned.retain_mut(|child| !matches!(child.try_wait(), Ok(Some(_))));
         self.redraw_if_needed();
     }
 
-    /// Drain the control socket.
+    fn sample(&mut self) {
+        if self.readout.refresh() {
+            self.dirty = true;
+            self.redraw_if_needed();
+        }
+    }
+
+    fn open_system_monitor(&mut self) {
+        let Some(command) = system_monitor() else {
+            tracing::warn!("no system monitor found on this machine");
+            return;
+        };
+        let mut words = command.split_whitespace();
+        let Some(program) = words.next() else {
+            return;
+        };
+        let result = std::process::Command::new(program)
+            .args(words)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match result {
+            Ok(child) => {
+                tracing::info!(%command, "opened the system monitor");
+                self.spawned.push(child);
+            }
+            Err(err) => tracing::warn!(?err, %command, "could not open the system monitor"),
+        }
+    }
+
     fn read_ipc(&mut self, socket: &mut impl Read) {
         let mut buf = [0u8; 8192];
         let mut pending = String::new();
@@ -297,9 +316,6 @@ impl Panel {
                     if let Some(error) = error {
                         tracing::warn!(%error, "keeping the running configuration");
                     } else {
-                        // The edge and the thickness live on the layer surface,
-                        // not in the drawing: without re-anchoring, moving the
-                        // panel in the settings would change nothing on screen.
                         let moved = self.config.panel.position != config.panel.position
                             || self.config.theme.metrics.panel_height
                                 != config.theme.metrics.panel_height;
@@ -330,7 +346,6 @@ impl Panel {
         }
     }
 
-    /// Act on a click at a panel-local position.
     fn click(&mut self, x: i32, y: i32) {
         let Some(placed) = layout::item_at(&self.items, x, y) else {
             return;
@@ -338,8 +353,6 @@ impl Panel {
         match placed.item.clone() {
             Item::Workspace { index, .. } => self.send(Request::SwitchWorkspace { index }),
             Item::Task { id, focused, minimized, .. } => {
-                // Clicking the window you are already in minimises it, the
-                // behaviour every taskbar has had for thirty years.
                 if focused && !minimized {
                     self.send(Request::MinimizeWindow { id });
                 } else {
@@ -348,7 +361,8 @@ impl Panel {
             }
             Item::Session => self.send(Request::Quit),
             Item::Launcher => self.send(Request::ToggleLauncher),
-            Item::Resources | Item::Clock => {}
+            Item::Resources => self.open_system_monitor(),
+            Item::Clock => {}
         }
     }
 
@@ -428,9 +442,6 @@ impl Panel {
             return;
         };
         let bytes = self.canvas.as_bytes();
-        // `SPECTRE_DUMP=<path>` writes the first frame the panel painted, as
-        // `"<w> <h>\n"` followed by raw Argb8888. It is what proves whether a
-        // gap on screen was already a gap here.
         if let Some(path) = std::env::var_os("SPECTRE_DUMP") {
             if !self.dumped {
                 self.dumped = true;
@@ -523,8 +534,6 @@ impl LayerShellHandler for Panel {
     ) {
         let (w, h) = configure.new_size;
         tracing::debug!(w, h, "layer surface configured");
-        // A zero from the compositor means "you choose", which for a panel
-        // spanning an edge only ever happens on the axis we did not fix.
         self.width = if w == 0 { self.width.max(1) } else { w as i32 };
         if h != 0 {
             self.height = h as i32;

@@ -1,11 +1,5 @@
-//! CPU and memory readouts, straight from `/proc`.
-//!
-//! Deliberately allocation-light and sampled once a second: a panel widget that
-//! measures load must not be a noticeable part of it.
+use std::path::{Path, PathBuf};
 
-use std::time::Instant;
-
-/// A snapshot of the counters `/proc/stat` reports for the whole machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CpuSample {
     pub idle: u64,
@@ -13,7 +7,6 @@ pub struct CpuSample {
 }
 
 impl CpuSample {
-    /// Parse the aggregate `cpu` line of `/proc/stat`.
     pub fn parse(stat: &str) -> Option<Self> {
         let line = stat.lines().find(|l| l.starts_with("cpu "))?;
         let mut fields = line.split_whitespace().skip(1).filter_map(|f| f.parse::<u64>().ok());
@@ -29,11 +22,6 @@ impl CpuSample {
         Some(Self { idle: idle_total, total: user + nice + system + idle_total + rest })
     }
 
-    /// Busy fraction between two samples, in `0.0..=1.0`.
-    ///
-    /// Returns `0.0` when the counters did not move or went backwards, which
-    /// happens across a suspend; reporting nonsense would be worse than
-    /// reporting idle.
     pub fn usage_since(&self, previous: &CpuSample) -> f32 {
         let total = self.total.saturating_sub(previous.total);
         if total == 0 {
@@ -44,7 +32,6 @@ impl CpuSample {
     }
 }
 
-/// Memory in use, as a fraction and in kibibytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Memory {
     pub used_kib: u64,
@@ -52,11 +39,6 @@ pub struct Memory {
 }
 
 impl Memory {
-    /// Parse `/proc/meminfo`.
-    ///
-    /// "Used" is total minus available, the same definition `free` uses, so the
-    /// number matches what the user sees elsewhere rather than counting cache
-    /// as used.
     pub fn parse(meminfo: &str) -> Option<Self> {
         let field = |name: &str| -> Option<u64> {
             meminfo
@@ -72,7 +54,6 @@ impl Memory {
         Some(Self { used_kib: total.saturating_sub(available), total_kib: total })
     }
 
-    /// Used by the tests and by the forthcoming memory meter.
     #[allow(dead_code)]
     pub fn fraction(&self) -> f32 {
         if self.total_kib == 0 {
@@ -86,12 +67,10 @@ impl Memory {
     }
 }
 
-/// Samples the readouts, no more often than once a second.
 pub struct Readout {
     previous_cpu: CpuSample,
     cpu: f32,
     memory: Memory,
-    last_sample: Option<Instant>,
 }
 
 impl Default for Readout {
@@ -102,28 +81,14 @@ impl Default for Readout {
 
 impl Readout {
     pub fn new() -> Self {
-        Self {
-            previous_cpu: CpuSample::default(),
-            cpu: 0.0,
-            memory: Memory::default(),
-            last_sample: None,
-        }
+        Self { previous_cpu: CpuSample::default(), cpu: 0.0, memory: Memory::default() }
     }
 
-    /// Re-read `/proc` if a second has passed. Returns `true` when the values
-    /// changed enough to be worth a repaint.
     pub fn refresh(&mut self) -> bool {
-        let now = Instant::now();
-        if let Some(last) = self.last_sample {
-            if now.duration_since(last).as_millis() < 900 {
-                return false;
-            }
-        }
-        self.last_sample = Some(now);
+        let before = self.label();
 
-        let before = (self.cpu, self.memory);
-
-        if let Some(sample) = std::fs::read_to_string("/proc/stat").ok().and_then(|s| CpuSample::parse(&s))
+        if let Some(sample) =
+            std::fs::read_to_string("/proc/stat").ok().and_then(|s| CpuSample::parse(&s))
         {
             if self.previous_cpu.total != 0 {
                 self.cpu = sample.usage_since(&self.previous_cpu);
@@ -136,16 +101,10 @@ impl Readout {
             self.memory = memory;
         }
 
-        // A percentage point of CPU is below the noise floor of a 1 Hz sample.
-        (self.cpu - before.0).abs() >= 0.01 || self.memory != before.1
+        self.label() != before
     }
 
-    /// The line the panel draws, e.g. `CPU  12%  MEM  2.1G`.
-    ///
-    /// Every field is padded to its widest form. A readout that changes width
-    /// would shove the clock sideways once a second.
     pub fn label(&self) -> String {
-        // Padded so the panel does not twitch as the numbers change width.
         format!(
             "CPU {:>3.0}%  MEM {:>4.1}G",
             (self.cpu * 100.0).min(100.0),
@@ -153,13 +112,53 @@ impl Readout {
         )
     }
 
-    /// The two readings on their own, for a panel too narrow for one line.
     pub fn parts(&self) -> (String, String) {
         (
             format!("{:.0}%", (self.cpu * 100.0).min(100.0)),
             format!("{:.1}G", self.memory.used_gib().min(999.9)),
         )
     }
+}
+
+const MONITORS: &[&str] = &[
+    "plasma-systemmonitor",
+    "gnome-system-monitor",
+    "missioncenter",
+    "xfce4-taskmanager",
+];
+
+const TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "konsole", "xterm"];
+
+const TOPS: &[&str] = &["btop", "htop"];
+
+pub fn system_monitor() -> Option<String> {
+    system_monitor_in(&path_dirs())
+}
+
+fn system_monitor_in(dirs: &[PathBuf]) -> Option<String> {
+    if let Some(monitor) = MONITORS.iter().find(|name| runnable(dirs, name)) {
+        return Some((*monitor).to_owned());
+    }
+    let terminal = TERMINALS.iter().find(|name| runnable(dirs, name))?;
+    let top = TOPS.iter().find(|name| runnable(dirs, name))?;
+    Some(format!("{terminal} -e {top}"))
+}
+
+fn path_dirs() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default()
+}
+
+fn runnable(dirs: &[PathBuf], name: &str) -> bool {
+    dirs.iter().any(|dir| is_executable(&dir.join(name)))
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -173,6 +172,14 @@ mod tests {
         let s = CpuSample::parse(STAT).unwrap();
         assert_eq!(s.idle, 820, "idle plus iowait");
         assert_eq!(s.total, 975);
+    }
+
+    #[test]
+    fn the_totals_add_up() {
+        let s = CpuSample::parse("cpu  100 0 50 850 0 0 0 0 0 0\ncpu0 1 2 3 4 0 0 0 0 0 0\n")
+            .unwrap();
+        assert_eq!(s.total, 1000);
+        assert_eq!(s.idle, 850);
     }
 
     #[test]
@@ -222,15 +229,20 @@ mod tests {
     }
 
     #[test]
+    fn nonsense_never_panics() {
+        for text in ["", "cpu", "cpu  \n", "cpu  x y z\n", "\0\0", "MemTotal: kB\n"] {
+            let _ = CpuSample::parse(text);
+            let _ = Memory::parse(text);
+        }
+    }
+
+    #[test]
     fn an_empty_memory_reading_does_not_divide_by_zero() {
         assert_eq!(Memory::default().fraction(), 0.0);
     }
 
     #[test]
     fn the_label_is_stable_in_width() {
-        // A readout whose width changes shoves everything to its right along
-        // once a second, which is exactly the kind of twitch a panel must not
-        // have.
         let cases = [
             (0.0, 0),
             (0.05, 1_048_576),
@@ -251,5 +263,78 @@ mod tests {
             })
             .collect();
         assert!(widths.windows(2).all(|w| w[0] == w[1]), "widths differ: {widths:?}");
+    }
+
+    fn fake_binaries(names: &[&str]) -> tempdir::TempDir {
+        let dir = tempdir::TempDir::new();
+        for name in names {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn without_a_path_there_is_no_system_monitor() {
+        assert_eq!(system_monitor_in(&[]), None);
+    }
+
+    #[test]
+    fn the_first_monitor_on_the_list_wins() {
+        let dir = fake_binaries(&["gnome-system-monitor", "plasma-systemmonitor"]);
+        assert_eq!(
+            system_monitor_in(&[dir.path().to_owned()]).as_deref(),
+            Some("plasma-systemmonitor")
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_monitor_falls_back_to_a_terminal() {
+        let dir = fake_binaries(&["foot", "btop"]);
+        assert_eq!(system_monitor_in(&[dir.path().to_owned()]).as_deref(), Some("foot -e btop"));
+    }
+
+    #[test]
+    fn a_terminal_with_nothing_to_run_in_it_is_not_a_monitor() {
+        let dir = fake_binaries(&["foot"]);
+        assert_eq!(system_monitor_in(&[dir.path().to_owned()]), None);
+    }
+
+    #[test]
+    fn a_file_that_is_not_executable_does_not_count() {
+        let dir = tempdir::TempDir::new();
+        std::fs::write(dir.path().join("plasma-systemmonitor"), b"not a program").unwrap();
+        assert_eq!(system_monitor_in(&[dir.path().to_owned()]), None);
+    }
+
+    mod tempdir {
+        use std::path::{Path, PathBuf};
+
+        pub struct TempDir(PathBuf);
+
+        impl TempDir {
+            pub fn new() -> Self {
+                let unique = format!(
+                    "spectre-readout-{}-{:?}",
+                    std::process::id(),
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap()
+                );
+                let path = std::env::temp_dir().join(unique);
+                std::fs::create_dir_all(&path).unwrap();
+                Self(path)
+            }
+
+            pub fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
     }
 }

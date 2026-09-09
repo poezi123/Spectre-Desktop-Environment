@@ -25,7 +25,7 @@ pub enum Item {
 
 impl Item {
     pub fn is_interactive(&self) -> bool {
-        !matches!(self, Item::Resources | Item::Clock)
+        !matches!(self, Item::Clock)
     }
 }
 
@@ -403,9 +403,9 @@ mod tests {
     }
 
     #[test]
-    fn readouts_are_not_clickable_but_everything_else_is() {
-        assert!(!Item::Resources.is_interactive());
+    fn the_clock_is_the_only_thing_that_does_nothing_when_clicked() {
         assert!(!Item::Clock.is_interactive());
+        assert!(Item::Resources.is_interactive());
         assert!(Item::Launcher.is_interactive());
         assert!(Item::Workspace { index: 1, active: true, occupied: false }.is_interactive());
     }
