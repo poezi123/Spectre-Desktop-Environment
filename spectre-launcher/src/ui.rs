@@ -187,8 +187,18 @@ fn draw_sidebar(canvas: &mut Canvas, text: &mut TextRenderer, height: i32, frame
 
 /// The pattern behind the menu, held well back: this surface is a wall of
 /// text, and at title bar intensity the contours read through it.
+///
+/// The field stands still here whatever the theme says. Scrolling it means
+/// rebuilding the mask - four octaves of noise across the whole window - and
+/// the launcher redraws on every keystroke, so an animated field put that
+/// rebuild between the key and the letter appearing. The colours still travel:
+/// they cost a blend per pixel, not a rebuild.
 pub fn launcher_pattern(theme: &Theme) -> Pattern {
-    Pattern { intensity: theme.window_pattern.intensity * 0.3, ..theme.window_pattern }
+    Pattern {
+        intensity: theme.window_pattern.intensity * 0.3,
+        animated: false,
+        ..theme.window_pattern
+    }
 }
 
 /// A one pixel accent frame, so the launcher reads as its own surface.
@@ -401,5 +411,57 @@ mod tests {
     #[test]
     fn scrolling_a_window_with_no_rows_does_not_divide_by_zero() {
         assert_eq!(scroll_offset(7, 0, 3), 0);
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    use super::*;
+    use spectre_draw::PatternMask;
+
+    #[test]
+    #[ignore = "measures this machine, not the code"]
+    fn how_long_a_frame_takes() {
+        let theme = Theme::default();
+        let pattern = launcher_pattern(&theme);
+        let (w, h) = window_size(1920, 1080, 8);
+        println!("window {w}x{h}");
+
+        let start = std::time::Instant::now();
+        let entries = crate::entry::Entry::load_all();
+        println!("{} entries loaded in {:?}", entries.len(), start.elapsed());
+
+        let mut mask = PatternMask::new();
+        let start = std::time::Instant::now();
+        mask.prepare(w, h, &pattern, pattern.phase(0.0), 1.0);
+        println!("mask built in {:?}", start.elapsed());
+
+        // What a keystroke a second later costs: nothing, because the field
+        // does not scroll. It used to be a full rebuild.
+        let start = std::time::Instant::now();
+        mask.prepare(w, h, &pattern, pattern.phase(1.0), 1.0);
+        println!("mask after a keystroke in {:?}", start.elapsed());
+
+        let mut canvas = Canvas::new(w, h);
+        let mut text = TextRenderer::new();
+        let results: Vec<&crate::entry::Entry> = entries.iter().collect();
+        let categories = Category::ALL.to_vec();
+        let frame = Frame {
+            theme: &theme,
+            query: "",
+            results: &results,
+            selected: 0,
+            offset: 0,
+            categories: &categories,
+            category: 0,
+            mask: &mask,
+            color_phase: 0.0,
+        };
+        let start = std::time::Instant::now();
+        draw(&mut canvas, &mut text, &frame);
+        println!("first draw in {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        draw(&mut canvas, &mut text, &frame);
+        println!("second draw in {:?}", start.elapsed());
     }
 }
