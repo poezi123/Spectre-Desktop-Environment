@@ -312,6 +312,30 @@ impl Spectre {
         self.start_time.elapsed().as_secs_f64()
     }
 
+    /// Elapsed time rounded down to the pattern's own frame interval.
+    ///
+    /// The phase is read afresh every time a frame is drawn, and a frame gets
+    /// drawn for all sorts of reasons that have nothing to do with the pattern:
+    /// the panel's clock ticking over, a window repainting, the pointer moving
+    /// a pixel. If the phase moved with each of those, every one of them would
+    /// report the whole desktop as damaged and recompute the contour field
+    /// behind everything - which is why moving the mouse over an empty desktop
+    /// used to cost as much as a full repaint.
+    ///
+    /// Quantising the clock means the pattern moves at its own pace and stands
+    /// perfectly still in between, so a frame drawn for another reason leaves
+    /// it alone and the damage tracker skips it.
+    fn animation_clock(&self) -> f64 {
+        let elapsed = self.elapsed_secs();
+        let Some(step) = self.animation_interval().map(|i| i.as_secs_f64()) else {
+            return elapsed;
+        };
+        if step <= 0.0 {
+            return elapsed;
+        }
+        (elapsed / step).floor() * step
+    }
+
     /// Draw Spectre's own pointer at the size and colours the config asks for.
     ///
     /// The arrow is rasterised once rather than per frame, so it is rebuilt
@@ -337,7 +361,7 @@ impl Spectre {
 
     /// Current animation phase of the window/panel pattern.
     pub fn pattern_phase(&self) -> f32 {
-        self.config.theme.window_pattern.phase(self.elapsed_secs())
+        self.config.theme.window_pattern.phase(self.animation_clock())
     }
 
     /// Pixel size of the first output, for sizing the wallpaper.
@@ -377,7 +401,7 @@ impl Spectre {
 
     /// Where the pattern's colour cycle stands.
     pub fn color_phase(&self) -> f32 {
-        self.config.theme.window_pattern.color_phase(self.elapsed_secs())
+        self.config.theme.window_pattern.color_phase(self.animation_clock())
     }
 
     /// Note that something visible changed, so the next frame is drawn.
