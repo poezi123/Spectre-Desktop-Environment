@@ -241,23 +241,45 @@ impl Pattern {
         self
     }
 
+    /// How many contour levels the height field is sliced into. The shaders
+    /// use the same number; changing one without the other makes the software
+    /// surfaces and the title bars disagree about what the pattern looks like.
+    const LEVELS: f32 = 16.0;
+
     /// Line coverage at a device pixel, in `0.0..=1.0`.
     ///
     /// This is the CPU twin of `spectre-compositor`'s `pattern.glsl`, for
-    /// surfaces drawn in software - the panel, and any renderer without a GPU.
-    /// The two must stay in step: the constants below are the same ones the
-    /// shader uses, and changing one without the other makes the panel and the
-    /// title bars disagree about what the Spectre Pattern looks like.
+    /// surfaces drawn in software - the panel, the launcher, the settings
+    /// window, and any renderer without a GPU. The two must stay in step: the
+    /// constants below are the same ones the shader uses.
     pub fn coverage(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
         if self.is_noop() {
             return 0.0;
         }
-        let spacing = (self.line_spacing * scale).max(1.0);
-        let cell = spacing * Self::CELL_SPACINGS;
-        let q = (x / cell + phase, y / cell);
-        let height = fbm(q.0, q.1);
+        self.line_coverage(self.height(x, y, phase, scale), scale)
+    }
 
-        let levels = height * 16.0;
+    /// The height of the contour field at a device pixel.
+    ///
+    /// This is the expensive half of [`Pattern::coverage`], and the only half
+    /// that varies smoothly: one noise cell is `line_spacing * CELL_SPACINGS`
+    /// device pixels across, so a renderer can sample the height on a coarse
+    /// grid and interpolate between the samples. What must not be interpolated
+    /// is [`Pattern::line_coverage`], which turns the height into lines - that
+    /// is where the edges are, and blurring it is what makes a contour map look
+    /// like a smudge.
+    pub fn height(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
+        let cell = (self.line_spacing * scale).max(1.0) * Self::CELL_SPACINGS;
+        fbm(x / cell + phase, y / cell)
+    }
+
+    /// Line coverage at a pixel where the field stands at `height`.
+    pub fn line_coverage(&self, height: f32, scale: f32) -> f32 {
+        if self.is_noop() {
+            return 0.0;
+        }
+        let spacing = (self.line_spacing * scale).max(1.0);
+        let levels = height * Self::LEVELS;
         let dist = (fract(levels) - 0.5).abs();
         let half_width = ((self.line_width * scale) / spacing).clamp(0.004, 0.4);
         let feather = half_width * 0.9 + 0.015;
