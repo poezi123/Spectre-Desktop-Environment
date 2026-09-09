@@ -205,10 +205,7 @@ impl Spectre {
         Self::init_display(display, &loop_handle)?;
 
         let keybinds = Keybinds::default().merged_with(config.keybinds.clone());
-        let cursor = crate::render::CursorImage::new(
-            config.theme.palette.text,
-            config.theme.palette.base,
-        );
+        let cursor = Some(Self::build_cursor(&config));
         let workspaces = Workspaces::new(config.general.workspaces);
 
         Ok(Self {
@@ -249,7 +246,7 @@ impl Spectre {
             last_animation: Instant::now(),
             panel: None,
             wallpaper: None,
-            cursor: Some(cursor),
+            cursor,
             dirty: true,
             display_dirty: false,
             text: RefCell::new(crate::render::TextCache::new()),
@@ -313,6 +310,29 @@ impl Spectre {
     /// Seconds since the compositor started, for pattern animation.
     pub fn elapsed_secs(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
+    }
+
+    /// Draw Spectre's own pointer at the size and colours the config asks for.
+    ///
+    /// The arrow is rasterised once rather than per frame, so it is rebuilt
+    /// whenever the settings behind it change - see [`Spectre::refresh_cursor`].
+    fn build_cursor(config: &Config) -> crate::render::CursorImage {
+        let palette = &config.theme.palette;
+        let (fill, outline) = config.input.cursor.colors(palette.text, palette.base);
+        crate::render::CursorImage::new(config.input.cursor.height(config.display.scale), fill, outline)
+    }
+
+    /// Rebuild the pointer after the config changed, if it would look different.
+    pub fn refresh_cursor(&mut self, previous: &Config) {
+        let palette = |c: &Config| c.theme.palette.clone();
+        let unchanged = previous.input.cursor == self.config.input.cursor
+            && previous.display.scale == self.config.display.scale
+            && palette(previous) == palette(&self.config);
+        if unchanged && self.cursor.is_some() {
+            return;
+        }
+        self.cursor = Some(Self::build_cursor(&self.config));
+        self.mark_dirty();
     }
 
     /// Current animation phase of the window/panel pattern.

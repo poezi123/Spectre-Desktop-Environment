@@ -4,6 +4,7 @@
 //! the freedesktop defaults so an empty config behaves like every other desktop.
 
 use serde::{Deserialize, Serialize};
+use spectre_theme::Color;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -92,16 +93,106 @@ impl Pointer {
     }
 }
 
+/// The pointer Spectre draws when no client has asked for one of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Cursor {
+    /// Height of the arrow in logical pixels.
+    pub size: u32,
+    /// Fill colour. Unset takes the theme's text colour, which is what makes
+    /// the pointer legible over Spectre's own dark surfaces.
+    pub fill: Option<Color>,
+    /// Outline colour. Unset takes the theme's background.
+    pub outline: Option<Color>,
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self { size: 24, fill: None, outline: None }
+    }
+}
+
+impl Cursor {
+    /// Below the minimum the arrow is not a shape any more; above the maximum
+    /// it is a graphic rather than a pointer.
+    pub const MIN_SIZE: u32 = 8;
+    pub const MAX_SIZE: u32 = 96;
+
+    /// Height in device pixels on an output of this scale.
+    pub fn height(&self, scale: f64) -> i32 {
+        let size = self.size.clamp(Self::MIN_SIZE, Self::MAX_SIZE) as f64;
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        ((size * scale).round() as i32).max(Self::MIN_SIZE as i32)
+    }
+
+    /// The two colours to draw with, falling back to `fill` and `outline` when
+    /// the config leaves them out.
+    pub fn colors(&self, fill: Color, outline: Color) -> (Color, Color) {
+        (self.fill.unwrap_or(fill), self.outline.unwrap_or(outline))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Input {
     pub keyboard: Keyboard,
     pub pointer: Pointer,
+    pub cursor: Cursor,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cursor_is_smaller_than_the_arrow_spectre_used_to_draw() {
+        assert_eq!(Cursor::default().height(1.0), 24);
+    }
+
+    #[test]
+    fn the_cursor_grows_with_the_output_scale() {
+        assert_eq!(Cursor::default().height(2.0), 48);
+        assert_eq!(Cursor { size: 30, ..Default::default() }.height(1.5), 45);
+    }
+
+    #[test]
+    fn an_unusable_cursor_size_is_clamped_rather_than_obeyed() {
+        assert_eq!(Cursor { size: 0, ..Default::default() }.height(1.0), Cursor::MIN_SIZE as i32);
+        assert_eq!(
+            Cursor { size: 4000, ..Default::default() }.height(1.0),
+            Cursor::MAX_SIZE as i32
+        );
+    }
+
+    #[test]
+    fn a_nonsense_scale_leaves_the_size_alone() {
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(Cursor::default().height(scale), 24, "scale {scale}");
+        }
+    }
+
+    #[test]
+    fn colours_fall_back_to_the_theme_and_the_config_wins() {
+        let theme = (Color::hex(0xffffff), Color::hex(0x000000));
+        assert_eq!(Cursor::default().colors(theme.0, theme.1), theme);
+        let cursor = Cursor { fill: Some(Color::hex(0xff0000)), ..Default::default() };
+        assert_eq!(cursor.colors(theme.0, theme.1), (Color::hex(0xff0000), theme.1));
+    }
+
+    #[test]
+    fn a_config_without_a_cursor_section_still_parses() {
+        let input: Input = toml::from_str("[pointer]\naccel-speed = 0.5\n").unwrap();
+        assert_eq!(input.cursor, Cursor::default());
+    }
+
+    #[test]
+    fn the_cursor_reads_its_colours_as_hex() {
+        let input: Input =
+            toml::from_str("[cursor]\nsize = 16\nfill = \"#101010\"\n").unwrap();
+        assert_eq!(input.cursor.size, 16);
+        assert_eq!(input.cursor.fill, Some(Color::hex(0x101010)));
+        assert_eq!(input.cursor.outline, None);
+    }
 
     #[test]
     fn empty_xkb_fields_become_none() {

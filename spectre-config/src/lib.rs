@@ -23,7 +23,7 @@ pub mod profile;
 pub use desktop::{Desktop, WallpaperMode};
 pub use display::Display;
 pub use effects::{Effects, WorkspaceTransition};
-pub use input::{Input, Keyboard, Pointer};
+pub use input::{Cursor, Input, Keyboard, Pointer};
 pub use keybind::{Action, Direction, Keybind, Keybinds, Modifiers};
 pub use profile::Profile;
 

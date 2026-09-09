@@ -312,7 +312,8 @@ impl Spectre {
         let display_changed = self.config.display != config.display;
         let desktop_changed = self.config.desktop != config.desktop;
         let panel_was_on = self.config.panel.enabled;
-        self.config = config;
+        let previous = std::mem::replace(&mut self.config, config);
+        self.refresh_cursor(&previous);
         if display_changed {
             self.mark_display_dirty();
         }

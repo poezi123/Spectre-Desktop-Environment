@@ -55,6 +55,15 @@ natural-scroll = false
 tap-to-click = true
 focus-follows-mouse = false
 
+[input.cursor]
+# Spectre draws its own pointer wherever a program has not set one.
+# Height of the arrow in logical pixels, 8 to 96.
+size = 24
+# Leave the colours out to follow the theme: text colour inside, background
+# outside. Set them to any hex colour, e.g. fill = "#000000" for a dark pointer.
+# fill = "#e6f2f5"
+# outline = "#07090c"
+
 [panel]
 enabled = true
 # top | bottom | left | right
