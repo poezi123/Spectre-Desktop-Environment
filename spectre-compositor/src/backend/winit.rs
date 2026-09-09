@@ -229,13 +229,20 @@ fn draw(
 ) -> anyhow::Result<()> {
     let elements = {
         let renderer = backend.renderer();
-        output_elements(state, output, renderer, shader, cache)
+        let elements = output_elements(state, output, renderer, shader, cache);
+        crate::render::dump_scene(&elements, output.current_scale().fractional_scale());
+        elements
     };
 
     // Bind first: querying the buffer age before the surface is current makes
     // EGL complain about a bad surface on the very first frame.
+    // How many frames back the buffer we are about to draw into was last shown.
+    // Zero means "assume it holds nothing we can reuse", which repaints the
+    // whole output - every frame, for every reason, however small the change.
+    // The real backend has followed the buffer age all along; asking for it
+    // here is what makes a nested Spectre worth measuring.
+    let age = backend.buffer_age().unwrap_or(0);
     let (renderer, mut framebuffer) = backend.bind()?;
-    let age = 0;
     let result = damage_tracker.render_output(renderer, &mut framebuffer, age, &elements, [0.0; 4])?;
     drop(framebuffer);
 

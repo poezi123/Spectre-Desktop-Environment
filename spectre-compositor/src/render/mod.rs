@@ -206,6 +206,28 @@ fn build_output_elements(
     elements
 }
 
+/// `SPECTRE_DUMP_SCENE=1` lists what a frame is made of, once per frame.
+///
+/// Worth keeping: it is what settles whether a missing piece of the screen was
+/// never handed to the renderer or was handed over and lost, and whether an
+/// element the desktop is hiding behind still claims to be opaque.
+pub fn dump_scene(elements: &[SpectreElement], scale: f64) {
+    if std::env::var_os("SPECTRE_DUMP_SCENE").is_none() {
+        return;
+    }
+    use smithay::backend::renderer::element::Element;
+    let scale = Scale::from(scale);
+    for (i, element) in elements.iter().enumerate() {
+        tracing::debug!(
+            i,
+            geo = ?element.geometry(scale),
+            opaque = element.opaque_regions(scale).len(),
+            "scene element"
+        );
+    }
+    tracing::debug!(count = elements.len(), "scene end");
+}
+
 /// The desktop pattern, drawn from the field baked into a texture.
 ///
 /// `None` when there is no pattern to draw, no shader to colour it with, or the
