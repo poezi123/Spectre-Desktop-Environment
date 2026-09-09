@@ -93,6 +93,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
                     state.workspaces.map_output(&output, (0, 0).into());
                     state.refresh_wallpaper(mode.size.w, mode.size.h);
                     state.reflow_output(&output);
+                    state.mark_dirty();
                 }
                 WinitEvent::Input(event) => state.handle_input(event),
                 WinitEvent::CloseRequested => state.stop(),
@@ -122,6 +123,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
             }
 
             if state.take_dirty() {
+                count_frame();
                 if let Err(err) = draw(
                     state,
                     &mut backend,
@@ -146,6 +148,28 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     })?;
 
     Ok(())
+}
+
+/// How many frames the nested backend really draws, once a second.
+///
+/// The same instrumentation the real backend has. Frames per second is the
+/// number that says whether a change to pacing did anything, and guessing at it
+/// from CPU alone has been wrong more than once.
+fn count_frame() {
+    use std::cell::Cell;
+    thread_local! {
+        static COUNT: Cell<u32> = const { Cell::new(0) };
+        static SINCE: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    }
+    COUNT.with(|c| c.set(c.get() + 1));
+    SINCE.with(|since| {
+        let start = since.get().unwrap_or_else(std::time::Instant::now);
+        since.set(Some(start));
+        if start.elapsed() >= Duration::from_secs(1) {
+            tracing::trace!(fps = COUNT.with(|c| c.replace(0)), "frames drawn in the last second");
+            since.set(Some(std::time::Instant::now()));
+        }
+    });
 }
 
 /// Publish the `zwp_linux_dmabuf_v1` global.
