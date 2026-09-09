@@ -1,23 +1,14 @@
-//! Keyboard, pointer and touchpad settings.
-//!
-//! These map onto libinput device options and the xkb rule set. Defaults follow
-//! the freedesktop defaults so an empty config behaves like every other desktop.
-
 use serde::{Deserialize, Serialize};
 use spectre_theme::Color;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Keyboard {
-    /// xkb layout, e.g. `"de"` or `"us,de"`.
     pub layout: String,
     pub variant: String,
     pub model: String,
-    /// xkb options, e.g. `"grp:alt_shift_toggle,caps:escape"`.
     pub options: String,
-    /// Milliseconds held before a key starts repeating.
     pub repeat_delay: u32,
-    /// Repeats per second once repeating has started.
     pub repeat_rate: u32,
 }
 
@@ -35,12 +26,10 @@ impl Default for Keyboard {
 }
 
 impl Keyboard {
-    /// libinput/xkb wants an unset field as `None`, not as an empty string.
     pub fn xkb_field(value: &str) -> Option<&str> {
         (!value.trim().is_empty()).then_some(value)
     }
 
-    /// Repeat rate clamped into the range Wayland clients can represent.
     pub fn sane_repeat(&self) -> (u32, u32) {
         (self.repeat_delay.clamp(100, 2000), self.repeat_rate.clamp(1, 100))
     }
@@ -57,17 +46,13 @@ pub enum AccelProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Pointer {
-    /// libinput acceleration, -1.0..=1.0.
     pub accel_speed: f64,
     pub accel_profile: AccelProfile,
     pub natural_scroll: bool,
     pub left_handed: bool,
-    /// Touchpad tap-to-click.
     pub tap_to_click: bool,
-    /// Touchpad two-finger tap emits a right click.
     pub tap_and_drag: bool,
     pub disable_while_typing: bool,
-    /// Pointer focus follows the mouse without a click.
     pub focus_follows_mouse: bool,
 }
 
@@ -87,22 +72,16 @@ impl Default for Pointer {
 }
 
 impl Pointer {
-    /// Acceleration clamped to what libinput accepts.
     pub fn sane_accel(&self) -> f64 {
         self.accel_speed.clamp(-1.0, 1.0)
     }
 }
 
-/// The pointer Spectre draws when no client has asked for one of its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Cursor {
-    /// Height of the arrow in logical pixels.
     pub size: u32,
-    /// Fill colour. Unset takes the theme's text colour, which is what makes
-    /// the pointer legible over Spectre's own dark surfaces.
     pub fill: Option<Color>,
-    /// Outline colour. Unset takes the theme's background.
     pub outline: Option<Color>,
 }
 
@@ -113,20 +92,15 @@ impl Default for Cursor {
 }
 
 impl Cursor {
-    /// Below the minimum the arrow is not a shape any more; above the maximum
-    /// it is a graphic rather than a pointer.
     pub const MIN_SIZE: u32 = 8;
     pub const MAX_SIZE: u32 = 96;
 
-    /// Height in device pixels on an output of this scale.
     pub fn height(&self, scale: f64) -> i32 {
         let size = self.size.clamp(Self::MIN_SIZE, Self::MAX_SIZE) as f64;
         let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         ((size * scale).round() as i32).max(Self::MIN_SIZE as i32)
     }
 
-    /// The two colours to draw with, falling back to `fill` and `outline` when
-    /// the config leaves them out.
     pub fn colors(&self, fill: Color, outline: Color) -> (Color, Color) {
         (self.fill.unwrap_or(fill), self.outline.unwrap_or(outline))
     }

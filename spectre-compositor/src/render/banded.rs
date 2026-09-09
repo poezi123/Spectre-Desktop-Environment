@@ -1,24 +1,11 @@
-//! Restricting an element's damage to the band it actually paints.
-//!
-//! The window frame is one element the size of the whole window, because the
-//! rounded corners and the border need the full rectangle to measure against.
-//! Only the title bar has anything moving in it, though, and reporting the
-//! whole window as damaged makes every animated frame recomposite the client's
-//! surface underneath - hundreds of thousands of pixels for a strip of
-//! twenty-odd. The band is what changed; the rest is redrawn only when the
-//! element itself moves or is resized.
-
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Transform};
 
-/// Wraps an element so only part of it is reported as damaged.
 #[derive(Debug)]
 pub struct Banded<E> {
     element: E,
-    /// The part that changes, in coordinates local to the element. `None`
-    /// reports whatever the element itself reports.
     band: Option<Rectangle<i32, Physical>>,
 }
 
@@ -27,7 +14,6 @@ impl<E: Element> Banded<E> {
         Self { element, band }
     }
 
-    /// Report everything, for an element that paints all of itself.
     pub fn whole(element: E) -> Self {
         Self { element, band: None }
     }
@@ -64,8 +50,6 @@ impl<E: Element> Element for Banded<E> {
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
         let damage = self.element.damage_since(scale, commit);
-        // An element the tracker has not seen before has to be drawn whole,
-        // whatever the band says, or the first frame comes up with holes.
         let Some(band) = self.band.filter(|_| commit.is_some()) else {
             return damage;
         };
@@ -115,7 +99,6 @@ mod tests {
         Rectangle::new((x, y).into(), (w, h).into())
     }
 
-    /// An element that has changed since the tracker last looked at it.
     fn element() -> SolidColorRenderElement {
         let mut commit = CommitCounter::default();
         commit.increment();
@@ -128,7 +111,6 @@ mod tests {
         )
     }
 
-    /// What the tracker saw last time: one commit behind.
     fn last_seen() -> Option<CommitCounter> {
         Some(CommitCounter::default())
     }

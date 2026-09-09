@@ -1,30 +1,17 @@
-//! The notification model.
-//!
-//! Everything here is pure: what a notification is, how long it lives, and how
-//! the stack behaves when more arrive than fit. The D-Bus plumbing and the
-//! drawing are elsewhere, so the rules that decide whether a critical alert can
-//! be missed are testable on their own.
-
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-/// Server-assigned notification id. `0` is never handed out: the spec uses it
-/// to mean "this is a new notification, not a replacement".
 pub type Id = u32;
 
-/// How loudly the sender wants to interrupt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Urgency {
     Low,
     #[default]
     Normal,
-    /// Must not disappear on its own. Errors, low battery, failed backups.
     Critical,
 }
 
 impl Urgency {
-    /// Decode the `urgency` hint. Anything unrecognised is Normal, because a
-    /// sender with a broken hint should still be heard.
     pub fn from_hint(value: u8) -> Self {
         match value {
             0 => Urgency::Low,
@@ -33,28 +20,22 @@ impl Urgency {
         }
     }
 
-    /// How long a notification of this urgency stays up by default.
     pub fn default_timeout(self) -> Option<Duration> {
         match self {
             Urgency::Low => Some(Duration::from_secs(4)),
             Urgency::Normal => Some(Duration::from_secs(7)),
-            // The spec is explicit: critical notifications are never expired
-            // by the server. Dismissing one has to be a deliberate act.
             Urgency::Critical => None,
         }
     }
 }
 
-/// One notification on screen.
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub id: Id,
-    /// The sending application's name, shown above the summary.
     pub app_name: String,
     pub summary: String,
     pub body: String,
     pub urgency: Urgency,
-    /// When it should disappear. `None` means it stays until dismissed.
     pub expires_at: Option<Instant>,
 }
 
@@ -63,32 +44,19 @@ impl Notification {
         self.expires_at.is_some_and(|deadline| now >= deadline)
     }
 
-    /// Time until this one expires, for scheduling the next wake-up.
     pub fn time_left(&self, now: Instant) -> Option<Duration> {
         self.expires_at.map(|deadline| deadline.saturating_duration_since(now))
     }
 }
 
-/// Resolve the `expire_timeout` argument of `Notify`.
-///
-/// The spec defines `-1` as "server decides" and `0` as "never expire".
-/// Anything else is milliseconds. A critical notification ignores a positive
-/// timeout only when the sender did not ask for one, so an application that
-/// really wants its error to fade can still say so.
 pub fn resolve_timeout(expire_timeout: i32, urgency: Urgency, now: Instant) -> Option<Instant> {
     match expire_timeout {
         0 => None,
         ms if ms > 0 => Some(now + Duration::from_millis(ms as u64)),
-        // Negative: the server chooses.
         _ => urgency.default_timeout().map(|d| now + d),
     }
 }
 
-/// Strip the small HTML subset the spec allows from a body.
-///
-/// The panel draws plain text, and showing `<b>Warning</b>` verbatim would be
-/// worse than showing `Warning`. Entities are decoded too, since senders escape
-/// ampersands in otherwise plain text.
 pub fn strip_markup(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut in_tag = false;
@@ -108,7 +76,6 @@ pub fn strip_markup(body: &str) -> String {
                     "gt" => out.push('>'),
                     "quot" => out.push('"'),
                     "apos" => out.push('\''),
-                    // Not an entity we know: put it back exactly as written.
                     _ => {
                         out.push('&');
                         out.push_str(&name);
@@ -117,7 +84,6 @@ pub fn strip_markup(body: &str) -> String {
                 }
             }
             _ => match entity.as_mut() {
-                // An unterminated entity is just text.
                 Some(name) if name.len() > 12 => {
                     out.push('&');
                     out.push_str(name);
@@ -137,11 +103,6 @@ pub fn strip_markup(body: &str) -> String {
     out
 }
 
-/// Hands out notification ids.
-///
-/// Lives apart from the [`Stack`] because `Notify` has to return an id
-/// synchronously on the D-Bus thread, while the stack itself belongs to the
-/// thread that draws.
 #[derive(Debug)]
 pub struct IdAllocator(AtomicU32);
 
@@ -156,33 +117,23 @@ impl IdAllocator {
         Self(AtomicU32::new(1))
     }
 
-    /// The next id. Never `0`, and never repeated within a session, so a late
-    /// `CloseNotification` for something already dismissed cannot hit a newer
-    /// notification instead.
     pub fn next(&self) -> Id {
         let id = self.0.fetch_add(1, Ordering::Relaxed);
         if id == 0 {
-            // Wrapped after four billion notifications. Skipping zero is all
-            // that is needed to keep the protocol's "new notification" marker
-            // distinguishable.
             return self.0.fetch_add(1, Ordering::Relaxed);
         }
         id
     }
 }
 
-/// The notifications currently on screen.
 #[derive(Debug)]
 pub struct Stack {
     items: Vec<Notification>,
     capacity: usize,
 }
 
-/// A few accessors here are read only by the tests and by the notification
-/// history that is still to come.
 #[allow(dead_code)]
 impl Stack {
-    /// `capacity` is how many are shown at once; older ones are dropped first.
     pub fn new(capacity: usize) -> Self {
         Self { items: Vec::new(), capacity: capacity.max(1) }
     }
@@ -199,10 +150,6 @@ impl Stack {
         self.items.len()
     }
 
-    /// Add a notification, or replace one when `replaces_id` names a live one.
-    ///
-    /// `notification.id` must already be allocated. Returns the id the
-    /// notification ended up with, which is `replaces_id` when it replaced one.
     pub fn push(&mut self, mut notification: Notification, replaces_id: Id) -> Id {
         if replaces_id != 0 {
             if let Some(existing) = self.items.iter_mut().find(|n| n.id == replaces_id) {
@@ -215,8 +162,6 @@ impl Stack {
         let id = notification.id;
         self.items.push(notification);
 
-        // Overflow drops the oldest non-critical one first: a critical alert
-        // must not be pushed off screen by a stream of chat messages.
         while self.items.len() > self.capacity {
             let victim = self
                 .items
@@ -228,14 +173,12 @@ impl Stack {
         id
     }
 
-    /// Remove a notification. Returns `true` if it was there.
     pub fn close(&mut self, id: Id) -> bool {
         let before = self.items.len();
         self.items.retain(|n| n.id != id);
         self.items.len() != before
     }
 
-    /// Drop everything that has timed out, returning their ids.
     pub fn expire(&mut self, now: Instant) -> Vec<Id> {
         let expired: Vec<Id> =
             self.items.iter().filter(|n| n.is_expired(now)).map(|n| n.id).collect();
@@ -243,18 +186,14 @@ impl Stack {
         expired
     }
 
-    /// How long until the next one expires, for the timer.
     pub fn next_deadline(&self, now: Instant) -> Option<Duration> {
         self.items.iter().filter_map(|n| n.time_left(now)).min()
     }
 
-    /// The notification at a stack position, topmost first.
     pub fn get(&self, index: usize) -> Option<&Notification> {
-        // Drawn newest-first, so index 0 is the last one pushed.
         self.items.iter().rev().nth(index)
     }
 
-    /// Newest first, which is the order they are drawn in.
     pub fn newest_first(&self) -> impl Iterator<Item = &Notification> {
         self.items.iter().rev()
     }
@@ -275,7 +214,6 @@ mod tests {
         }
     }
 
-    /// A notification with a fresh id from a per-test allocator.
     fn note(urgency: Urgency, now: Instant, timeout: i32) -> Notification {
         use std::sync::LazyLock;
         static IDS: LazyLock<IdAllocator> = LazyLock::new(IdAllocator::new);
@@ -337,7 +275,6 @@ mod tests {
 
     #[test]
     fn an_unterminated_tag_does_not_eat_the_rest() {
-        // Malformed input must not silently blank a notification.
         assert_eq!(strip_markup("<b>hello"), "hello");
     }
 

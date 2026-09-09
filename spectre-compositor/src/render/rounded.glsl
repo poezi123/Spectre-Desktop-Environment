@@ -1,10 +1,3 @@
-// Rounds the corners of a client surface.
-//
-// Installed as a texture shader override while one window's surfaces are drawn,
-// so the window's own rectangle - not each surface's - decides where the
-// corners are. A subsurface that reaches into a corner is therefore clipped by
-// the same curve as the toplevel.
-
 //_DEFINES_
 
 #if defined(EXTERNAL)
@@ -26,12 +19,9 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// Size of the element being drawn, in device pixels.
 uniform vec2 spectre_size;
-// The window's rectangle in element-local device pixels.
 uniform vec2 spectre_window_min;
 uniform vec2 spectre_window_max;
-// Corner radii: top-left, top-right, bottom-right, bottom-left.
 uniform vec4 spectre_radii;
 
 float sd_round_box(vec2 p, vec2 half_size, float radius) {
@@ -52,8 +42,6 @@ void main() {
     vec2 half_size = (spectre_window_max - spectre_window_min) * 0.5;
     vec2 p = px - centre;
 
-    // Pick the radius belonging to the quadrant this fragment is in, so the
-    // top corners can stay square under a title bar while the bottom ones round.
     float radius = p.x < 0.0
         ? (p.y < 0.0 ? spectre_radii.x : spectre_radii.w)
         : (p.y < 0.0 ? spectre_radii.y : spectre_radii.z);

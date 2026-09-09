@@ -1,10 +1,3 @@
-//! Performance profiles.
-//!
-//! A profile is a preset over the effect switches, never over functionality:
-//! per the project principles, switching to `Performance` may remove blur and
-//! 3D workspace transitions, but it must never remove a window button, a
-//! keybinding or a panel widget.
-
 use serde::{Deserialize, Serialize};
 use spectre_theme::{Pattern, Theme};
 
@@ -13,14 +6,10 @@ use crate::effects::{Effects, WorkspaceTransition};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Profile {
-    /// Old laptops, VMs and low-power hardware.
     Performance,
-    /// The intended default.
     #[default]
     Balanced,
-    /// Modern hardware — everything on.
     Spectre,
-    /// Nothing is forced; the `[effects]` section is taken verbatim.
     Custom,
 }
 
@@ -37,7 +26,6 @@ impl Profile {
         }
     }
 
-    /// The effect set this profile prescribes, or `None` for [`Profile::Custom`].
     pub fn effects(self) -> Option<Effects> {
         Some(match self {
             Profile::Performance => Effects {
@@ -71,12 +59,6 @@ impl Profile {
         })
     }
 
-    /// Apply the profile's pattern policy to a theme.
-    ///
-    /// Patterns are always drawn; profiles only decide whether they move.
-    /// `Balanced` freezes the contour field - four octaves of noise per pixel
-    /// per frame is what costs on weak hardware - but keeps the colours
-    /// cycling, which is nearly free. `Performance` stops both.
     pub fn apply_to_theme(self, theme: Theme) -> Theme {
         match self {
             Profile::Performance => theme.without_animation(),

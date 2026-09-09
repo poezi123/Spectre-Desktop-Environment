@@ -1,9 +1,3 @@
-//! The category column of the application menu.
-//!
-//! Categories come from the freedesktop main categories in a `.desktop` file's
-//! `Categories=` key. Anything that matches none of them lands in `Other`, so
-//! every installed application is reachable from some category.
-
 use crate::entry::Entry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +46,6 @@ impl Category {
         }
     }
 
-    /// The `Categories=` tokens that put an entry in this category.
     fn tokens(self) -> &'static [&'static str] {
         match self {
             Category::All => &[],
@@ -84,12 +77,10 @@ impl Category {
     }
 }
 
-/// The entries in `category`, keeping the order they came in.
 pub fn filter(category: Category, entries: &[Entry]) -> Vec<&Entry> {
     entries.iter().filter(|e| category.contains(e)).collect()
 }
 
-/// Categories that actually have something in them, plus `All`.
 pub fn populated(entries: &[Entry]) -> Vec<Category> {
     Category::ALL
         .into_iter()

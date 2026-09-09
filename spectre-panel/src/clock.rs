@@ -1,22 +1,13 @@
-//! The panel clock.
-//!
-//! Kept apart from the drawing so the formatting can be tested without a font,
-//! a Wayland connection or a particular machine's time zone.
-
 use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
-/// The two lines the clock widget shows.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Clock {
-    /// `HH:MM`.
     pub time: String,
-    /// `DD.MM.YY`.
     pub date: String,
 }
 
 impl Clock {
-    /// Format an instant for display.
     pub fn from_datetime(now: OffsetDateTime) -> Self {
         let time_format = format_description!("[hour]:[minute]");
         let date_format = format_description!("[day].[month].[year repr:last_two]");
@@ -26,11 +17,6 @@ impl Clock {
         }
     }
 
-    /// The current local time.
-    ///
-    /// Falls back to UTC when the local offset cannot be determined, which is
-    /// better than a blank clock; the panel is single threaded, so the usual
-    /// reason for that failure does not apply here.
     pub fn now() -> Self {
         let now = OffsetDateTime::now_utc();
         let local = UtcOffset::current_local_offset()
@@ -60,8 +46,6 @@ mod tests {
 
     #[test]
     fn both_lines_keep_a_constant_width() {
-        // A clock that changes width makes the whole panel shuffle every
-        // minute, so the format has to be fixed-width.
         let a = Clock::from_datetime(datetime!(2026-01-01 01:01 UTC));
         let b = Clock::from_datetime(datetime!(2026-12-31 23:59 UTC));
         assert_eq!(a.time.len(), b.time.len());

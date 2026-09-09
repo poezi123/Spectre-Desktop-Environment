@@ -1,8 +1,3 @@
-//! The desktop wallpaper.
-//!
-//! Decoded once, scaled to the output on the CPU and handed to the renderer as
-//! a memory buffer, so only one copy at output resolution is ever kept.
-
 use image::imageops::FilterType;
 use image::GenericImageView;
 use smithay::backend::allocator::Fourcc;
@@ -12,9 +7,7 @@ use spectre_config::WallpaperMode;
 
 pub struct Wallpaper {
     pub buffer: MemoryRenderBuffer,
-    /// The output size it was prepared for.
     pub size: (i32, i32),
-    /// What it was prepared from, so a reload can skip identical work.
     pub source: (std::path::PathBuf, WallpaperMode),
 }
 
@@ -25,7 +18,6 @@ impl std::fmt::Debug for Wallpaper {
 }
 
 impl Wallpaper {
-    /// Decode `path` and fit it to a `width` x `height` output.
     pub fn load(
         path: &std::path::Path,
         mode: WallpaperMode,
@@ -59,7 +51,6 @@ impl Wallpaper {
         })
     }
 
-    /// Whether this wallpaper still matches what is configured.
     pub fn matches(
         &self,
         path: &std::path::Path,
@@ -71,7 +62,6 @@ impl Wallpaper {
     }
 }
 
-/// Scale and crop `image` into a `width` x `height` `Argb8888` buffer.
 fn fit(image: image::DynamicImage, mode: WallpaperMode, width: u32, height: u32) -> Vec<u8> {
     let (iw, ih) = image.dimensions();
     let scale = match mode {
@@ -94,8 +84,6 @@ fn fit(image: image::DynamicImage, mode: WallpaperMode, width: u32, height: u32)
     let (sw, sh) = scaled.dimensions();
     let rgba = scaled.to_rgba8();
     let raw = rgba.as_raw();
-    // Centre the scaled image on the output; whatever falls outside is cropped,
-    // whatever is missing stays black.
     let offset_x = (width as i64 - sw as i64) / 2;
     let offset_y = (height as i64 - sh as i64) / 2;
 
@@ -113,7 +101,6 @@ fn fit(image: image::DynamicImage, mode: WallpaperMode, width: u32, height: u32)
             let src = (src_y as usize * sw as usize + src_x as usize) * 4;
             let dst = (y as usize * width as usize + x as usize) * 4;
             let (r, g, b, a) = (raw[src], raw[src + 1], raw[src + 2], raw[src + 3]);
-            // Argb8888 is [B, G, R, A] in memory, premultiplied.
             let m = |c: u8| ((c as u16 * a as u16) / 255) as u8;
             out[dst] = m(b);
             out[dst + 1] = m(g);

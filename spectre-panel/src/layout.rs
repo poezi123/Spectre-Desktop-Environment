@@ -1,80 +1,45 @@
-//! Where each panel widget goes.
-//!
-//! Pure geometry: it takes the desktop state and a way to measure text, and
-//! returns rectangles. Keeping it free of both fonts and Wayland is what makes
-//! the layout testable, and it is the same list the click handler searches, so
-//! what is drawn and what is clickable cannot drift apart.
-
 use spectre_ipc::{Desktop, WindowId};
 
 use spectre_draw::Rect;
 
-/// Horizontal padding at the panel's ends.
 pub const EDGE_PADDING: i32 = 6;
-/// Gap between adjacent items.
 pub const GAP: i32 = 4;
-/// Extra width inside a text chip, split evenly left and right.
 pub const CHIP_PADDING: i32 = 10;
-/// Width of a square button.
 pub const BUTTON_WIDTH: i32 = 30;
-/// Width of a workspace pip.
 pub const WORKSPACE_WIDTH: i32 = 26;
-/// Widest a single task chip may get before its title is ellipsised.
 pub const TASK_MAX_WIDTH: i32 = 190;
-/// Narrowest a task chip may shrink to before tasks start being dropped.
 pub const TASK_MIN_WIDTH: i32 = 56;
-/// Height of a workspace pip on a vertical panel.
 pub const WORKSPACE_HEIGHT: i32 = 26;
-/// Height of the stacked CPU/memory readout on a vertical panel.
 pub const RESOURCES_HEIGHT: i32 = 30;
-/// Height of the stacked clock on a vertical panel.
 pub const CLOCK_HEIGHT: i32 = 34;
 
-/// Something the panel draws and, mostly, something the user can click.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    /// Opens the launcher.
     Launcher,
-    /// Switches to a workspace. Carries the 1-based index.
     Workspace { index: u8, active: bool, occupied: bool },
-    /// Focuses a window, or minimises it when it is already focused.
     Task { id: WindowId, title: String, focused: bool, minimized: bool },
-    /// CPU and memory readout.
     Resources,
-    /// Time and date.
     Clock,
-    /// Ends the session.
     Session,
 }
 
 impl Item {
-    /// Whether clicking does anything.
     pub fn is_interactive(&self) -> bool {
         !matches!(self, Item::Resources | Item::Clock)
     }
 }
 
-/// An item with the rectangle it occupies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
     pub item: Item,
     pub rect: Rect,
 }
 
-/// The text a widget needs measured before it can be placed.
 pub struct Measured {
-    /// Width of the clock's widest line.
     pub clock: i32,
-    /// Width of the resource readout.
     pub resources: i32,
 }
 
-/// Lay the panel out across `width` pixels.
-///
-/// `title_width` measures a task title so chips can be sized to their content.
-/// Tasks are the only elastic part: everything else keeps its size and the
-/// tasks share what is left, shrinking and then dropping off the end rather
-/// than pushing the clock off the panel.
 pub fn layout(
     width: i32,
     height: i32,
@@ -106,7 +71,6 @@ pub fn layout(
     }
     let tasks_start = cursor;
 
-    // The right-hand cluster is placed from the edge inwards.
     let mut right = Vec::new();
     let mut edge = width - EDGE_PADDING;
     let push_right = |items: &mut Vec<Placed>, edge: &mut i32, item: Item, w: i32| {
@@ -129,11 +93,6 @@ pub fn layout(
     items
 }
 
-/// Lay a vertical panel out down `length` pixels.
-///
-/// Nothing is elastic here: a panel on its edge is only as wide as one button,
-/// so every widget is a square stacked under the last and the titles give way
-/// to initials. Tasks take what is left between the workspaces and the clock.
 pub fn layout_vertical(
     thickness: i32,
     length: i32,
@@ -198,7 +157,6 @@ pub fn layout_vertical(
     items
 }
 
-/// Fit as many task chips as will go between `start` and `end`.
 fn place_tasks(
     desktop: &Desktop,
     start: i32,
@@ -216,8 +174,6 @@ fn place_tasks(
         return Vec::new();
     }
 
-    // Give every chip what its title needs, capped; if that does not fit,
-    // share the space evenly instead of letting one long title win.
     let natural: Vec<i32> = tasks
         .iter()
         .map(|w| (title_width(&w.title) + CHIP_PADDING).clamp(TASK_MIN_WIDTH, TASK_MAX_WIDTH))
@@ -235,7 +191,6 @@ fn place_tasks(
     let mut cursor = start;
     for (window, width) in tasks.iter().zip(widths) {
         if width < TASK_MIN_WIDTH || cursor + width > end {
-            // Out of room: drop the rest rather than draw a sliver.
             break;
         }
         placed.push(Placed {
@@ -252,7 +207,6 @@ fn place_tasks(
     placed
 }
 
-/// The item at a panel-local point, if any.
 pub fn item_at(items: &[Placed], x: i32, y: i32) -> Option<&Placed> {
     items.iter().find(|p| p.rect.contains(x, y))
 }

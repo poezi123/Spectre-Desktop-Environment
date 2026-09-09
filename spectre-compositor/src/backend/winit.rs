@@ -1,9 +1,3 @@
-//! Nested backend.
-//!
-//! Runs the whole compositor inside a window of an existing Wayland or X11
-//! session. This is the development loop and the VM smoke test: it exercises
-//! the same state, handlers and renderer as the real session, minus KMS.
-
 use std::time::Duration;
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -19,9 +13,6 @@ use spectre_config::Config;
 use crate::render::{output_elements, PatternShader, RenderCache};
 use crate::state::Spectre;
 
-/// Nominal frame interval. The nested window has no vblank to follow, so the
-/// compositor paces itself; 60 Hz is plenty for an ambient pattern and keeps
-/// idle CPU low on the low-end machines Spectre targets.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 pub fn run(config: Config) -> anyhow::Result<()> {
@@ -73,8 +64,6 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         state.spawn(&command);
     }
 
-    // A timer drives redraws; input and Wayland traffic wake the loop on their
-    // own, and `mark_dirty` short-circuits the "nothing changed" case.
     let mut winit_events = winit_events;
     let timer = Timer::immediate();
     event_loop
@@ -101,11 +90,8 @@ pub fn run(config: Config) -> anyhow::Result<()> {
                 WinitEvent::Focus(_) => {}
             });
 
-            // The window closing arrives as `CloseRequested`, which already
-            // stops the loop; anything else here would just duplicate it.
             let _ = status;
 
-            // Resolve dmabuf imports now that the renderer is reachable.
             if !state.pending_dmabufs.is_empty() {
                 use smithay::backend::renderer::ImportDma;
                 let renderer = backend.renderer();
@@ -150,11 +136,6 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// How many frames the nested backend really draws, once a second.
-///
-/// The same instrumentation the real backend has. Frames per second is the
-/// number that says whether a change to pacing did anything, and guessing at it
-/// from CPU alone has been wrong more than once.
 fn count_frame() {
     use std::cell::Cell;
     thread_local! {
@@ -172,13 +153,6 @@ fn count_frame() {
     });
 }
 
-/// Publish the `zwp_linux_dmabuf_v1` global.
-///
-/// Clients need more than a format list: Mesa asks the feedback for the DRM
-/// node it should allocate on, and without one it gives up with
-/// `failed to get driver name for fd -1`. So the render node is looked up from
-/// the EGL display and advertised as the main device, with a plain format-only
-/// global as the fallback for drivers that cannot report a node.
 fn init_dmabuf(
     state: &mut Spectre,
     backend: &mut smithay::backend::winit::WinitGraphicsBackend<GlesRenderer>,
@@ -234,13 +208,6 @@ fn draw(
         elements
     };
 
-    // Bind first: querying the buffer age before the surface is current makes
-    // EGL complain about a bad surface on the very first frame.
-    // How many frames back the buffer we are about to draw into was last shown.
-    // Zero means "assume it holds nothing we can reuse", which repaints the
-    // whole output - every frame, for every reason, however small the change.
-    // The real backend has followed the buffer age all along; asking for it
-    // here is what makes a nested Spectre worth measuring.
     let age = backend.buffer_age().unwrap_or(0);
     let (renderer, mut framebuffer) = backend.bind()?;
     let result = damage_tracker.render_output(renderer, &mut framebuffer, age, &elements, [0.0; 4])?;
@@ -253,7 +220,6 @@ fn draw(
         backend.submit(None)?;
     }
 
-    // Tell clients their frame made it to the screen so they can draw the next.
     let time = state.clock.now();
     state.workspaces.active().elements().for_each(|window| {
         window.send_frame(output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));

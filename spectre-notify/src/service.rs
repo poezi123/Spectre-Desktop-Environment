@@ -1,9 +1,3 @@
-//! The `org.freedesktop.Notifications` D-Bus interface.
-//!
-//! zbus runs the interface on its own executor thread; everything it receives
-//! is forwarded to the thread that draws through a calloop channel, so the UI
-//! never has to be thread-safe.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,12 +7,10 @@ use zbus::zvariant::OwnedValue;
 
 use crate::model::{resolve_timeout, strip_markup, Id, IdAllocator, Notification, Urgency};
 
-/// Object path and interface name, both fixed by the specification.
 pub const PATH: &str = "/org/freedesktop/Notifications";
 pub const INTERFACE: &str = "org.freedesktop.Notifications";
 pub const BUS_NAME: &str = "org.freedesktop.Notifications";
 
-/// Why a notification went away, as the spec numbers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
     Expired = 1,
@@ -26,14 +18,12 @@ pub enum CloseReason {
     Requested = 3,
 }
 
-/// What the D-Bus thread sends to the drawing thread.
 #[derive(Debug)]
 pub enum Message {
     Show { notification: Notification, replaces_id: Id },
     Close(Id),
 }
 
-/// The interface implementation.
 pub struct Service {
     tx: Sender<Message>,
     ids: Arc<IdAllocator>,
@@ -47,7 +37,6 @@ impl Service {
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Service {
-    /// Show a notification. Returns the id the caller can later close.
     #[allow(clippy::too_many_arguments)]
     fn notify(
         &self,
@@ -62,8 +51,6 @@ impl Service {
     ) -> u32 {
         let urgency = urgency_from_hints(&hints);
         let now = Instant::now();
-        // The id is allocated here because `Notify` has to answer immediately,
-        // before the drawing thread has even seen the notification.
         let id = self.ids.next();
 
         let notification = Notification {
@@ -78,7 +65,6 @@ impl Service {
         if self.tx.send(Message::Show { notification, replaces_id }).is_err() {
             tracing::warn!("the notification surface is gone; dropping a notification");
         }
-        // A replacement keeps the id the sender already knows.
         if replaces_id != 0 {
             replaces_id
         } else {
@@ -90,9 +76,6 @@ impl Service {
         let _ = self.tx.send(Message::Close(id));
     }
 
-    /// What this server supports. Actions and icons are not implemented yet, so
-    /// they are deliberately not claimed: a sender that is told a capability
-    /// exists will rely on it.
     fn get_capabilities(&self) -> Vec<String> {
         vec![String::from("body"), String::from("body-markup"), String::from("persistence")]
     }
@@ -114,13 +97,10 @@ impl Service {
     ) -> zbus::Result<()>;
 }
 
-/// Read the `urgency` hint, whatever integer type the sender used for it.
 fn urgency_from_hints(hints: &HashMap<String, OwnedValue>) -> Urgency {
     let Some(value) = hints.get("urgency") else {
         return Urgency::Normal;
     };
-    // Senders are inconsistent about the type here; the spec says byte, but
-    // uint32 and int32 both turn up in the wild.
     let raw = u8::try_from(value)
         .ok()
         .or_else(|| u32::try_from(value).ok().map(|v| v.min(255) as u8))
@@ -154,7 +134,6 @@ mod tests {
 
     #[test]
     fn the_urgency_hint_is_read_whatever_integer_type_it_arrives_as() {
-        // The spec says byte; real senders use uint32 and int32 too.
         assert_eq!(urgency_from_hints(&hints(Value::U8(2))), Urgency::Critical);
         assert_eq!(urgency_from_hints(&hints(Value::U32(2))), Urgency::Critical);
         assert_eq!(urgency_from_hints(&hints(Value::I32(0))), Urgency::Low);

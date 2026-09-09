@@ -1,15 +1,3 @@
-//! Visual definitions shared by every Spectre component.
-//!
-//! The compositor, the panel and the settings app all resolve their look from a
-//! single [`Theme`], so a colour only ever has to be changed in one place.
-//!
-//! ```
-//! use spectre_theme::Theme;
-//!
-//! let theme = Theme::default();
-//! assert_eq!(theme.metrics.titlebar_height, 32);
-//! ```
-
 pub mod color;
 pub mod metrics;
 pub mod palette;
@@ -22,22 +10,16 @@ pub use pattern::{Pattern, PatternKind};
 
 use serde::{Deserialize, Serialize};
 
-/// A complete Spectre look: colours, sizes and pattern settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Theme {
     pub palette: Palette,
     pub metrics: Metrics,
-    /// Pattern drawn on window decorations.
     pub window_pattern: Pattern,
-    /// Pattern drawn behind the panel.
     pub panel_pattern: Pattern,
-    /// Pattern drawn on the desktop backdrop. Off by default: it is the largest
-    /// surface on screen and therefore the most expensive one to animate.
     pub desktop_pattern: DesktopPattern,
 }
 
-/// Wrapper so the desktop pattern can default to off while reusing [`Pattern`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DesktopPattern(pub Pattern);
@@ -57,10 +39,6 @@ impl std::ops::Deref for DesktopPattern {
 }
 
 impl Theme {
-    /// Strip every animation while keeping the desktop fully usable.
-    ///
-    /// This is the animation kill switch from the project principles: patterns
-    /// become static instead of vanishing, and no colour or size changes.
     pub fn without_animation(mut self) -> Self {
         self.window_pattern = self.window_pattern.without_animation();
         self.panel_pattern = self.panel_pattern.without_animation();
@@ -68,7 +46,6 @@ impl Theme {
         self
     }
 
-    /// Freeze the contour fields but keep their colours cycling.
     pub fn with_static_lines(mut self) -> Self {
         self.window_pattern = self.window_pattern.with_static_lines();
         self.panel_pattern = self.panel_pattern.with_static_lines();
@@ -76,7 +53,6 @@ impl Theme {
         self
     }
 
-    /// True when any surface needs a new frame every vblank.
     pub fn needs_continuous_redraw(&self) -> bool {
         self.window_pattern.needs_continuous_redraw()
             || self.panel_pattern.needs_continuous_redraw()

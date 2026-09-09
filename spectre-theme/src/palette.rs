@@ -1,56 +1,29 @@
-//! The Spectre palette.
-//!
-//! The constants below were sampled straight out of the concept renders
-//! (`Fensterconcept.png`, `Taskleiste Concept.png`), so the shipped desktop and
-//! the design mockups agree on what "Spectre black" actually is.
-//!
-//! Rule of thumb from the project principles: black first, RGB second. Only
-//! [`Palette::accent`] carries hue; everything structural is a near-black grey.
-
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Color, Gradient};
 
-/// Desktop backdrop. The darkest surface in the system.
 pub const BASE: Color = Color::hex(0x020204);
-/// Window bodies, panel background, menus.
 pub const SURFACE: Color = Color::hex(0x0a0b0d);
-/// Title bars, headers, side bars — one step up from [`SURFACE`].
 pub const ELEVATED: Color = Color::hex(0x101115);
-/// Hovered rows, pressed buttons, tray hover.
 pub const OVERLAY: Color = Color::hex(0x16171c);
-/// Hairlines between regions.
 pub const LINE: Color = Color::hex(0x1c1d23);
-/// Border of an unfocused window.
 pub const BORDER: Color = Color::hex(0x24252c);
-/// Border of the focused window. A lifted neutral rather than an accent: the
-/// colour in Spectre lives in the pattern, not in a ring around every window.
 pub const BORDER_FOCUS: Color = Color::hex(0x3b3d47);
 
-/// Primary text.
 pub const TEXT: Color = Color::hex(0xe6e6ec);
-/// Secondary labels, inactive tabs, clock date line.
 pub const TEXT_DIM: Color = Color::hex(0x8a8a96);
-/// Disabled text and the unfocused title bar caption.
 pub const TEXT_MUTED: Color = Color::hex(0x565662);
 
-/// Accent stops: electric cyan, blue, violet, magenta. Read as a loop - the
-/// pattern cycles through them and wraps magenta back to cyan.
 pub const ACCENT_0: Color = Color::hex(0x00e5ff);
 pub const ACCENT_1: Color = Color::hex(0x2f7bff);
 pub const ACCENT_2: Color = Color::hex(0x9d3cff);
 pub const ACCENT_3: Color = Color::hex(0xff3ce0);
 
-/// Destructive action: the close button and the "Delete" dialog button.
 pub const DANGER: Color = Color::hex(0xd04a57);
 pub const DANGER_HOVER: Color = Color::hex(0xe46c6c);
 pub const WARNING: Color = Color::hex(0xd8a03c);
 pub const SUCCESS: Color = Color::hex(0x3fb98a);
 
-/// The full colour set for one Spectre look.
-///
-/// A theme file overrides any subset of these; everything omitted falls back to
-/// the constants above via [`Default`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Palette {
@@ -66,7 +39,6 @@ pub struct Palette {
     pub text_dim: Color,
     pub text_muted: Color,
 
-    /// Drives focused borders, the active-workspace pip and the panel underline.
     pub accent: Gradient,
 
     pub danger: Color,
@@ -98,12 +70,6 @@ impl Default for Palette {
 }
 
 impl Palette {
-    /// Border colour for a window in the given focus state.
-    ///
-    /// Both are neutral greys. An accent-coloured ring around every window
-    /// turned the desktop into a light show; the accent now lives in the
-    /// pattern inside the title bar, where it reads as material rather than as
-    /// an outline.
     pub fn window_border(&self, focused: bool) -> Color {
         if focused {
             self.border_focus
@@ -112,14 +78,10 @@ impl Palette {
         }
     }
 
-    /// The glow laid over a focused window edge. Intensity is a 0..1 knob from
-    /// the `rgb_glow` setting; `0.0` disables the glow entirely.
     pub fn accent_glow(&self, t: f32, intensity: f32) -> Color {
         self.accent.sample(t).alpha(intensity.clamp(0.0, 1.0) * 0.55)
     }
 
-    /// Title bar background. Focused windows sit one step brighter so the active
-    /// window is readable even with every effect switched off.
     pub fn titlebar(&self, focused: bool) -> Color {
         if focused {
             self.elevated
@@ -166,9 +128,6 @@ mod tests {
 
     #[test]
     fn window_borders_stay_grey_rather_than_taking_the_accent() {
-        // A cool tint is wanted - the whole palette leans blue - but the border
-        // must not become a coloured ring. Anything under a tenth of the range
-        // reads as grey next to an accent that spans most of it.
         let p = Palette::default();
         let spread = |c: Color| (c.r - c.g).abs() + (c.g - c.b).abs() + (c.r - c.b).abs();
         for focused in [true, false] {

@@ -1,9 +1,3 @@
-//! Pointer grabs.
-//!
-//! While a grab is active the pointer stops being routed to clients and is
-//! handled by the compositor instead. Spectre uses one: dragging a title bar
-//! to move a window.
-
 use smithay::desktop::Window;
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
@@ -15,16 +9,11 @@ use smithay::utils::{Logical, Point};
 
 use crate::state::Spectre;
 
-/// Left mouse button, from `linux/input-event-codes.h`.
 pub const BTN_LEFT: u32 = 0x110;
 
-/// Moves a window with the pointer until the button that started it is released.
 pub struct MoveGrab {
     start_data: GrabStartData<Spectre>,
     window: Window,
-    /// Where the window's top-left sat relative to the pointer when the drag
-    /// began. Keeping the offset rather than the absolute position is what
-    /// stops the window from snapping its corner to the cursor.
     offset: Point<f64, Logical>,
 }
 
@@ -56,8 +45,6 @@ impl PointerGrab<Spectre> for MoveGrab {
         _focus: Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
-        // Focus stays where it was: a client must not receive enter/leave
-        // events for surfaces the pointer sweeps over mid-drag.
         handle.motion(state, None, event);
         self.move_to(state, event.location);
     }

@@ -1,18 +1,3 @@
-//! The Spectre configuration model.
-//!
-//! One TOML file, `$XDG_CONFIG_HOME/spectre/spectre.toml`, describes the whole
-//! desktop. Every section is optional; anything missing falls back to the
-//! documented default, so a zero-byte config produces the shipped experience.
-//!
-//! ```
-//! use spectre_config::{Config, Profile};
-//!
-//! let cfg: Config = toml::from_str("[general]\nprofile = \"performance\"").unwrap();
-//! let cfg = cfg.resolved();
-//! assert_eq!(cfg.general.profile, Profile::Performance);
-//! assert!(!cfg.effects.blur, "the profile must win over the effect defaults");
-//! ```
-
 pub mod desktop;
 pub mod display;
 pub mod effects;
@@ -32,20 +17,15 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use spectre_theme::Theme;
 
-/// File name looked up inside the `spectre` config directory.
 pub const CONFIG_FILE: &str = "spectre.toml";
-/// Directory name under `$XDG_CONFIG_HOME` and `/etc/xdg`.
 pub const CONFIG_DIR: &str = "spectre";
-/// Set by the compositor to the config file the session was started with.
 pub const CONFIG_ENV: &str = "SPECTRE_CONFIG";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct General {
     pub profile: Profile,
-    /// Number of virtual desktops.
     pub workspaces: u8,
-    /// Commands started once the session is up.
     pub autostart: Vec<String>,
 }
 
@@ -56,19 +36,11 @@ impl Default for General {
 }
 
 impl General {
-    /// Everything to launch once the session is up.
-    ///
-    /// The panel is part of the desktop rather than something a user has to
-    /// remember to add, so it is prepended unless `[panel] enabled = false`.
-    /// It stays a normal autostart entry, which means a user who wants a
-    /// different panel just turns this one off.
     pub fn startup_commands(&self, panel_enabled: bool) -> Vec<String> {
         let mut commands = Vec::with_capacity(self.autostart.len() + 2);
         if panel_enabled {
             commands.push(String::from("spectre-panel"));
         }
-        // The notification daemon is part of the desktop too: without it,
-        // applications that notify simply fail.
         commands.push(String::from("spectre-notify"));
         commands.extend(self.autostart.iter().cloned());
         commands
@@ -79,13 +51,9 @@ impl General {
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Panel {
     pub enabled: bool,
-    /// Screen edge the panel is anchored to.
     pub position: PanelPosition,
-    /// Floating panels leave a margin on all sides instead of spanning the edge.
     pub floating: bool,
-    /// Background opacity, 0..1.
     pub opacity: f32,
-    /// Widgets in display order.
     pub widgets: Vec<String>,
 }
 
@@ -101,7 +69,6 @@ pub enum PanelPosition {
 
 impl Default for Panel {
     fn default() -> Self {
-        // The widget order from Taskleiste Concept.png, left to right.
         Self {
             enabled: true,
             position: PanelPosition::Bottom,
@@ -127,7 +94,6 @@ impl Default for Panel {
     }
 }
 
-/// The complete desktop configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
@@ -142,10 +108,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Apply the performance profile over the effect and theme settings.
-    ///
-    /// Call this once after loading. [`Profile::Custom`] is the escape hatch for
-    /// users who want their `[effects]` section respected verbatim.
     pub fn resolved(mut self) -> Self {
         if let Some(effects) = self.general.profile.effects() {
             self.effects = effects;
@@ -158,24 +120,17 @@ impl Config {
         self
     }
 
-    /// Parse a config from TOML text, applying profile resolution.
     pub fn from_toml(text: &str) -> Result<Self, Error> {
         let cfg: Config = toml::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
         Ok(cfg.resolved())
     }
 
-    /// Read the config from `path`.
     pub fn load_from(path: &Path) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::Read { path: path.to_owned(), source: e })?;
         Self::from_toml(&text)
     }
 
-    /// Load the user's config, falling back to defaults.
-    ///
-    /// A missing file is normal and yields defaults. A *malformed* file is not:
-    /// it is reported so the caller can log it, because silently running with
-    /// defaults after a typo is the more confusing failure.
     pub fn load() -> (Self, Option<Error>) {
         match Self::config_path() {
             Some(path) if path.exists() => match Self::load_from(&path) {
@@ -186,10 +141,6 @@ impl Config {
         }
     }
 
-    /// The file the running session was started from.
-    ///
-    /// `$SPECTRE_CONFIG` when the compositor was given `--config`, so every
-    /// component edits the file actually in use rather than the default one.
     pub fn active_path() -> Option<PathBuf> {
         match std::env::var_os(CONFIG_ENV) {
             Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
@@ -197,7 +148,6 @@ impl Config {
         }
     }
 
-    /// Load from [`Config::active_path`], falling back to defaults.
     pub fn load_active() -> (Self, Option<Error>) {
         match Self::active_path() {
             Some(path) if path.exists() => match Self::load_from(&path) {
@@ -208,15 +158,12 @@ impl Config {
         }
     }
 
-    /// `$XDG_CONFIG_HOME/spectre/spectre.toml`, or the first XDG fallback that
-    /// exists.
     pub fn config_path() -> Option<PathBuf> {
         let dirs = xdg::BaseDirectories::with_prefix(CONFIG_DIR);
         dirs.find_config_file(CONFIG_FILE)
             .or_else(|| dirs.get_config_home().map(|h| h.join(CONFIG_FILE)))
     }
 
-    /// Serialise back to TOML, for `spectre-settings` writing the file.
     pub fn to_toml(&self) -> Result<String, Error> {
         toml::to_string_pretty(self).map_err(|e| Error::Serialize(e.to_string()))
     }
@@ -327,7 +274,6 @@ mod tests {
             "#,
         )
         .unwrap();
-        // A [keybinds] table replaces rather than merges, so the caller opts in:
         let merged = Keybinds::default().merged_with(cfg.keybinds);
         assert_eq!(
             merged.get(&"Mod+Return".parse().unwrap()),
@@ -382,8 +328,6 @@ mod tests {
 mod shipped_config_tests {
     use super::*;
 
-    /// The commented default that gets installed to
-    /// `/usr/share/spectre/spectre.toml`.
     const SHIPPED: &str = include_str!("../../spectre-session/share/spectre/spectre.toml");
 
     #[test]
@@ -396,8 +340,6 @@ mod shipped_config_tests {
 
     #[test]
     fn the_shipped_default_documents_every_effect_key() {
-        // A key that silently disappears from the sample is a documentation
-        // bug; deny_unknown_fields only catches the opposite direction.
         for key in [
             "blur",
             "shadows",

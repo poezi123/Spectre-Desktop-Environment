@@ -1,14 +1,3 @@
-// Colours a contour field that has already been drawn into a texture.
-//
-// The companion of `pattern.glsl`. That one works the noise out per pixel,
-// per frame, which on a machine without a GPU costs about two thirds of the
-// time it takes to paint the whole screen. This one reads the same field from
-// a texture baked once on the CPU and only does the part that has to be live:
-// the colour travelling along the accent.
-//
-// The texture holds coverage in its alpha channel, premultiplied white, and is
-// wider than the output so the field can scroll inside it without being redrawn.
-
 //_DEFINES_
 
 #if defined(EXTERNAL)
@@ -30,23 +19,16 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// Straight-alpha contour colours, sampled as a loop.
 uniform vec4 spectre_line_0;
 uniform vec4 spectre_line_1;
 uniform vec4 spectre_line_2;
 uniform vec4 spectre_line_3;
-// Where the colour loop stands, 0..1, and how many loops span the surface.
 uniform float spectre_color_phase;
 uniform float spectre_color_span;
-// Straight-alpha colour of the surface underneath.
 uniform vec4 spectre_bg;
-// The part of the texture this element shows: `v_coords` runs across the
-// texture, not across the screen, so the colour ramp is measured against these
-// instead. Otherwise the colours would slide sideways as the field scrolls.
 uniform float spectre_uv_origin;
 uniform float spectre_uv_span;
 
-// The contour colour at `t` along the loop, wrapping. Twin of Pattern::line_at.
 vec4 spectre_line_at(float t) {
     float u = fract(t) * 4.0;
     float i = floor(u);
@@ -56,8 +38,6 @@ vec4 spectre_line_at(float t) {
     return mix(a, b, f);
 }
 
-// The ground the lines sit on, tinted by the colour passing overhead.
-// Twin of Pattern::ground.
 vec3 spectre_ground(vec3 base, vec3 line) {
     return mix(base, line * 0.20, 0.30);
 }

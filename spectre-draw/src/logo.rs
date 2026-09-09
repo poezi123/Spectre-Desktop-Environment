@@ -1,30 +1,9 @@
-//! The Spectre mark.
-//!
-//! The hexagonal S from `assets/Logoofficial.png`, stored as raw premultiplied
-//! RGBA rather than as a PNG: decoding a compressed image would mean pulling a
-//! decoder into every process that wants to show the logo, and a 64x64 master
-//! is 16 KiB of read-only data that never has to be decompressed at all.
-//!
-//! The blob is generated from the source render by cropping away the wordmark,
-//! trimming to the mark's bounding box, padding to a square, resampling to
-//! 64x64 and multiplying the colour channels by alpha.
-
 use spectre_text::Image;
 
-/// Edge length of the baked master, in pixels.
 pub const MASTER: u32 = 64;
 
-/// 64x64 premultiplied RGBA, row major.
 static PIXELS: &[u8] = include_bytes!("../assets/logo-64.rgba");
 
-/// The Spectre mark at `size` x `size`, ready for [`Canvas::draw_image`].
-///
-/// Sizes below the master are box filtered, which is what keeps the thin
-/// contour lines inside the mark from breaking up at panel sizes; above it the
-/// master is sampled directly and the result is soft, which is the honest
-/// outcome of asking for more detail than the blob has.
-///
-/// [`Canvas::draw_image`]: crate::Canvas::draw_image
 pub fn logo(size: u32) -> Image {
     if size == 0 {
         return Image::empty();
@@ -62,8 +41,6 @@ pub fn logo(size: u32) -> Image {
             if weight > 0.0 {
                 let alpha = sum[3] / weight;
                 for c in 0..3 {
-                    // Clamped to alpha: the canvas blends premultiplied pixels,
-                    // and a channel above its own alpha would fringe.
                     data[out + c] = (sum[c] / weight * gain).min(alpha).round().clamp(0.0, 255.0) as u8;
                 }
                 data[out + 3] = alpha.round().clamp(0.0, 255.0) as u8;
@@ -74,12 +51,6 @@ pub fn logo(size: u32) -> Image {
     Image { width: size, height: size, data }
 }
 
-/// Brightness lift applied to small renderings.
-///
-/// Box filtering the master down to panel size averages the bright channel
-/// running through the mark into the near-black body around it, and on a
-/// near-black panel the result goes muddy. The gain gives back the contrast
-/// the downscale spends; at the master's own size it is a no-op.
 fn gain(size: u32) -> f32 {
     const FULL: f32 = 44.0;
     if size as f32 >= FULL {
@@ -88,7 +59,6 @@ fn gain(size: u32) -> f32 {
     1.0 + (FULL - size as f32) / FULL * 0.9
 }
 
-/// How much of source pixel `i` falls inside `[start, end)`.
 fn coverage(i: u32, start: f32, end: f32) -> f32 {
     let lo = (i as f32).max(start);
     let hi = ((i + 1) as f32).min(end);
@@ -128,8 +98,6 @@ mod tests {
 
     #[test]
     fn nothing_comes_out_unpremultiplied() {
-        // A colour channel above alpha would show up as a bright fringe once
-        // the canvas blends it.
         let image = logo(24);
         for p in image.data.chunks(4) {
             assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3], "{p:?}");

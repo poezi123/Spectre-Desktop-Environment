@@ -1,5 +1,3 @@
-//! Rendering: the element types Spectre adds on top of client surfaces.
-
 pub mod cursor;
 pub mod decorations;
 mod pattern;
@@ -39,12 +37,9 @@ use spectre_theme::Color;
 
 use crate::state::Spectre;
 
-/// A client surface, whether it belongs to a window or a layer shell.
 type SurfaceElement = WaylandSurfaceRenderElement<GlesRenderer>;
 
 render_elements! {
-    /// Everything one workspace contributes: its client surfaces plus the
-    /// decorations Spectre draws around them.
     pub WorkspaceElement<=GlesRenderer>;
     Surface = SurfaceElement,
     Rounded = RoundedElement<SurfaceElement>,
@@ -54,32 +49,20 @@ render_elements! {
     Contour = Contoured<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
 
-/// A workspace element moved and scaled for a transition.
 type MovedElement = RelocateRenderElement<RescaleRenderElement<WorkspaceElement>>;
 
 render_elements! {
-    /// Everything drawn on an output. A workspace at rest is drawn as-is; one
-    /// taking part in a transition is offset and scaled first.
     pub SpectreElement<=GlesRenderer>;
     Plain = WorkspaceElement,
     Moved = MovedElement,
 }
 
-/// Caption font size, in logical pixels.
 const CAPTION_SIZE: f32 = 13.0;
-/// Glyphs drawn on the title bar buttons.
 const MINIMIZE_GLYPH: &str = "\u{2212}";
 const MAXIMIZE_GLYPH: &str = "\u{25a1}";
 const RESTORE_GLYPH: &str = "\u{2750}";
 const CLOSE_GLYPH: &str = "\u{2715}";
 
-/// Build the full front-to-back element list for one output.
-///
-/// Order matters and is deliberate:
-/// 1. client surfaces and layer shells, as smithay stacks them,
-/// 2. window outlines *below* the surfaces, so a window on top correctly
-///    covers the outline of a window underneath it,
-/// 3. the desktop backdrop last, at the very bottom.
 pub fn output_elements(
     state: &Spectre,
     output: &Output,
@@ -107,17 +90,12 @@ fn build_output_elements(
 
     let mut elements: Vec<SpectreElement> = Vec::new();
 
-    // The pointer sits above everything, including the panel.
     elements.extend(
         cursor_elements(state, output, renderer, scale)
             .into_iter()
             .map(SpectreElement::Plain),
     );
 
-    // Panels and other layer surfaces belong to the output, not to a
-    // workspace: they stay put while workspaces move past underneath, and they
-    // must be collected once, because two copies of the same surface in one
-    // frame confuses damage tracking.
     elements.extend(
         layer_elements(output, renderer, scale, true)
             .into_iter()
@@ -126,8 +104,6 @@ fn build_output_elements(
     );
 
     match state.transition.as_ref() {
-        // A switch is in progress: draw the workspace being entered over the
-        // one being left, each where the transition says it belongs.
         Some(transition) => {
             let (from, to) = transition.placements(std::time::Instant::now(), width);
             tracing::trace!(?from, ?to, width, "transition frame");
@@ -162,18 +138,11 @@ fn build_output_elements(
             .map(SpectreElement::Plain),
     );
 
-    // The backdrop is not part of any workspace: it stays put while they move.
     if let Some(area) = geometry {
-        // A wallpaper replaces the flat backdrop; the desktop pattern is only
-        // drawn when there is none, since contour lines over a photograph read
-        // as dirt on the screen.
         if let Some(element) = wallpaper_element(state, renderer, area, scale) {
             elements.push(SpectreElement::Plain(WorkspaceElement::Text(element)));
             return elements;
         }
-        // The baked field first: it is the same picture for a fraction of the
-        // cost. The shader is the fallback for a driver that would not compile
-        // the colouring program.
         let backdrop = contour_element(state, renderer, cache, shader, area, scale);
         match backdrop {
             Some(element) => elements.push(SpectreElement::Plain(element)),
@@ -195,7 +164,6 @@ fn build_output_elements(
             }
         }
 
-        // Under everything: a flat ground for the corners a wallpaper cannot fill.
         let physical: Rectangle<i32, Physical> =
             area.to_physical_precise_round(Scale::from(scale));
         let base = theme.palette.base.to_premultiplied();
@@ -206,11 +174,6 @@ fn build_output_elements(
     elements
 }
 
-/// `SPECTRE_DUMP_SCENE=1` lists what a frame is made of, once per frame.
-///
-/// Worth keeping: it is what settles whether a missing piece of the screen was
-/// never handed to the renderer or was handed over and lost, and whether an
-/// element the desktop is hiding behind still claims to be opaque.
 pub fn dump_scene(elements: &[SpectreElement], scale: f64) {
     if std::env::var_os("SPECTRE_DUMP_SCENE").is_none() {
         return;
@@ -228,11 +191,6 @@ pub fn dump_scene(elements: &[SpectreElement], scale: f64) {
     tracing::debug!(count = elements.len(), "scene end");
 }
 
-/// The desktop pattern, drawn from the field baked into a texture.
-///
-/// `None` when there is no pattern to draw, no shader to colour it with, or the
-/// buffer could not be handed to the renderer - the caller then falls back to
-/// working the noise out per pixel.
 fn contour_element(
     state: &Spectre,
     renderer: &mut GlesRenderer,
@@ -243,9 +201,6 @@ fn contour_element(
 ) -> Option<WorkspaceElement> {
     let theme = &state.config.theme;
     let pattern = &theme.desktop_pattern;
-    // `SPECTRE_NO_CONTOUR=1` forces the per-pixel shader instead. Worth
-    // keeping: it is the only way to put the two paths side by side, and that
-    // comparison is what turned up the precision bug in the shaders.
     if std::env::var_os("SPECTRE_NO_CONTOUR").is_some() {
         return None;
     }
@@ -286,8 +241,6 @@ fn contour_element(
     .map(WorkspaceElement::Contour)
 }
 
-/// The pointer, drawn from the client's cursor surface or from Spectre's own
-/// arrow when nothing has asked for one.
 fn cursor_elements(
     state: &Spectre,
     output: &Output,
@@ -316,10 +269,6 @@ fn cursor_elements(
                 location,
                 Scale::from(scale),
                 1.0,
-                // Composited rather than handed to the hardware cursor plane:
-                // on the virtual GPUs this project targets the plane's position
-                // is not always committed, and a pointer that does not move is
-                // worse than one that costs a textured quad.
                 Kind::Unspecified,
             )
             .into_iter()
@@ -349,7 +298,6 @@ fn cursor_elements(
     }
 }
 
-/// Where a client's cursor surface wants its tip.
 fn cursor_hotspot(surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Point<i32, Logical> {
     use smithay::input::pointer::CursorImageSurfaceData;
     smithay::wayland::compositor::with_states(surface, |states| {
@@ -361,7 +309,6 @@ fn cursor_hotspot(surface: &smithay::reexports::wayland_server::protocol::wl_sur
     })
 }
 
-/// The wallpaper, if one is loaded for this output size.
 fn wallpaper_element(
     state: &Spectre,
     renderer: &mut GlesRenderer,
@@ -381,10 +328,6 @@ fn wallpaper_element(
     .ok()
 }
 
-/// The accent a window's pattern is drawn with.
-///
-/// An unfocused window keeps the pattern but loses most of its colour, which
-/// is what tells the two apart now that the frame itself is plain.
 fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gradient {
     if focused {
         theme.palette.accent.clone()
@@ -393,10 +336,6 @@ fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gra
     }
 }
 
-/// Layer surfaces for an output.
-///
-/// `upper` selects the overlay and top layers, which sit above windows; `false`
-/// selects bottom and background, which sit below them.
 fn layer_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
@@ -425,14 +364,11 @@ fn layer_elements(
     elements
 }
 
-/// Offset and scale one element for a transition.
 fn move_element(
     element: WorkspaceElement,
     placement: crate::transition::Placement,
     scale: f64,
 ) -> MovedElement {
-    // Scaling happens about the output's origin, then the result is shifted;
-    // doing it the other way round would make the offset scale too.
     let scaled = RescaleRenderElement::from_element(
         element,
         Point::<i32, Physical>::from((0, 0)),
@@ -442,10 +378,6 @@ fn move_element(
     RelocateRenderElement::from_element(scaled, offset, Relocate::Relative)
 }
 
-/// Everything one workspace draws, front to back.
-///
-/// `alpha` fades the whole workspace, which is what the fade and depth
-/// transitions use.
 fn workspace_elements(
     state: &Spectre,
     output: &Output,
@@ -472,7 +404,6 @@ fn workspace_elements(
     let mut text = state.text.borrow_mut();
     let mut elements: Vec<WorkspaceElement> = Vec::new();
 
-    // Front to back, which is the order the renderer wants.
     for window in space.elements().rev() {
         let Some(geometry) = space.element_geometry(window) else {
             continue;
@@ -482,15 +413,10 @@ fn workspace_elements(
         };
         let focused = state.focus.as_ref() == Some(window);
         let decorated = state.is_decorated(window);
-        // The surface's protocol id is stable for as long as the window lives,
-        // which is exactly how long its cached render elements should live.
         let key = element_key(window);
 
-        // Everything below works in output-local coordinates.
         let local = Rectangle::new(geometry.loc - region.loc, geometry.size);
         let frame = Frame::new(local, &metrics, decorated);
-        // Hit testing still happens in global coordinates, so the hovered part
-        // is worked out from the untranslated frame.
         let hovered = decorations::part_at(
             &Frame::new(geometry, &metrics, decorated),
             &metrics,
@@ -514,10 +440,8 @@ fn workspace_elements(
             );
         }
 
-        // The client's own surfaces, clipped to the window's rounded corners.
         let radius = (metrics.corner_radius as f64 * scale) as f32;
         let corners = if decorated {
-            // The frame has already rounded the top two.
             Corners::bottom(radius)
         } else {
             Corners::uniform(radius)
@@ -548,7 +472,6 @@ fn workspace_elements(
             continue;
         }
 
-        // The frame itself: rounded title bar, hairline border, pattern.
         let titlebar_height = frame.titlebar.size.h + frame.border;
         let drawn = shader.and_then(|shader| {
             shader.frame_element(
@@ -569,7 +492,6 @@ fn workspace_elements(
         });
         match drawn {
             Some(element) => elements.push(WorkspaceElement::Pattern(element)),
-            // No frame shader: square corners rather than no frame at all.
             None => elements.extend(
                 decorations::fallback_frame(
                     cache, key, &frame, &theme.palette, focused, alpha, scale,
@@ -584,7 +506,6 @@ fn workspace_elements(
     elements
 }
 
-/// The caption and the button glyphs for one window.
 #[allow(clippy::too_many_arguments)]
 fn decoration_text(
     state: &Spectre,
@@ -603,7 +524,6 @@ fn decoration_text(
     let metrics = theme.metrics;
     let mut out = Vec::new();
 
-    // Caption, centred in the space the buttons leave over.
     let area = decorations::caption_area(frame, &metrics);
     if area.size.w > 0 {
         let title = state.window_title(window);
@@ -620,7 +540,6 @@ fn decoration_text(
         out.extend(cache.element(renderer, &label, location, scale));
     }
 
-    // Button glyphs, centred in their hit boxes.
     let maximized = state.is_maximized(window);
     for (part, rect) in decorations::buttons(frame, &metrics) {
         let glyph = match part {
@@ -648,7 +567,6 @@ fn decoration_text(
     out
 }
 
-/// A stable per-window key for [`Slot`], taken from the toplevel surface.
 fn element_key(window: &smithay::desktop::Window) -> u32 {
     use smithay::reexports::wayland_server::Resource;
     use smithay::wayland::shell::xdg::ToplevelSurface;
@@ -659,10 +577,6 @@ fn element_key(window: &smithay::desktop::Window) -> u32 {
         .unwrap_or(0)
 }
 
-/// A filled rectangle in logical coordinates.
-///
-/// Kept as a helper because decoration drawing needs a dozen of these per
-/// window and the physical conversion is easy to get subtly wrong.
 pub fn solid(
     cache: &mut RenderCache,
     slot: Slot,

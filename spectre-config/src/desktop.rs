@@ -1,40 +1,30 @@
-//! The desktop background.
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// How a wallpaper is fitted to an output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum WallpaperMode {
-    /// Cover the output, cropping the overhang. The usual choice.
     #[default]
     Fill,
-    /// Fit the whole image, letterboxing the rest.
     Fit,
-    /// Stretch to the output, ignoring the aspect ratio.
     Stretch,
-    /// Draw at its own size, centred.
     Center,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Desktop {
-    /// Image drawn behind everything. `None` leaves the Spectre black.
     pub wallpaper: Option<PathBuf>,
     pub wallpaper_mode: WallpaperMode,
 }
 
 impl Desktop {
-    /// The wallpaper, if one is set and the file is actually there.
     pub fn wallpaper_path(&self) -> Option<&Path> {
         self.wallpaper.as_deref().filter(|p| p.is_file())
     }
 }
 
-/// Where wallpapers are looked for, most specific first.
 pub fn wallpaper_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -47,7 +37,6 @@ pub fn wallpaper_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Image files Spectre can decode.
 pub fn is_image(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
@@ -55,10 +44,6 @@ pub fn is_image(path: &Path) -> bool {
     matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg")
 }
 
-/// Wallpapers found in [`wallpaper_dirs`], sorted by name and de-duplicated.
-///
-/// Recurses one level, which is what the shipped wallpaper packages need
-/// without walking a whole home directory.
 pub fn find_wallpapers() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     for dir in wallpaper_dirs() {

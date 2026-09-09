@@ -1,38 +1,18 @@
-//! Reading `.desktop` files.
-//!
-//! Only the parts a launcher needs: what to show, what to run, and whether to
-//! show it at all. Parsing is kept free of the file system so it can be tested
-//! against the awkward files that actually exist in the wild.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// One launchable application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// What the user sees.
     pub name: String,
-    /// Short description, shown under the name.
     pub comment: String,
-    /// The command line, with field codes already removed.
     pub exec: String,
-    /// Needs to be started inside a terminal emulator.
     pub terminal: bool,
-    /// Freedesktop categories, used for a secondary match.
     pub keywords: String,
-    /// The raw `Categories=` value, for the category column.
     pub categories: String,
-    /// Where it came from, for de-duplication.
     pub id: String,
 }
 
 impl Entry {
-    /// Parse the `[Desktop Entry]` group of a `.desktop` file, for the desktops
-    /// this session counts as.
-    ///
-    /// Returns `None` for anything that is not a visible application: links,
-    /// directories, `NoDisplay=true`, `Hidden=true`, entries meant for another
-    /// desktop, and entries with no `Exec`.
     pub fn parse(id: &str, contents: &str, desktops: &[String]) -> Option<Entry> {
         let group = desktop_entry_group(contents)?;
         let get = |key: &str| group.get(key).map(String::as_str).unwrap_or_default();
@@ -64,10 +44,6 @@ impl Entry {
         })
     }
 
-    /// Read every application on the system, newest XDG directory winning.
-    ///
-    /// A file that fails to parse is skipped rather than fatal: one broken
-    /// `.desktop` file in a package must not empty the launcher.
     pub fn load_all() -> Vec<Entry> {
         let desktops = current_desktops();
         let mut by_id: HashMap<String, Entry> = HashMap::new();
@@ -80,11 +56,6 @@ impl Entry {
     }
 }
 
-/// The desktops this session counts as, from `XDG_CURRENT_DESKTOP`.
-///
-/// The variable is colon-separated so a desktop can claim compatibility with
-/// another; Spectre claims only itself, which is what makes another desktop's
-/// `OnlyShowIn=KDE` control panel disappear from our menu.
 fn current_desktops() -> Vec<String> {
     std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_else(|_| String::from("Spectre"))
@@ -94,7 +65,6 @@ fn current_desktops() -> Vec<String> {
         .collect()
 }
 
-/// Whether an entry with these `OnlyShowIn`/`NotShowIn` values belongs here.
 fn shown_in(only: &str, not: &str, desktops: &[String]) -> bool {
     let listed = |list: &str| {
         list.split(';')
@@ -108,7 +78,6 @@ fn shown_in(only: &str, not: &str, desktops: &[String]) -> bool {
     !listed(not)
 }
 
-/// `$XDG_DATA_HOME/applications` first, then the system directories.
 fn application_dirs() -> Vec<PathBuf> {
     let dirs = xdg::BaseDirectories::new();
     let mut out = Vec::new();
@@ -116,8 +85,6 @@ fn application_dirs() -> Vec<PathBuf> {
         out.push(home.join("applications"));
     }
     out.extend(dirs.get_data_dirs().into_iter().map(|d| d.join("applications")));
-    // Earlier directories take priority, so read them last and let them
-    // overwrite; reversing here keeps `collect_dir` a simple insert.
     out.reverse();
     out
 }
@@ -138,8 +105,6 @@ fn collect_dir(root: &Path, dir: &Path, desktops: &[String], out: &mut HashMap<S
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
-        // The desktop file id is its path below `applications/`, with
-        // separators turned into dashes.
         let id = path
             .strip_prefix(root)
             .unwrap_or(&path)
@@ -151,7 +116,6 @@ fn collect_dir(root: &Path, dir: &Path, desktops: &[String], out: &mut HashMap<S
     }
 }
 
-/// Key/value pairs of the `[Desktop Entry]` group.
 fn desktop_entry_group(contents: &str) -> Option<HashMap<String, String>> {
     let mut in_group = false;
     let mut fields = HashMap::new();
@@ -172,9 +136,6 @@ fn desktop_entry_group(contents: &str) -> Option<HashMap<String, String>> {
             continue;
         };
         let key = key.trim();
-        // Localised keys look like `Name[de]`; the unlocalised one wins here
-        // because the launcher has no locale handling yet, and picking an
-        // arbitrary translation would be worse than the default.
         if key.contains('[') {
             continue;
         }
@@ -188,10 +149,6 @@ fn is_true(value: &str) -> bool {
     value.eq_ignore_ascii_case("true")
 }
 
-/// Remove the `%f`-style field codes from an `Exec` line.
-///
-/// The launcher never passes files, so every code drops out. `%%` is an
-/// escaped percent sign and survives as one.
 pub fn strip_field_codes(exec: &str) -> String {
     let mut out = String::with_capacity(exec.len());
     let mut chars = exec.chars().peekable();
@@ -203,7 +160,6 @@ pub fn strip_field_codes(exec: &str) -> String {
         }
         match chars.next() {
             Some('%') => out.push('%'),
-            // Every other code expands to nothing without a file to pass.
             Some(_) => {}
             None => {}
         }

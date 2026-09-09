@@ -1,16 +1,8 @@
-//! Key bindings.
-//!
-//! Bindings are written the way a user would type them — `"Mod+Shift+Q"` — and
-//! parsed into a [`Keybind`]. The key half stays a plain string here: resolving
-//! it to a keysym needs xkbcommon, which belongs in the compositor, not in the
-//! configuration model.
-
 use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-/// Modifier mask. `Mod`/`Super`/`Logo` all mean the same physical key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Modifiers {
     pub logo: bool,
@@ -55,11 +47,9 @@ impl fmt::Display for Modifiers {
     }
 }
 
-/// A parsed `Modifiers + key` combination.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Keybind {
     pub mods: Modifiers,
-    /// xkb keysym name, normalised to lowercase (`return`, `q`, `xf86audioraisevolume`).
     pub key: String,
 }
 
@@ -121,14 +111,11 @@ impl<'de> Deserialize<'de> for Keybind {
     }
 }
 
-/// What a binding does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
-    /// Run a command. Split by the compositor with shell-like quoting.
     Spawn { command: String },
     CloseWindow,
-    /// Leave the session.
     Quit,
     FocusNext,
     FocusPrev,
@@ -137,17 +124,13 @@ pub enum Action {
     ToggleMaximize,
     ToggleFullscreen,
     ToggleFloating,
-    /// Switch to workspace `index`, 1-based to match what the panel shows.
     Workspace { index: u8 },
     MoveToWorkspace { index: u8 },
     NextWorkspace,
     PrevWorkspace,
-    /// Take the focused window along to the next or previous workspace.
     MoveToNextWorkspace,
     MoveToPrevWorkspace,
-    /// Flip the global animation kill switch.
     ToggleAnimations,
-    /// Cycle Performance -> Balanced -> Spectre.
     CycleProfile,
     ToggleLauncher,
     LockSession,
@@ -163,7 +146,6 @@ pub enum Direction {
     Down,
 }
 
-/// The whole binding table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Keybinds(pub BTreeMap<Keybind, Action>);
@@ -177,8 +159,6 @@ impl Keybinds {
         self.0.iter()
     }
 
-    /// Merge user bindings over the defaults, so a config only has to list what
-    /// it changes. Binding an action to `[]` is how a user removes a default.
     pub fn merged_with(mut self, overrides: Keybinds) -> Self {
         self.0.extend(overrides.0);
         self
@@ -210,7 +190,6 @@ impl Default for Keybinds {
         bind(logo_shift, "p", Action::CycleProfile);
         bind(Modifiers::NONE, "print", Action::Screenshot);
 
-        // The way every other desktop moves between workspaces.
         let logo_ctrl = Modifiers { ctrl: true, ..logo };
         bind(logo_ctrl, "left", Action::PrevWorkspace);
         bind(logo_ctrl, "right", Action::NextWorkspace);
@@ -228,7 +207,6 @@ impl Default for Keybinds {
             ("k", Direction::Up),
             ("j", Direction::Down),
         ] {
-            // Mod+L is the lock binding above; direction gets the arrow only.
             if key != "l" {
                 bind(logo, key, Action::FocusDirection { direction: dir });
             }

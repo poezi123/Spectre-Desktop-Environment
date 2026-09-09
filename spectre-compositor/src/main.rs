@@ -1,10 +1,3 @@
-//! The Spectre Wayland compositor.
-//!
-//! ```text
-//! spectre-compositor [--backend winit|udev] [--config PATH] [--profile NAME]
-//!                    [--command CMD]
-//! ```
-
 mod backend;
 mod grabs;
 mod handlers;
@@ -32,8 +25,6 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Some(path) = &args.config {
-        // Every component reads the same file, so the settings app edits what
-        // the session is actually running.
         std::env::set_var(spectre_config::CONFIG_ENV, path);
     }
     let mut config = match &args.config {
@@ -75,15 +66,7 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Let the kernel reap the processes the compositor starts.
-///
-/// A desktop spawns a lot of children and never waits on any of them, so
-/// without this every launched application leaves a zombie behind. Ignoring
-/// `SIGCHLD` makes the kernel clean them up; the compositor never calls
-/// `wait`, so nothing is lost by doing so.
 fn reap_children() {
-    // SAFETY: setting a disposition on SIGCHLD is async-signal-safe and is
-    // done once, before any thread or child exists.
     unsafe {
         libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
@@ -97,14 +80,12 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
-/// Parsed command line.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
     help: bool,
     backend: Option<Backend>,
     config: Option<std::path::PathBuf>,
     profile: Option<Profile>,
-    /// Extra commands to start once the session is up.
     commands: Vec<String>,
 }
 

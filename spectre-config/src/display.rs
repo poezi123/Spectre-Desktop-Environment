@@ -1,14 +1,9 @@
-//! Output resolution and scale.
-
 use serde::{Deserialize, Serialize};
 
-/// `[display]` in the config file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Display {
-    /// `auto`, `1920x1080`, or `1920x1080@60`.
     pub resolution: String,
-    /// Fractional output scale. `1.0` is one logical pixel per device pixel.
     pub scale: f64,
 }
 
@@ -18,22 +13,18 @@ impl Default for Display {
     }
 }
 
-/// A resolution the user asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WantedMode {
     pub width: i32,
     pub height: i32,
-    /// Refresh in whole Hz, when the config named one.
     pub refresh: Option<u32>,
 }
 
 impl Display {
-    /// The requested mode, or `None` for `auto` and for anything unparsable.
     pub fn wanted_mode(&self) -> Option<WantedMode> {
         parse_mode(&self.resolution)
     }
 
-    /// Scale clamped to what a compositor can actually drive.
     pub fn output_scale(&self) -> f64 {
         if self.scale.is_finite() {
             self.scale.clamp(0.5, 4.0)
@@ -61,7 +52,6 @@ fn parse_mode(text: &str) -> Option<WantedMode> {
     Some(WantedMode { width, height, refresh })
 }
 
-/// How a resolution is written in the config file.
 pub fn format_mode(width: i32, height: i32, refresh: Option<u32>) -> String {
     match refresh {
         Some(hz) => format!("{width}x{height}@{hz}"),

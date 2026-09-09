@@ -1,6 +1,3 @@
-//! The compositor state: every Wayland global Spectre exposes, plus the
-//! desktop model (workspaces, focus, outputs) that the backends drive.
-
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,7 +29,6 @@ use spectre_config::{Config, Keybinds};
 
 use crate::workspace::Workspaces;
 
-/// Per-client data. Smithay needs the compositor part; the rest is ours.
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
@@ -43,20 +39,10 @@ impl ClientData for ClientState {
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
 }
 
-/// How often a workspace transition is allowed to redraw the screen.
-///
-/// A transition is the one animation worth spending frames on, because the
-/// whole screen is travelling; the patterns are paced by what they can
-/// actually be seen to do, which [`Pattern::redraw_interval`] works out.
-///
-/// [`Pattern::redraw_interval`]: spectre_theme::Pattern::redraw_interval
 const TRANSITION_INTERVAL: Duration = Duration::from_millis(16);
 
-/// Everything the compositor owns.
 pub struct Spectre {
     pub display_handle: DisplayHandle,
-    /// Kept so later phases (idle timers, config reload watchers) can add
-    /// sources without threading the handle through every call site.
     #[allow(dead_code)]
     pub loop_handle: LoopHandle<'static, Spectre>,
     pub loop_signal: LoopSignal,
@@ -67,22 +53,14 @@ pub struct Spectre {
     pub config: Config,
     pub keybinds: Keybinds,
 
-    // Wayland globals.
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
-    /// Holds the `zxdg_decoration_manager_v1` global alive; the handler reaches
-    /// it through the delegate macro rather than through this field.
     #[allow(dead_code)]
     pub xdg_decoration_state: XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
-    /// Lets GPU clients hand us buffers directly instead of copying through
-    /// shared memory. Most toolkits refuse to start without it.
     pub dmabuf_state: DmabufState,
-    /// Kept alive for the lifetime of the compositor; dropping it would remove
-    /// the `zwp_linux_dmabuf_v1` global from under running clients.
     pub dmabuf_global: Option<DmabufGlobal>,
-    /// Holds the `xdg_output_manager` global alive.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Self>,
@@ -97,68 +75,31 @@ pub struct Spectre {
     pub cursor_status: CursorImageStatus,
 
     pub workspaces: Workspaces,
-    /// Toplevels that have been created but not yet given a size, so they
-    /// cannot be placed sensibly. Moved into a workspace on first commit.
     pub pending_windows: Vec<Window>,
-    /// Windows hidden by the minimize button, with the position to restore
-    /// them to. They stay reachable through focus cycling.
     pub minimized: Vec<(Window, smithay::utils::Point<i32, smithay::utils::Logical>)>,
-    /// The window that currently has keyboard focus.
     pub focus: Option<Window>,
-    /// Last title bar press, for double-click detection.
     pub last_click: Option<(Window, u32)>,
-    /// The layer surface currently holding keyboard focus, if any. A launcher
-    /// or a lock screen takes the keyboard away from windows while it is up.
     pub layer_focus: Option<WlSurface>,
-    /// A workspace switch being animated.
     pub transition: Option<crate::transition::Transition>,
-    /// Set while the logo key is held and nothing else has been pressed, so a
-    /// tap of it on its own can open the application menu.
     pub logo_armed: bool,
-    /// Where the pointer is, mirrored out of the seat.
-    ///
-    /// Never read it back from the `PointerHandle`: that takes the seat's
-    /// internal lock, and a [`PointerGrab`](smithay::input::pointer::PointerGrab)
-    /// runs with the lock already held. Asking the handle from inside a grab -
-    /// a window being dragged, say - deadlocks the whole session.
     pointer_location: smithay::utils::Point<f64, smithay::utils::Logical>,
-    /// The launcher process, if one was started and may still be up.
     pub launcher: Option<u32>,
-    /// When the last animation-only frame was drawn.
     last_animation: Instant,
-    /// The panel process, so the settings app can switch it off and on.
     pub panel: Option<u32>,
-    /// The wallpaper, prepared for the current output size.
     pub wallpaper: Option<crate::render::Wallpaper>,
-    /// Spectre's own pointer, drawn wherever no client has set one.
     pub cursor: Option<crate::render::CursorImage>,
-    /// Set whenever something visible changed; backends redraw and clear it.
     dirty: bool,
-    /// Set when `[display]` changed; the backend re-applies the output mode.
     display_dirty: bool,
-    /// Shaped and uploaded labels for title bars and, later, the panel.
-    ///
-    /// Behind a `RefCell` because the render pass borrows the state immutably
-    /// while it walks the window stack, yet rasterising a caption mutates the
-    /// cache.
     pub text: RefCell<crate::render::TextCache>,
-    /// Dmabuf imports waiting for the backend's renderer to accept them.
     pub pending_dmabufs: Vec<(
         smithay::backend::allocator::dmabuf::Dmabuf,
         smithay::wayland::dmabuf::ImportNotifier,
     )>,
-    /// Wayland socket clients connect to, e.g. `wayland-1`.
     pub socket_name: String,
-    /// The control socket the panel and shell connect to. `None` when it could
-    /// not be bound; the desktop still works, it just has no panel.
     pub ipc: Option<crate::ipc::Ipc>,
 }
 
 impl Spectre {
-    /// Build the compositor state and start listening for clients.
-    ///
-    /// `seat_name` shows up in client-visible seat objects; backends pass their
-    /// own name so logs make it obvious which backend is running.
     pub fn new(
         display: Display<Spectre>,
         loop_handle: LoopHandle<'static, Spectre>,
@@ -190,8 +131,6 @@ impl Spectre {
             variant: spectre_config::Keyboard::xkb_field(&kb.variant).unwrap_or(""),
             options: spectre_config::Keyboard::xkb_field(&kb.options).map(str::to_owned),
         };
-        // A bad layout string must not take the session down with it: fall back
-        // to the system default and log loudly instead.
         let keyboard = seat
             .add_keyboard(xkb, repeat_delay as i32, repeat_rate as i32)
             .or_else(|err| {
@@ -256,7 +195,6 @@ impl Spectre {
         })
     }
 
-    /// Bind an auto-numbered Wayland socket and accept clients on it.
     fn init_socket(loop_handle: &LoopHandle<'static, Spectre>) -> anyhow::Result<String> {
         let source = ListeningSocketSource::new_auto()?;
         let socket_name = source.socket_name().to_string_lossy().into_owned();
@@ -273,7 +211,6 @@ impl Spectre {
         Ok(socket_name)
     }
 
-    /// Drive the Wayland display from the event loop.
     fn init_display(
         display: Display<Spectre>,
         loop_handle: &LoopHandle<'static, Spectre>,
@@ -281,8 +218,6 @@ impl Spectre {
         loop_handle.insert_source(
             Generic::new(display, Interest::READ, Mode::Level),
             |_, display, state| {
-                // SAFETY: the display is only dispatched from this callback, and
-                // calloop guarantees the callback is not re-entered.
                 unsafe { display.get_mut().dispatch_clients(state)? };
                 Ok(PostAction::Continue)
             },
@@ -290,8 +225,6 @@ impl Spectre {
         Ok(())
     }
 
-    /// Bind the control socket. Failing to is survivable: the desktop runs
-    /// without a panel rather than not at all.
     pub fn start_ipc(&mut self) {
         match crate::ipc::Ipc::new(&self.loop_handle, &self.socket_name.clone()) {
             Ok(ipc) => {
@@ -302,29 +235,14 @@ impl Spectre {
         }
     }
 
-    /// Path children should be told to connect to.
     pub fn ipc_socket_path(&self) -> Option<std::path::PathBuf> {
         self.ipc.as_ref().map(|ipc| ipc.path.clone())
     }
 
-    /// Seconds since the compositor started, for pattern animation.
     pub fn elapsed_secs(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
     }
 
-    /// Elapsed time rounded down to the pattern's own frame interval.
-    ///
-    /// The phase is read afresh every time a frame is drawn, and a frame gets
-    /// drawn for all sorts of reasons that have nothing to do with the pattern:
-    /// the panel's clock ticking over, a window repainting, the pointer moving
-    /// a pixel. If the phase moved with each of those, every one of them would
-    /// report the whole desktop as damaged and recompute the contour field
-    /// behind everything - which is why moving the mouse over an empty desktop
-    /// used to cost as much as a full repaint.
-    ///
-    /// Quantising the clock means the pattern moves at its own pace and stands
-    /// perfectly still in between, so a frame drawn for another reason leaves
-    /// it alone and the damage tracker skips it.
     fn animation_clock(&self) -> f64 {
         let elapsed = self.elapsed_secs();
         let Some(step) = self.animation_interval().map(|i| i.as_secs_f64()) else {
@@ -336,17 +254,12 @@ impl Spectre {
         (elapsed / step).floor() * step
     }
 
-    /// Draw Spectre's own pointer at the size and colours the config asks for.
-    ///
-    /// The arrow is rasterised once rather than per frame, so it is rebuilt
-    /// whenever the settings behind it change - see [`Spectre::refresh_cursor`].
     fn build_cursor(config: &Config) -> crate::render::CursorImage {
         let palette = &config.theme.palette;
         let (fill, outline) = config.input.cursor.colors(palette.text, palette.base);
         crate::render::CursorImage::new(config.input.cursor.height(config.display.scale), fill, outline)
     }
 
-    /// Rebuild the pointer after the config changed, if it would look different.
     pub fn refresh_cursor(&mut self, previous: &Config) {
         let palette = |c: &Config| c.theme.palette.clone();
         let unchanged = previous.input.cursor == self.config.input.cursor
@@ -359,30 +272,24 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Current animation phase of the window/panel pattern.
     pub fn pattern_phase(&self) -> f32 {
         self.config.theme.window_pattern.phase(self.animation_clock())
     }
 
-    /// Current animation phase of the desktop pattern, which is configured
-    /// separately from the one on window title bars.
     pub fn desktop_phase(&self) -> f32 {
         self.config.theme.desktop_pattern.phase(self.animation_clock())
     }
 
-    /// Where the desktop pattern's colour cycle stands.
     pub fn desktop_color_phase(&self) -> f32 {
         self.config.theme.desktop_pattern.color_phase(self.animation_clock())
     }
 
-    /// Pixel size of the first output, for sizing the wallpaper.
     pub fn output_pixel_size(&self) -> Option<(i32, i32)> {
         let output = self.outputs().into_iter().next()?;
         let mode = output.current_mode()?;
         Some((mode.size.w, mode.size.h))
     }
 
-    /// Load or reload the wallpaper for an output of this size.
     pub fn refresh_wallpaper(&mut self, width: i32, height: i32) {
         let Some(path) = self.config.desktop.wallpaper_path().map(|p| p.to_owned()) else {
             self.wallpaper = None;
@@ -396,13 +303,10 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Where the pointer is. Safe to call from inside a pointer grab.
     pub fn pointer_position(&self) -> smithay::utils::Point<f64, smithay::utils::Logical> {
         self.pointer_location
     }
 
-    /// Record the pointer's new position. Must happen before the seat is told,
-    /// so a grab handler already sees the position it is reacting to.
     pub fn set_pointer_position(
         &mut self,
         location: smithay::utils::Point<f64, smithay::utils::Logical>,
@@ -410,15 +314,10 @@ impl Spectre {
         self.pointer_location = location;
     }
 
-    /// Where the pattern's colour cycle stands.
     pub fn color_phase(&self) -> f32 {
         self.config.theme.window_pattern.color_phase(self.animation_clock())
     }
 
-    /// Note that something visible changed, so the next frame is drawn.
-    ///
-    /// Shell clients are told as well: focus, workspace and window changes all
-    /// pass through here, which is exactly what a panel needs to know about.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
         if let Some(ipc) = self.ipc.as_mut() {
@@ -426,13 +325,10 @@ impl Spectre {
         }
     }
 
-    /// Take the dirty flag, returning whether a redraw is needed.
-    /// Whether the output mode has to be re-applied, clearing the flag.
     pub fn take_display_dirty(&mut self) -> bool {
         std::mem::replace(&mut self.display_dirty, false)
     }
 
-    /// Ask the backend to re-apply `[display]`.
     pub fn mark_display_dirty(&mut self) {
         self.display_dirty = true;
         self.mark_dirty();
@@ -443,10 +339,6 @@ impl Spectre {
             self.last_animation = Instant::now();
             return true;
         }
-        // An animation that nobody is interacting with does not need a frame
-        // per vblank. Every frame repaints the whole output, which on a
-        // software renderer is the difference between an idle desktop and a
-        // busy core.
         let Some(interval) = self.animation_interval() else {
             return false;
         };
@@ -458,13 +350,6 @@ impl Spectre {
         true
     }
 
-    /// How long the screen may be left alone, or `None` when nothing on it is
-    /// moving by itself.
-    ///
-    /// Both patterns the compositor draws are asked, and the one that changes
-    /// soonest sets the pace. The window pattern only counts while a decorated
-    /// window is actually mapped: an empty desktop must fall back to zero
-    /// frames per second.
     pub fn animation_interval(&self) -> Option<Duration> {
         if self.transition.is_some() {
             return Some(TRANSITION_INTERVAL);
@@ -485,9 +370,6 @@ impl Spectre {
         }
     }
 
-    /// The scale the pattern is drawn at, which decides how many device pixels
-    /// its drift covers in a second. Outputs rarely differ, and where they do
-    /// the densest one has to set the pace or it would stutter.
     fn animation_scale(&self) -> f32 {
         self.outputs()
             .into_iter()
@@ -495,24 +377,20 @@ impl Spectre {
             .fold(1.0f32, f32::max)
     }
 
-    /// Ask the event loop to stop; the session ends after the current iteration.
     pub fn stop(&mut self) {
         self.running = false;
         self.loop_signal.stop();
         self.loop_signal.wakeup();
     }
 
-    /// Window under `surface`, searching every workspace.
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<Window> {
         self.workspaces.find_surface(surface).map(|(_, w)| w)
     }
 
-    /// All outputs currently mapped.
     pub fn outputs(&self) -> Vec<Output> {
         self.workspaces.outputs().cloned().collect()
     }
 
-    /// The application id a window reports, or an empty string.
     pub fn window_app_id(&self, window: &Window) -> String {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
@@ -529,10 +407,6 @@ impl Spectre {
         })
     }
 
-    /// Title a window asks to be shown in its title bar.
-    ///
-    /// Falls back to the app id, then to a generic name, so a window is never
-    /// left with a blank bar.
     pub fn window_title(&self, window: &Window) -> String {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
@@ -553,17 +427,12 @@ impl Spectre {
         })
     }
 
-    /// Whether Spectre draws the frame for this window.
-    ///
-    /// Clients that asked for client-side decorations through xdg-decoration
-    /// draw their own, and must not get a second one from us.
     pub fn is_decorated(&self, window: &Window) -> bool {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
         let Some(toplevel) = window.toplevel() else {
             return false;
         };
-        // Fullscreen windows own the whole output; a frame would only cover it.
         if self.has_state(window, xdg_toplevel::State::Fullscreen) {
             return false;
         }
@@ -576,7 +445,6 @@ impl Spectre {
         self.has_state(window, xdg_toplevel::State::Maximized)
     }
 
-    /// Whether `window`'s toplevel carries `wanted`.
     pub fn has_state(&self, window: &Window, wanted: xdg_toplevel::State) -> bool {
         window
             .toplevel()
@@ -584,7 +452,6 @@ impl Spectre {
             .unwrap_or(false)
     }
 
-    /// Housekeeping that has to run once per event loop iteration.
     pub fn refresh(&mut self) {
         self.finish_transition();
         self.workspaces.refresh();

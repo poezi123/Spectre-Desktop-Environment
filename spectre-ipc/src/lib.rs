@@ -1,17 +1,3 @@
-//! The Spectre IPC socket.
-//!
-//! The compositor listens; the panel, the launcher and `spectrectl` connect.
-//! The socket path is exported to every process the compositor spawns as
-//! `SPECTRE_SOCKET`, so a client never has to guess it.
-//!
-//! ```no_run
-//! use spectre_ipc::{Client, Request};
-//!
-//! let mut client = Client::connect()?;
-//! client.send(&Request::SwitchWorkspace { index: 2 })?;
-//! # Ok::<(), std::io::Error>(())
-//! ```
-
 pub mod protocol;
 
 pub use protocol::{Desktop, Event, Mode, Output, Request, Window, WindowId, Workspace};
@@ -20,13 +6,8 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
-/// Environment variable naming the socket.
 pub const SOCKET_ENV: &str = "SPECTRE_SOCKET";
 
-/// Where the compositor puts its socket for a given Wayland display.
-///
-/// Tying the name to the Wayland display means two nested Spectre instances on
-/// one machine do not fight over the same path.
 pub fn socket_path(wayland_display: &str) -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -34,7 +15,6 @@ pub fn socket_path(wayland_display: &str) -> PathBuf {
     dir.join(format!("spectre-{wayland_display}.sock"))
 }
 
-/// The socket a client should connect to.
 pub fn client_socket_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(SOCKET_ENV) {
         return Some(PathBuf::from(path));
@@ -43,14 +23,12 @@ pub fn client_socket_path() -> Option<PathBuf> {
     Some(socket_path(&display))
 }
 
-/// A connection to the compositor.
 pub struct Client {
     reader: BufReader<UnixStream>,
     writer: UnixStream,
 }
 
 impl Client {
-    /// Connect to the compositor named by `SPECTRE_SOCKET`.
     pub fn connect() -> io::Result<Self> {
         let path = client_socket_path().ok_or_else(|| {
             io::Error::new(
@@ -66,7 +44,6 @@ impl Client {
         Ok(Self { reader: BufReader::new(stream.try_clone()?), writer: stream })
     }
 
-    /// The underlying socket, for registering with an event loop.
     pub fn as_raw(&self) -> &UnixStream {
         &self.writer
     }
@@ -78,8 +55,6 @@ impl Client {
         self.writer.flush()
     }
 
-    /// Read the next event, blocking. `Ok(None)` means the compositor closed
-    /// the connection, which is the normal end of a session.
     pub fn recv(&mut self) -> io::Result<Option<Event>> {
         let mut line = String::new();
         if self.reader.read_line(&mut line)? == 0 {
@@ -88,7 +63,6 @@ impl Client {
         parse_line(&line).map(Some)
     }
 
-    /// Send a request and wait for the next state event.
     pub fn request_state(&mut self) -> io::Result<Option<Desktop>> {
         self.send(&Request::GetState)?;
         loop {
@@ -104,13 +78,11 @@ impl Client {
     }
 }
 
-/// Parse one newline-delimited message.
 pub fn parse_line<T: serde::de::DeserializeOwned>(line: &str) -> io::Result<T> {
     serde_json::from_str(line.trim_end_matches(['\r', '\n']))
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-/// Serialise one message, newline included.
 pub fn encode_line<T: serde::Serialize>(value: &T) -> io::Result<String> {
     let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
     line.push('\n');

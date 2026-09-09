@@ -1,14 +1,8 @@
-//! A minimal software canvas.
-//!
-//! Pixels are stored as `Argb8888` - what `wl_shm` expects - which on a
-//! little-endian machine is `[B, G, R, A]` in memory, premultiplied.
-
 use spectre_text::Image;
 use spectre_theme::{Color, Gradient, Pattern};
 
 use crate::PatternMask;
 
-/// An integer rectangle in panel-local pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -38,7 +32,6 @@ impl Rect {
         x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
     }
 
-    /// Shrink on every side by `amount`, never past zero.
     pub fn inset(&self, amount: i32) -> Rect {
         Rect::new(
             self.x + amount,
@@ -48,7 +41,6 @@ impl Rect {
         )
     }
 
-    /// The overlap of two rectangles, empty when they do not touch.
     pub fn intersect(&self, other: &Rect) -> Rect {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
@@ -61,7 +53,6 @@ impl Rect {
     }
 }
 
-/// A premultiplied ARGB pixel buffer.
 pub struct Canvas {
     width: i32,
     height: i32,
@@ -74,7 +65,6 @@ impl Canvas {
         Self { width, height, pixels: vec![0; (width * height * 4) as usize] }
     }
 
-    /// How much room a widget has, without going through `bounds`.
     pub fn width(&self) -> i32 {
         self.width
     }
@@ -91,7 +81,6 @@ impl Canvas {
         &self.pixels
     }
 
-    /// Resize, discarding the contents. Returns `true` if anything changed.
     pub fn resize(&mut self, width: i32, height: i32) -> bool {
         let (width, height) = (width.max(0), height.max(0));
         if width == self.width && height == self.height {
@@ -103,7 +92,6 @@ impl Canvas {
         true
     }
 
-    /// Overwrite every pixel, ignoring what was there.
     pub fn clear(&mut self, color: Color) {
         let [b, g, r, a] = to_argb(color);
         for chunk in self.pixels.chunks_exact_mut(4) {
@@ -114,7 +102,6 @@ impl Canvas {
         }
     }
 
-    /// Blend `color` over the rectangle, clipped to the canvas.
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
         if color.a <= 0.0 {
             return;
@@ -131,7 +118,6 @@ impl Canvas {
         }
     }
 
-    /// Draw a rasterised text image with its top-left at `(x, y)`.
     pub fn draw_image(&mut self, x: i32, y: i32, image: &Image) {
         if image.is_empty() {
             return;
@@ -148,7 +134,6 @@ impl Canvas {
                     continue;
                 }
                 let i = row as usize * stride + col as usize * 4;
-                // spectre-text hands back premultiplied RGBA.
                 let (r, g, b, a) =
                     (image.data[i], image.data[i + 1], image.data[i + 2], image.data[i + 3]);
                 if a == 0 {
@@ -159,12 +144,6 @@ impl Canvas {
         }
     }
 
-    /// Fill `rect` with the Spectre Pattern over `background`.
-    ///
-    /// The contour coverage comes from `mask`, which is the CPU twin of the
-    /// compositor's `pattern.glsl`, so the panel and the window title bars show
-    /// one pattern rather than two that merely look similar. `color_phase`
-    /// rotates the accent loop the lines are tinted from.
     pub fn fill_pattern(
         &mut self,
         rect: Rect,
@@ -183,7 +162,6 @@ impl Canvas {
             return;
         }
 
-        // One colour per column: the accent runs across the width, not down.
         for x in area.x..area.right() {
             let t = (x - rect.x) as f32 / rect.w as f32 + color_phase;
             let line = Pattern::line_at(&stops, t);
@@ -202,7 +180,6 @@ impl Canvas {
         }
     }
 
-    /// Source-over blend one premultiplied pixel.
     #[inline]
     fn blend(&mut self, x: i32, y: i32, b: u8, g: u8, r: u8, a: u8) {
         let idx = ((y * self.width + x) * 4) as usize;
@@ -222,7 +199,6 @@ impl Canvas {
     }
 }
 
-/// Premultiplied `[B, G, R, A]`, the byte order `Argb8888` has in memory.
 fn to_argb(color: Color) -> [u8; 4] {
     let a = color.a.clamp(0.0, 1.0);
     let c = |v: f32| ((v.clamp(0.0, 1.0) * a) * 255.0 + 0.5) as u8;
@@ -257,7 +233,6 @@ mod tests {
     #[test]
     fn fills_are_clipped_to_the_canvas() {
         let mut c = Canvas::new(8, 8);
-        // Entirely outside, and straddling the edge: neither may panic.
         c.fill_rect(Rect::new(100, 100, 10, 10), palette::TEXT);
         c.fill_rect(Rect::new(-5, -5, 8, 8), palette::TEXT);
         assert_ne!(pixel(&c, 0, 0), [0, 0, 0, 0], "the overlapping part is drawn");
@@ -352,10 +327,6 @@ mod tests {
         let mut b = Canvas::new(120, 32);
         b.fill_pattern(b.bounds(), &mask, palette::SURFACE, &accent, 0.4);
 
-        // The ground travels with the colour, so a pixel off the lines is its
-        // column's ground and nothing else. What must hold is that no line is
-        // painted outside the mask: the mask alone places them, and the colour
-        // phase never reaches it.
         let stops = mask.pattern.line_stops(&accent, palette::SURFACE);
         for (canvas, phase) in [(&a, 0.0f32), (&b, 0.4f32)] {
             for x in 0..120 {

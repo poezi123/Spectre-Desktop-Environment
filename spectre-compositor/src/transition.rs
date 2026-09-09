@@ -1,45 +1,25 @@
-//! Workspace transitions.
-//!
-//! The animation itself is pure arithmetic: given a kind, a start time and a
-//! duration, it says where each workspace should be drawn and how opaque it
-//! should be. The compositor then renders the outgoing and incoming workspaces
-//! into the same frame with those offsets.
-//!
-//! Nothing here allocates or touches the renderer, so the timing and easing can
-//! be tested without a GPU.
-
 use std::time::{Duration, Instant};
 
 use spectre_config::WorkspaceTransition;
 
-/// How a single workspace is placed while a transition runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placement {
-    /// Horizontal offset from the workspace's resting position, in logical
-    /// pixels. Positive is to the right.
     pub offset_x: i32,
-    /// Uniform scale about the output's centre. `1.0` is untransformed.
     pub scale: f64,
-    /// Opacity, `0.0..=1.0`.
     pub alpha: f32,
 }
 
 impl Placement {
-    /// A workspace sitting exactly where it belongs, fully opaque.
     pub const RESTING: Placement = Placement { offset_x: 0, scale: 1.0, alpha: 1.0 };
 
-    /// Whether drawing this placement would change any pixel.
     pub fn is_visible(&self) -> bool {
         self.alpha > 0.001 && self.scale > 0.001
     }
 }
 
-/// A workspace switch in progress.
 #[derive(Debug, Clone)]
 pub struct Transition {
-    /// Index of the workspace being left.
     pub from: usize,
-    /// Index of the workspace being entered.
     pub to: usize,
     kind: WorkspaceTransition,
     started: Instant,
@@ -47,11 +27,6 @@ pub struct Transition {
 }
 
 impl Transition {
-    /// Start a transition, or `None` when it would not animate.
-    ///
-    /// Returning `None` for a zero duration keeps the "animations off" path
-    /// free of any per-frame work at all, rather than running a transition that
-    /// completes instantly.
     pub fn start(
         from: usize,
         to: usize,
@@ -71,7 +46,6 @@ impl Transition {
         })
     }
 
-    /// Linear progress through the transition, `0.0..=1.0`.
     pub fn linear_progress(&self, now: Instant) -> f32 {
         let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
         let total = self.duration.as_secs_f32();
@@ -81,7 +55,6 @@ impl Transition {
         (elapsed / total).clamp(0.0, 1.0)
     }
 
-    /// Eased progress, which is what the placements use.
     pub fn progress(&self, now: Instant) -> f32 {
         ease_out_cubic(self.linear_progress(now))
     }
@@ -90,18 +63,10 @@ impl Transition {
         self.linear_progress(now) >= 1.0
     }
 
-    /// `true` when the new workspace enters from the right.
-    ///
-    /// Workspaces are a row, so going from 1 to 3 moves right and 3 to 1 moves
-    /// left. Wrapping around the ends is treated as a normal move rather than a
-    /// long sweep back, because a wrap is a short-cut, not a journey.
     fn moves_right(&self) -> bool {
         self.to > self.from
     }
 
-    /// Where to draw the outgoing and incoming workspaces.
-    ///
-    /// `width` is the output width in logical pixels.
     pub fn placements(&self, now: Instant, width: i32) -> (Placement, Placement) {
         let t = self.progress(now);
         let direction = if self.moves_right() { 1.0 } else { -1.0 };
@@ -126,8 +91,6 @@ impl Transition {
                 },
             ),
 
-            // Depth slides and pushes the outgoing workspace back, so the two
-            // read as layers rather than as a strip being dragged past.
             WorkspaceTransition::Depth => (
                 Placement {
                     offset_x: (-direction * travel * 0.35 * t) as i32,
@@ -141,11 +104,6 @@ impl Transition {
                 },
             ),
 
-            // Cube and Coverflow need each workspace rendered to a texture and
-            // mapped onto a perspective-projected quad, which the flat element
-            // pipeline cannot express. Until that render pass exists they run
-            // as Depth rather than silently doing nothing: the user asked for
-            // motion and gets motion, just not the shape they picked.
             WorkspaceTransition::Cube | WorkspaceTransition::Coverflow => Transition {
                 kind: WorkspaceTransition::Depth,
                 ..self.clone()
@@ -155,8 +113,6 @@ impl Transition {
     }
 }
 
-/// Decelerating ease. Fast at the start so the switch feels immediate, settling
-/// at the end so it does not look like it stopped short.
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
@@ -206,7 +162,6 @@ mod tests {
         assert_eq!(ease_out_cubic(0.0), 0.0);
         assert_eq!(ease_out_cubic(1.0), 1.0);
         assert!(ease_out_cubic(0.5) > 0.5, "an ease-out is past halfway at the midpoint");
-        // Monotonic.
         let mut previous = 0.0;
         for i in 0..=100 {
             let value = ease_out_cubic(i as f32 / 100.0);

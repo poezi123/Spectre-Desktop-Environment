@@ -1,9 +1,3 @@
-//! The Spectre application launcher.
-//!
-//! A keyboard-driven overlay: type to filter, arrows to move, Enter to launch,
-//! Escape to dismiss. It is a plain layer-shell client, so it can be replaced
-//! by any other launcher without touching the compositor.
-
 mod category;
 mod entry;
 mod matcher;
@@ -68,10 +62,6 @@ fn main() -> anyhow::Result<()> {
     let surface = compositor.create_surface(&qh);
     let layer =
         layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("spectre-launcher"), None);
-    // Anchored to the corner the Spectre mark sits in, so the menu rises out of
-    // the button that opens it. Anchoring to the bottom also puts it above the
-    // panel's exclusive zone rather than under it. Exclusive keyboard: a
-    // launcher that does not get the keystrokes is not a launcher.
     let (width, height) = ui::window_size(1280, 800, 8);
     layer.set_size(width as u32, height as u32);
     layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT);
@@ -115,8 +105,6 @@ fn main() -> anyhow::Result<()> {
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
-    // The launcher is a one-shot: it dismisses itself once something has been
-    // launched, Escape is pressed, or the keyboard is taken away.
     let signal = event_loop.get_signal();
     event_loop.run(None, &mut launcher, move |launcher| {
         if launcher.exit {
@@ -158,22 +146,15 @@ struct Launcher {
 
     entries: Vec<Entry>,
     query: String,
-    /// Indices into `entries`, ranked. Indices rather than references so the
-    /// borrow checker does not have to reason about a self-referential struct.
     results: Vec<usize>,
     selected: usize,
     offset: usize,
-    /// Categories with something in them, and the one being shown.
     categories: Vec<Category>,
     category: usize,
     started: Instant,
 }
 
 impl Launcher {
-    /// Re-rank after the query or the category changed.
-    ///
-    /// A query searches every application; the category column only applies
-    /// while the search field is empty.
     fn refilter(&mut self) {
         let current = self.categories.get(self.category).copied().unwrap_or(Category::All);
         let ranked = if self.query.trim().is_empty() {
@@ -192,7 +173,6 @@ impl Launcher {
         self.dirty = true;
     }
 
-    /// Step through the category column.
     fn move_category(&mut self, delta: isize) {
         if self.categories.is_empty() {
             return;
@@ -213,7 +193,6 @@ impl Launcher {
         self.dirty = true;
     }
 
-    /// Launch the selected entry and quit.
     fn activate(&mut self) {
         let Some(&index) = self.results.get(self.selected) else {
             return;
@@ -225,9 +204,6 @@ impl Launcher {
 
     fn launch(&self, entry: &Entry) {
         let command = if entry.terminal {
-            // A terminal application needs one; the configured spawn command is
-            // the desktop's own terminal binding, which is what the user
-            // already told us they want.
             format!("{} -e {}", self.terminal_command(), entry.exec)
         } else {
             entry.exec.clone()
@@ -253,12 +229,9 @@ impl Launcher {
         }
     }
 
-    /// The terminal to run console applications in.
     fn terminal_command(&self) -> String {
         use spectre_config::{Action, Keybind, Modifiers as Mods};
 
-        // Reuse whatever `Mod+Return` is bound to: that is the terminal the
-        // user actually uses, rather than a hard-coded guess.
         let binding = Keybind::new(Mods::logo(), "return");
         match self.config.keybinds.get(&binding) {
             Some(Action::Spawn { command }) => command.clone(),
@@ -316,7 +289,6 @@ impl Launcher {
     }
 }
 
-/// Split a command line on whitespace, honouring quotes.
 fn shell_split(input: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -374,8 +346,6 @@ impl KeyboardHandler for Launcher {
         _s: &wl_surface::WlSurface,
         _serial: u32,
     ) {
-        // Losing keyboard focus means something else took over; a launcher that
-        // lingers invisible-but-alive is a bug report waiting to happen.
         self.exit = true;
     }
 
@@ -421,8 +391,6 @@ impl KeyboardHandler for Launcher {
     ) {
     }
 
-    /// Held keys repeat, so holding Backspace clears the query and holding an
-    /// arrow scrolls the list, exactly as a text field would.
     fn repeat_key(
         &mut self,
         conn: &Connection,

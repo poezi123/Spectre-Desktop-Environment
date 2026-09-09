@@ -1,37 +1,17 @@
-//! Text for the desktop shell.
-//!
-//! Everything Spectre draws that is not a client surface goes through here:
-//! window title captions, panel labels, the clock, the launcher. The output is
-//! always a premultiplied RGBA byte buffer, which is what both the compositor's
-//! GLES renderer and a software fallback can upload directly.
-//!
-//! ```no_run
-//! use spectre_text::{Label, TextRenderer};
-//! use spectre_theme::palette;
-//!
-//! let mut renderer = TextRenderer::new();
-//! let label = Label::new("garuda@spectre: ~").size(13.0).color(palette::TEXT);
-//! let image = renderer.rasterise(&label);
-//! assert!(image.width > 0);
-//! ```
-
 use cosmic_text::{
     Attrs, Buffer, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics, Shaping,
     SwashCache, Weight, Wrap,
 };
 use spectre_theme::Color;
 
-/// A rasterised run of text: premultiplied RGBA, top-left origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
-    /// `width * height * 4` bytes, premultiplied RGBA.
     pub data: Vec<u8>,
 }
 
 impl Image {
-    /// A zero-sized image, returned for empty text.
     pub fn empty() -> Self {
         Self { width: 0, height: 0, data: Vec::new() }
     }
@@ -40,19 +20,15 @@ impl Image {
         self.width == 0 || self.height == 0
     }
 
-    /// Bytes per row.
     pub fn stride(&self) -> usize {
         self.width as usize * 4
     }
 }
 
-/// Which font family to shape with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FontFamily {
-    /// The system UI font. Used for title captions and panel labels.
     #[default]
     SansSerif,
-    /// Used where columns have to line up: the clock, resource readouts.
     Monospace,
 }
 
@@ -65,34 +41,23 @@ impl FontFamily {
     }
 }
 
-/// One run of text to draw.
 #[derive(Debug, Clone)]
 pub struct Label<'a> {
     pub text: &'a str,
-    /// Font size in device pixels. Callers scale this by the output scale.
     pub size_px: f32,
     pub color: Color,
     pub family: FontFamily,
-    /// `true` renders semibold, used for the focused window's caption.
     pub bold: bool,
-    /// Truncate with an ellipsis beyond this many pixels. `None` never truncates.
     pub max_width: Option<u32>,
-    /// Where the ellipsis goes when the text is truncated.
     pub ellipsis: EllipsisSide,
-    /// Wrap onto at most this many lines. `1` never wraps, which is what a
-    /// title bar caption or a panel label wants.
     pub max_lines: u16,
 }
 
-/// Which end of the text to drop when it does not fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EllipsisSide {
-    /// `A very long window ti…` - the right choice for window captions.
     #[default]
     End,
-    /// `…ong/window/title` - better for paths, where the tail identifies the item.
     Start,
-    /// `A very…dow title`.
     Middle,
 }
 
@@ -151,37 +116,24 @@ impl<'a> Label<'a> {
         self
     }
 
-    /// Allow the text to wrap onto up to `lines` lines.
-    ///
-    /// Requires a `max_width`: without one there is nothing to wrap against,
-    /// and the label stays on a single line.
     pub fn max_lines(mut self, lines: u16) -> Self {
         self.max_lines = lines.max(1);
         self
     }
 
     fn line_height(&self) -> f32 {
-        // 1.3 is the ratio the concept renders use: tight enough for a 32px
-        // title bar, loose enough that descenders are not clipped.
         (self.size_px * 1.3).ceil()
     }
 
-    /// Whether this label is allowed to wrap.
     fn wraps(&self) -> bool {
         self.max_lines > 1 && self.max_width.is_some()
     }
 
-    /// Height of the box the text is laid out in.
     fn box_height(&self) -> f32 {
         self.line_height() * self.max_lines.max(1) as f32
     }
 }
 
-/// Owns the font database and the glyph cache.
-///
-/// Construction scans the system fonts, which takes long enough that it must
-/// happen once at start-up rather than per frame. Everything after that is
-/// cached.
 pub struct TextRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -204,8 +156,6 @@ impl TextRenderer {
         Self { font_system: FontSystem::new(), swash_cache: SwashCache::new() }
     }
 
-    /// Build a renderer over an explicit font set, for tests and for systems
-    /// where scanning `/usr/share/fonts` is not wanted.
     pub fn with_fonts(fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
         let db = cosmic_text::fontdb::Database::new();
         let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
@@ -215,7 +165,6 @@ impl TextRenderer {
         Self { font_system, swash_cache: SwashCache::new() }
     }
 
-    /// Width and height the label will occupy, without rasterising it.
     pub fn measure(&mut self, label: &Label<'_>) -> (u32, u32) {
         if label.text.is_empty() {
             return (0, 0);
@@ -225,10 +174,6 @@ impl TextRenderer {
         (width, height)
     }
 
-    /// Rasterise the label into a premultiplied RGBA image.
-    ///
-    /// Empty text yields [`Image::empty`] rather than a 1x1 transparent pixel,
-    /// so callers can skip the upload entirely.
     pub fn rasterise(&mut self, label: &Label<'_>) -> Image {
         if label.text.is_empty() || label.size_px <= 0.0 {
             return Image::empty();
@@ -260,9 +205,6 @@ impl TextRenderer {
                             continue;
                         }
                         let idx = (py as usize * width as usize + px as usize) * 4;
-                        // Source-over onto whatever is already there, in
-                        // premultiplied space. Glyph runs can overlap on
-                        // scripts with marks, so this cannot just overwrite.
                         let sa = a as u32;
                         let inv = 255 - sa;
                         let blend = |dst: u8, src: u8| -> u8 {
@@ -280,16 +222,12 @@ impl TextRenderer {
         Image { width, height, data }
     }
 
-    /// Shape the label and report the pixel box it needs.
     fn shape(&mut self, label: &Label<'_>) -> (Buffer, u32, u32) {
         let metrics = Metrics::new(label.size_px, label.line_height());
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let weight = if label.bold { Weight::SEMIBOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(label.family.to_attrs()).weight(weight);
 
-        // Title bars and panel labels never wrap; a notification body does.
-        // Either way overflow is ellipsised during layout, so shaping stays a
-        // single pass even for text that has to be cut.
         buffer.set_wrap(if label.wraps() { Wrap::WordOrGlyph } else { Wrap::None });
         if label.max_width.is_some() {
             buffer.set_ellipsize(label.ellipsis.to_cosmic(label.max_lines));
@@ -307,8 +245,6 @@ impl TextRenderer {
             Some(max) => width.min(max),
             None => width,
         };
-        // Only as tall as the lines actually used, so a one-line body does not
-        // reserve room for two.
         let lines = buffer.layout_runs().count().clamp(1, label.max_lines as usize);
         (buffer, width, (label.line_height() * lines as f32) as u32)
     }
@@ -397,8 +333,6 @@ mod tests {
         assert_eq!(Label::new("a very long window title").max_width, None);
     }
 
-    /// Needs a real font, so it is skipped on a machine without one rather
-    /// than failing: the crate must still be testable in a bare container.
     #[test]
     fn real_text_rasterises_to_visible_pixels() {
         let mut r = TextRenderer::new();

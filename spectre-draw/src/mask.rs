@@ -1,24 +1,5 @@
-//! Cached contour coverage for the software pattern.
-//!
-//! Evaluating four octaves of noise per pixel is the expensive half of the
-//! Spectre Pattern, and it only changes when the field scrolls. Caching it
-//! means a surface whose lines stand still and whose colours travel is repainted
-//! for the cost of a blend per pixel.
-//!
-//! The noise is not evaluated per pixel even when the mask is rebuilt. The
-//! height field it produces is smooth over hundreds of pixels, so it is sampled
-//! on a grid [`STEP`] pixels apart and interpolated in between; only the slicing
-//! that turns height into lines runs per pixel, which is where the edges are.
-
 use spectre_theme::Pattern;
 
-/// Device pixels between samples of the height field.
-///
-/// Measured against evaluating the noise at every pixel, over a 900x386
-/// surface at the default settings: three pixels is five times faster for a
-/// mean error under 2/255, and the smallest closed contours still come out
-/// round. Four is a little faster again but starts to draw them as octagons.
-/// The measurement is `how_close_the_interpolation_comes` below.
 const STEP: i32 = 3;
 
 #[derive(Debug, Clone)]
@@ -49,7 +30,6 @@ impl PatternMask {
         }
     }
 
-    /// Recompute the mask if anything it depends on changed.
     pub fn prepare(
         &mut self,
         width: i32,
@@ -81,8 +61,6 @@ impl PatternMask {
         self.coverage.clear();
         self.coverage.reserve(width as usize * height as usize);
 
-        // One extra row and column so the last pixels have something to
-        // interpolate towards.
         let columns = (width / STEP + 2) as usize;
         let rows = (height / STEP + 2) as usize;
         let mut field = Vec::with_capacity(columns * rows);
@@ -114,8 +92,6 @@ impl PatternMask {
         self.coverage.is_empty()
     }
 
-    /// Coverage as one byte per pixel, row by row. Empty when the pattern
-    /// draws nothing.
     pub fn bytes(&self) -> &[u8] {
         &self.coverage
     }
@@ -124,7 +100,6 @@ impl PatternMask {
         (self.width, self.height)
     }
 
-    /// Coverage at a mask-local pixel, in `0.0..=1.0`.
     pub fn at(&self, x: i32, y: i32) -> f32 {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {
             return 0.0;
@@ -192,9 +167,6 @@ mod tests {
 mod accuracy {
     use super::*;
 
-    /// How far the interpolated mask strays from evaluating the noise at every
-    /// pixel, and what that saves. Not an assertion: it is the measurement the
-    /// choice of `STEP` was made from.
     #[test]
     #[ignore = "measures this machine, not the code"]
     fn how_close_the_interpolation_comes() {

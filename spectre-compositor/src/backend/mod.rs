@@ -1,29 +1,15 @@
-//! Backends: the two ways Spectre can get a screen and input devices.
-//!
-//! `winit` runs the compositor as a window inside an existing session, which is
-//! how development and the VM smoke test work. `udev` drives KMS/DRM directly
-//! and is the real desktop session.
-
 #[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "winit")]
 pub mod winit;
 
-/// Which backend to start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
-    /// Nested inside another Wayland or X11 session.
     Winit,
-    /// Native KMS/DRM session on a TTY.
     Udev,
 }
 
 impl Backend {
-    /// Pick a backend from the environment.
-    ///
-    /// Being inside a session means a nested window is almost certainly what
-    /// the user wants; starting a DRM session from inside another compositor
-    /// would fight it for the display.
     pub fn detect() -> Backend {
         let nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
             || std::env::var_os("DISPLAY").is_some();

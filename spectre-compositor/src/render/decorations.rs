@@ -1,46 +1,21 @@
-//! Window decorations: the frame Spectre draws around every server-side
-//! decorated window.
-//!
-//! Layout, matching `Fensterconcept.png`:
-//!
-//! ```text
-//! +--------------------------------------------------+  <- hairline border, rounded
-//! | [icon]        Window title          [_] [#] [x]  |  <- title bar
-//! +--------------------------------------------------+
-//! |                                                  |
-//! |                 client surface                   |
-//! ```
-//!
-//! Geometry lives here as pure functions so the renderer and the pointer
-//! hit-test cannot disagree about where a button is - the class of bug where a
-//! close button is drawn in one place and clickable in another.
-
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use spectre_theme::{Metrics, Palette};
 
 use super::{solid, RenderCache, Slot};
 
-/// Gap between title bar buttons, in logical pixels.
 const BUTTON_GAP: i32 = 2;
-/// Padding at the ends of the title bar.
 const TITLEBAR_PADDING: i32 = 8;
 
-/// The rectangles that make up one window's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
-    /// The client surface itself.
     pub window: Rectangle<i32, Logical>,
-    /// The title bar, directly above the surface. Zero-sized when undecorated.
     pub titlebar: Rectangle<i32, Logical>,
-    /// Title bar plus surface plus border: everything Spectre paints.
     pub outer: Rectangle<i32, Logical>,
-    /// Border thickness used to build `outer`.
     pub border: i32,
 }
 
 impl Frame {
-    /// Build the frame for a window whose surface occupies `window`.
     pub fn new(window: Rectangle<i32, Logical>, metrics: &Metrics, decorated: bool) -> Self {
         let border = if decorated { metrics.border_width as i32 } else { 0 };
         let title_h = if decorated { metrics.titlebar_height as i32 } else { 0 };
@@ -65,22 +40,15 @@ impl Frame {
     }
 }
 
-/// A part of the frame the pointer can interact with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
-    /// Dragging here moves the window; a double click maximises it.
     Titlebar,
     Minimize,
     Maximize,
     Close,
-    /// Inside the border, but not the title bar.
     Border,
 }
 
-/// The three buttons, right-aligned, in the order they are drawn.
-///
-/// Returns an empty vector for an undecorated or very narrow title bar, so a
-/// window can never end up with a button drawn outside its own frame.
 pub fn buttons(frame: &Frame, metrics: &Metrics) -> Vec<(Part, Rectangle<i32, Logical>)> {
     let size = metrics.button_size as i32;
     let bar = frame.titlebar;
@@ -105,7 +73,6 @@ pub fn buttons(frame: &Frame, metrics: &Metrics) -> Vec<(Part, Rectangle<i32, Lo
     out
 }
 
-/// Space available for the caption: the title bar minus the buttons and padding.
 pub fn caption_area(frame: &Frame, metrics: &Metrics) -> Rectangle<i32, Logical> {
     let bar = frame.titlebar;
     let buttons = buttons(frame, metrics);
@@ -120,10 +87,6 @@ pub fn caption_area(frame: &Frame, metrics: &Metrics) -> Rectangle<i32, Logical>
     Rectangle::new(Point::from((left, bar.loc.y)), Size::from((width, bar.size.h)))
 }
 
-/// Which part of the frame `point` falls on, if any.
-///
-/// Returns `None` for points over the client surface: those belong to the
-/// client and must be forwarded untouched.
 pub fn part_at(
     frame: &Frame,
     metrics: &Metrics,
@@ -145,11 +108,6 @@ pub fn part_at(
     Some(Part::Border)
 }
 
-/// The hover plate behind a title bar button, if the pointer is on one.
-///
-/// The frame itself is drawn by `frame.glsl`; the only solid rectangle left in
-/// the decoration is this plate, which has to sit above the bar and below the
-/// glyph and so cannot live in the frame shader.
 #[allow(clippy::too_many_arguments)]
 pub fn button_plates(
     cache: &mut RenderCache,
@@ -172,11 +130,6 @@ pub fn button_plates(
     elements
 }
 
-/// A square-cornered frame, used only when `frame.glsl` fails to compile.
-///
-/// Losing the rounded corners is a far smaller regression than losing the
-/// title bar and border entirely, so the fallback keeps the same colours and
-/// the same geometry and simply gives up the curve.
 pub fn fallback_frame(
     cache: &mut RenderCache,
     key: u32,
@@ -191,7 +144,6 @@ pub fn fallback_frame(
         return elements;
     }
 
-    // Numbered above the button plates so the two never share a slot.
     const FIRST: u8 = 16;
     if frame.is_decorated() {
         let slot = Slot::Decoration(key, FIRST);
@@ -208,13 +160,10 @@ pub fn fallback_frame(
     elements
 }
 
-/// Scale a colour's opacity, for a workspace being faded in or out.
 fn faded(color: spectre_theme::Color, alpha: f32) -> spectre_theme::Color {
     color.alpha(color.a * alpha.clamp(0.0, 1.0))
 }
 
-/// The button's background plate. `None` means "draw nothing", which is the
-/// resting state: the concept keeps the bar clean until the pointer arrives.
 fn button_background(part: Part, hovered: Option<Part>, palette: &Palette) -> Option<spectre_theme::Color> {
     if hovered != Some(part) {
         return None;
@@ -225,8 +174,6 @@ fn button_background(part: Part, hovered: Option<Part>, palette: &Palette) -> Op
     })
 }
 
-/// The four edges of `rect` as `width`-thick rectangles, without overlapping
-/// corners: top and bottom span the full width, the sides fill the gap between.
 fn ring_edges(rect: Rectangle<i32, Logical>, width: i32) -> [Rectangle<i32, Logical>; 4] {
     let inner_h = (rect.size.h - width * 2).max(0);
     [
@@ -293,7 +240,6 @@ mod tests {
         assert_eq!(b[0].0, Part::Close);
         let close = b[0].1;
         assert_eq!(close.loc.x + close.size.w, f.titlebar.loc.x + f.titlebar.size.w - 8);
-        // Right to left, no overlap.
         assert!(b[1].1.loc.x + b[1].1.size.w <= b[0].1.loc.x);
         assert!(b[2].1.loc.x + b[2].1.size.w <= b[1].1.loc.x);
     }

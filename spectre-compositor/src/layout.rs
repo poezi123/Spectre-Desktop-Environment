@@ -1,9 +1,3 @@
-//! Window placement, focus and window-state changes.
-//!
-//! Spectre is a stacking desktop: windows float, keep their title bars and are
-//! placed by the compositor when they first appear. That matches the window
-//! concept and keeps the model simple enough to stay cheap.
-
 use smithay::desktop::{layer_map_for_output, Window, WindowSurfaceType};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -14,14 +8,10 @@ use spectre_config::Direction;
 use crate::render::{decorations, Frame, Part};
 use crate::state::Spectre;
 
-/// Offset applied to each successive window that lands on the same spot, so
-/// three terminals opened in a row do not hide each other perfectly.
 const CASCADE_STEP: i32 = 28;
-/// How far a directional move nudges a floating window.
 const MOVE_STEP: i32 = 64;
 
 impl Spectre {
-    /// Output the pointer is on, else the first mapped output.
     pub fn active_output(&self) -> Option<Output> {
         let pos = self.pointer_position();
         self.workspaces
@@ -32,8 +22,6 @@ impl Spectre {
             .or_else(|| self.outputs().first().cloned())
     }
 
-    /// Area available to normal windows: the output minus panels and other
-    /// layer surfaces that reserved an exclusive zone.
     pub fn working_area(&self, output: &Output) -> Rectangle<i32, Logical> {
         let geometry = self
             .workspaces
@@ -47,7 +35,6 @@ impl Spectre {
         area
     }
 
-    /// Decoration inset above the client surface: title bar plus border.
     fn top_inset(&self, window: &Window) -> i32 {
         let m = self.config.theme.metrics;
         if self.is_decorated(window) {
@@ -57,7 +44,6 @@ impl Spectre {
         }
     }
 
-    /// Place a freshly mapped window and give it focus.
     pub fn place_window(&mut self, window: Window) {
         let Some(output) = self.active_output() else {
             tracing::warn!("no output to place a window on; dropping it");
@@ -73,14 +59,11 @@ impl Spectre {
             0
         };
 
-        // Centre the whole frame, not just the surface, so a decorated window
-        // does not sit visually low by half a title bar.
         let mut loc = Point::from((
             area.loc.x + (area.size.w - size.w).max(0) / 2,
             area.loc.y + top + (area.size.h - size.h - top - border).max(0) / 2,
         ));
 
-        // Cascade while something already sits exactly here.
         let occupied = |space: &smithay::desktop::Space<Window>, p: Point<i32, Logical>| {
             space.elements().any(|w| space.element_location(w) == Some(p))
         };
@@ -89,8 +72,6 @@ impl Spectre {
             loc += Point::from((CASCADE_STEP, CASCADE_STEP));
             guard += 1;
         }
-        // Never cascade a window off the bottom-right, and never above the
-        // working area: a title bar pushed off screen cannot be grabbed back.
         loc.x = loc.x.min((area.loc.x + area.size.w - size.w).max(area.loc.x));
         loc.y = loc.y.min((area.loc.y + area.size.h - size.h).max(area.loc.y + top));
         loc.y = loc.y.max(area.loc.y + top);
@@ -100,7 +81,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Remove a window from whichever workspace holds it and move focus on.
     pub fn unmap_window(&mut self, window: &Window) {
         for space in self.workspaces.iter_mut() {
             space.unmap_elem(window);
@@ -113,14 +93,12 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Give keyboard focus to `window`, or clear focus when `None`.
     pub fn focus_window(&mut self, window: Option<&Window>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
 
-        // Deactivate everything else so only one title bar reads as focused.
         let windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
         for w in &windows {
             let active = Some(w) == window;
@@ -150,10 +128,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Focus the next (or previous) window in the active workspace.
-    ///
-    /// Minimized windows are part of the cycle and are restored when reached;
-    /// otherwise minimizing a window would put it out of reach entirely.
     pub fn cycle_focus(&mut self, forward: bool) {
         let mut windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
         windows.extend(self.minimized.iter().map(|(w, _)| w.clone()));
@@ -175,7 +149,6 @@ impl Spectre {
         }
     }
 
-    /// Focus the nearest window in `direction`, measured between centres.
     pub fn focus_direction(&mut self, direction: Direction) {
         let space = self.workspaces.active();
         let Some(current) = self.focus.clone() else {
@@ -200,8 +173,6 @@ impl Spectre {
         }
     }
 
-    /// Move `window` so its surface top-left lands on `location`, clamped so the
-    /// title bar always stays grabbable.
     pub fn move_window_to(&mut self, window: &Window, location: Point<i32, Logical>) {
         let Some(output) = self.active_output() else {
             return;
@@ -211,8 +182,6 @@ impl Spectre {
         let size = window.geometry().size;
 
         let mut loc = location;
-        // Horizontally a window may hang off the edge, but never so far that
-        // less than this much of it is left to grab.
         const MIN_VISIBLE: i32 = 48;
         loc.x = loc.x.clamp(
             area.loc.x - (size.w - MIN_VISIBLE).max(0),
@@ -224,9 +193,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Hide `window` without closing it. It stays in the workspace's window
-    /// list so `Mod+Tab` can bring it back, which is the only way back until
-    /// the panel exists.
     pub fn minimize(&mut self, window: &Window) {
         let Some(location) = self.workspaces.active().element_location(window) else {
             return;
@@ -244,7 +210,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Bring a minimized window back where it was and focus it.
     pub fn restore(&mut self, window: &Window) {
         let Some(index) = self.minimized.iter().position(|(w, _)| w == window) else {
             return;
@@ -258,8 +223,6 @@ impl Spectre {
         self.minimized.iter().any(|(w, _)| w == window)
     }
 
-    /// Nudge the focused floating window in `direction`, clamped to the working
-    /// area so it can never be pushed off screen.
     pub fn move_direction(&mut self, direction: Direction) {
         let Some(window) = self.focus.clone() else {
             return;
@@ -287,10 +250,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Maximize or restore `window`.
-    ///
-    /// The client is sized to the working area *minus* the frame, so a
-    /// maximized window's title bar and border stay on screen.
     pub fn set_maximized(&mut self, window: &Window, maximized: bool) {
         let Some(output) = self.active_output() else {
             return;
@@ -328,7 +287,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Fullscreen covers the whole output, ignoring panels.
     pub fn set_fullscreen(&mut self, window: &Window, fullscreen: bool) {
         let Some(output) = self.active_output() else {
             return;
@@ -357,21 +315,16 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// True when the focused window is in the given toplevel state.
     pub fn focused_has_state(&self, wanted: xdg_toplevel::State) -> bool {
         self.focus.as_ref().map(|w| self.has_state(w, wanted)).unwrap_or(false)
     }
 
-    /// Ask the focused window to close.
     pub fn close_focused(&mut self) {
         if let Some(toplevel) = self.focus.as_ref().and_then(|w| w.toplevel().cloned()) {
             toplevel.send_close();
         }
     }
 
-    /// Switch to a workspace, animating the change when the profile allows it.
-    ///
-    /// Returns `false` when nothing changed, so callers can skip a redraw.
     pub fn switch_workspace(&mut self, index: usize) -> bool {
         let from = self.workspaces.active_index();
         if !self.workspaces.switch(index) {
@@ -381,7 +334,6 @@ impl Spectre {
         true
     }
 
-    /// Switch by `delta` workspaces, wrapping around.
     pub fn switch_workspace_relative(&mut self, delta: isize) -> bool {
         let from = self.workspaces.active_index();
         if !self.workspaces.switch_relative(delta) {
@@ -391,7 +343,6 @@ impl Spectre {
         true
     }
 
-    /// Start the animation and move focus onto the new workspace.
     fn begin_transition(&mut self, from: usize) {
         let effects = &self.config.effects;
         self.transition = crate::transition::Transition::start(
@@ -407,7 +358,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Drop a finished transition. Returns `true` when one ended.
     pub fn finish_transition(&mut self) -> bool {
         let now = std::time::Instant::now();
         if self.transition.as_ref().is_some_and(|t| t.is_done(now)) {
@@ -418,10 +368,6 @@ impl Spectre {
         false
     }
 
-    /// Hand the keyboard to the topmost layer surface that wants it, or give
-    /// it back to the focused window when none does.
-    ///
-    /// Without this a launcher or a lock screen would be drawn but deaf.
     pub fn update_layer_focus(&mut self) {
         let target = self.outputs().into_iter().find_map(|output| {
             let map = layer_map_for_output(&output);
@@ -446,7 +392,6 @@ impl Spectre {
         match target {
             Some(surface) => keyboard.set_focus(self, Some(surface), serial),
             None => {
-                // Give the keyboard back to whatever had it before.
                 let window = self.focus.clone();
                 self.focus_window(window.as_ref());
             }
@@ -454,12 +399,9 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Re-arrange layer surfaces on `output` and refit anything maximized.
     pub fn reflow_output(&mut self, output: &Output) {
         layer_map_for_output(output).arrange();
 
-        // Panels changing their exclusive zone changes the working area, so
-        // anything maximized has to be resized to the new one.
         let windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
         for window in windows {
             if self.is_maximized(&window) {
@@ -469,10 +411,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// The window whose decoration the pointer is over, topmost first.
-    ///
-    /// Decorations are not client surfaces, so they are hit-tested here rather
-    /// than through `Space`, and always win over the window stacked below them.
     pub fn decoration_under_pointer(&self) -> Option<(Window, Part)> {
         let pointer = self.pointer_position();
         let metrics = self.config.theme.metrics;
@@ -486,8 +424,6 @@ impl Spectre {
             if let Some(part) = decorations::part_at(&frame, &metrics, pointer) {
                 return Some((window.clone(), part));
             }
-            // A point inside this window's surface belongs to the client, and
-            // must not fall through to a window stacked underneath.
             if frame.window.contains(Point::<i32, Logical>::from((
                 pointer.x.floor() as i32,
                 pointer.y.floor() as i32,
@@ -498,7 +434,6 @@ impl Spectre {
         None
     }
 
-    /// Window under the pointer in the active workspace.
     pub fn window_under_pointer(&self) -> Option<Window> {
         let pos = self.pointer_position();
         self.workspaces
@@ -507,7 +442,6 @@ impl Spectre {
             .map(|(w, _)| w.clone())
     }
 
-    /// Surface under the pointer, with the position of its top-left corner.
     pub fn surface_under_pointer(
         &self,
     ) -> Option<(
@@ -519,7 +453,6 @@ impl Spectre {
         let output_geo = self.workspaces.output_geometry(&output)?;
         let layers = layer_map_for_output(&output);
 
-        // Overlay and top layers sit above windows; bottom and background below.
         let above = layers
             .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, pos)
             .or_else(|| layers.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, pos));
@@ -559,10 +492,6 @@ fn distance_sq(a: Point<i32, Logical>, b: Point<i32, Logical>) -> i64 {
     dx * dx + dy * dy
 }
 
-/// Whether `target` lies in `direction` from `origin`.
-///
-/// The dominant-axis test keeps a window that is slightly up and far right from
-/// stealing an "up" press.
 fn in_direction(
     origin: Point<i32, Logical>,
     target: Point<i32, Logical>,
@@ -618,7 +547,6 @@ mod tests {
 
     #[test]
     fn distance_does_not_overflow_on_huge_coordinates() {
-        // i32 squared overflows i32; the i64 accumulator must hold it.
         let d = distance_sq(p(i32::MIN / 2, 0), p(i32::MAX / 2, 0));
         assert!(d > 0);
     }

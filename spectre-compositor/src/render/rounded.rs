@@ -1,17 +1,8 @@
-//! Rounding the corners of a client surface.
-//!
-//! A window's own texture cannot be masked from outside, so the mask is applied
-//! by swapping the renderer's texture shader for the duration of that window's
-//! draw. The replacement takes the window rectangle as a uniform, which means
-//! every surface belonging to the window - toplevel and subsurfaces alike - is
-//! clipped by the same curve rather than each rounding itself.
-
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
 
-/// Corner radii in device pixels: top-left, top-right, bottom-right, bottom-left.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corners {
     pub top_left: f32,
@@ -21,7 +12,6 @@ pub struct Corners {
 }
 
 impl Corners {
-    /// The same radius on every corner.
     pub fn uniform(radius: f32) -> Self {
         Self {
             top_left: radius,
@@ -31,8 +21,6 @@ impl Corners {
         }
     }
 
-    /// Rounded at the bottom only, for a surface sitting under a title bar that
-    /// has already rounded the top two.
     pub fn bottom(radius: f32) -> Self {
         Self { top_left: 0.0, top_right: 0.0, bottom_right: radius, bottom_left: radius }
     }
@@ -49,19 +37,15 @@ impl Corners {
     }
 }
 
-/// Wraps a surface element so it is drawn through the rounding shader.
 #[derive(Debug)]
 pub struct RoundedElement<E> {
     element: E,
     program: GlesTexProgram,
-    /// The window's rectangle in the same physical space as the element's own.
     window: Rectangle<i32, Physical>,
     corners: Corners,
 }
 
 impl<E: Element> RoundedElement<E> {
-    /// Round `element` against `window`, or hand it back unchanged when there
-    /// is nothing to round.
     pub fn new(
         element: E,
         program: Option<&GlesTexProgram>,
@@ -109,18 +93,7 @@ impl<E: Element> Element for RoundedElement<E> {
         self.element.damage_since(scale, commit)
     }
 
-    /// What is left opaque once the corners are cut away.
-    ///
-    /// Everything the curve touches has to be given up, or a renderer that
-    /// skipped what is behind it would leave the desktop unpainted exactly
-    /// where the corner shows it through. The middle of the window, though, is
-    /// as opaque as the surface underneath was - and saying so is what lets the
-    /// damage tracker leave the animated desktop pattern alone while a window
-    /// covers it, instead of recomputing the whole contour field behind
-    /// every frame of every window.
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        // The window rectangle is output-relative, opaque regions are
-        // element-relative; the shader does the same translation in `draw`.
         let origin = self.element.geometry(scale).loc;
         let window = Rectangle::new(self.window.loc - origin, self.window.size);
         opaque_after_rounding(&self.element.opaque_regions(scale), window, self.corners)
@@ -139,19 +112,8 @@ impl<E: Element> Element for RoundedElement<E> {
 
 type Point = smithay::utils::Point<i32, Physical>;
 
-/// How far inside its own edge the rounding shader has stopped feathering.
-///
-/// `rounded.glsl` blends the mask over `AA = 0.8` device pixels either side of
-/// the curve, so a fragment less than a pixel from the edge is not fully
-/// opaque. A whole pixel of margin is the cheapest way to be certain, and one
-/// pixel of extra repainting around a window costs nothing.
 const FEATHER: i32 = 1;
 
-/// The part of `regions` that survives rounding `window` with `corners`.
-///
-/// All rectangles are element-local. The result is conservative on purpose:
-/// claiming a pixel is opaque when the shader has made it translucent shows up
-/// as a hole in the desktop, so every doubtful pixel is given up instead.
 fn opaque_after_rounding(
     regions: &[Rectangle<i32, Physical>],
     window: Rectangle<i32, Physical>,
@@ -160,8 +122,6 @@ fn opaque_after_rounding(
     if regions.is_empty() {
         return Vec::new();
     }
-    // Outside the window rectangle the shader's mask is zero: a subsurface
-    // reaching past the toplevel is clipped away entirely.
     let Some(solid) = inset(window, FEATHER) else {
         return Vec::new();
     };
@@ -174,16 +134,12 @@ fn opaque_after_rounding(
         .collect()
 }
 
-/// `rect` shrunk by `by` on every side, or `None` when nothing is left.
 fn inset(rect: Rectangle<i32, Physical>, by: i32) -> Option<Rectangle<i32, Physical>> {
-    // `Size` refuses to hold a negative number, so the check comes first.
     let (w, h) = (rect.size.w - 2 * by, rect.size.h - 2 * by);
     (w > 0 && h > 0)
         .then(|| Rectangle::new(rect.loc + Point::from((by, by)), Size::from((w, h))))
 }
 
-/// The four squares a rounded corner can reach into, largest radius first in
-/// each corner. A corner with no radius contributes nothing.
 fn corner_boxes(
     window: Rectangle<i32, Physical>,
     corners: Corners,
@@ -199,8 +155,6 @@ fn corner_boxes(
     .into_iter()
     .filter(|(side, _)| *side > FEATHER)
     .map(|(side, (x, y))| {
-        // Anchor the square at the corner it belongs to: an x of `w` means the
-        // right edge, so the square hangs to the left of it.
         let loc = Point::from((
             window.loc.x + if x == 0 { 0 } else { w - side },
             window.loc.y + if y == 0 { 0 } else { h - side },
@@ -222,8 +176,6 @@ where
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        // The shader works in coordinates local to the element being drawn, so
-        // the window rectangle is translated into that space here.
         let min = self.window.loc - dst.loc;
         let max = min + self.window.size;
         let uniforms = vec![
@@ -235,14 +187,11 @@ where
 
         frame.override_default_tex_program(self.program.clone(), uniforms);
         let result = self.element.draw(frame, src, dst, damage, opaque_regions);
-        // Reset even on failure: leaving the override in place would round
-        // every surface drawn after this one for the rest of the frame.
         frame.clear_tex_program_override();
         result
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        // Direct scan-out would bypass the shader and show square corners.
         let _ = renderer;
         None
     }
@@ -280,7 +229,6 @@ mod tests {
         Rectangle::new((x, y).into(), (w, h).into())
     }
 
-    /// True when every rectangle in `regions` avoids the pixel at `x`, `y`.
     fn free_of(regions: &[Rectangle<i32, Physical>], x: i32, y: i32) -> bool {
         !regions.iter().any(|r| r.contains(Point::from((x, y))))
     }
@@ -310,7 +258,6 @@ mod tests {
     fn a_square_top_keeps_its_corners() {
         let window = rect(0, 0, 400, 300);
         let regions = opaque_after_rounding(&[window], window, Corners::bottom(8.0));
-        // One pixel of feather is still given up along every edge.
         assert!(!free_of(&regions, 1, 1), "a title bar has already squared this corner");
         assert!(free_of(&regions, 1, 298), "but the bottom is still rounded");
     }
@@ -360,7 +307,6 @@ mod tests {
 
     #[test]
     fn the_radii_reach_the_shader_in_the_documented_order() {
-        // top-left, top-right, bottom-right, bottom-left, matching rounded.glsl.
         let c = Corners { top_left: 1.0, top_right: 2.0, bottom_right: 3.0, bottom_left: 4.0 };
         assert_eq!(c.to_array(), [1.0, 2.0, 3.0, 4.0]);
     }

@@ -1,10 +1,3 @@
-//! The compositor's end of the Spectre IPC socket.
-//!
-//! Clients - the panel first of all - connect, subscribe, and receive the whole
-//! desktop state whenever it changes. Sending the full state rather than deltas
-//! keeps both ends simple and costs a few hundred bytes per change; a panel
-//! that reconnects is instantly correct instead of having to replay a log.
-
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -17,30 +10,21 @@ use spectre_ipc::{encode_line, protocol, Desktop, Event, Request};
 
 use crate::state::Spectre;
 
-/// A connected client.
 struct Peer {
     stream: UnixStream,
-    /// Wants every state change, not just the one it asked for.
     subscribed: bool,
-    /// Partial line carried over between reads.
     pending: String,
-    /// Set once writing has failed; the peer is dropped on the next sweep.
     broken: bool,
 }
 
-/// Listener, connected peers and the last state we published.
 pub struct Ipc {
     pub path: PathBuf,
     peers: HashMap<u64, Peer>,
     next_peer: u64,
     tokens: Vec<RegistrationToken>,
-    /// Stable ids handed out to clients, so a window keeps its identity across
-    /// updates even though smithay's `Window` has no id of its own.
     window_ids: Vec<(Window, protocol::WindowId)>,
     next_window_id: protocol::WindowId,
-    /// The last state broadcast, to avoid sending identical updates.
     last: Option<Desktop>,
-    /// Set when something changed that clients may care about.
     dirty: bool,
 }
 
@@ -51,11 +35,6 @@ impl std::fmt::Debug for Ipc {
 }
 
 impl Ipc {
-    /// Bind the socket and start accepting clients.
-    ///
-    /// A stale socket from a crashed session is removed rather than treated as
-    /// an error: refusing to start because the previous run died badly would be
-    /// the worse failure.
     pub fn new(
         loop_handle: &LoopHandle<'static, Spectre>,
         wayland_display: &str,
@@ -118,7 +97,6 @@ impl Drop for Ipc {
 }
 
 impl Spectre {
-    /// Register a freshly accepted client with the event loop.
     fn accept_ipc_peer(&mut self, stream: UnixStream) {
         if let Err(err) = stream.set_nonblocking(true) {
             tracing::warn!(?err, "could not configure an IPC client");
@@ -140,8 +118,6 @@ impl Spectre {
         let token = self.loop_handle.insert_source(
             Generic::new(read_half, Interest::READ, Mode::Level),
             move |_, stream, state: &mut Spectre| {
-                // `Generic` hands back a read-only view; the peer's own
-                // duplicated socket is what we actually read from.
                 let _ = stream;
                 state.read_ipc_peer(id);
                 Ok(PostAction::Continue)
@@ -164,9 +140,7 @@ impl Spectre {
         }
     }
 
-    /// Drain whatever a client has sent and act on complete lines.
     fn read_ipc_peer(&mut self, id: u64) {
-        /// A single request longer than this is not something we understand.
         const MAX_PENDING: usize = 64 * 1024;
 
         let mut buf = [0u8; 4096];
@@ -297,7 +271,6 @@ impl Spectre {
         }
     }
 
-    /// Re-read the config file and apply everything that can change at runtime.
     fn reload_config(&mut self) {
         let (config, error) = spectre_config::Config::load_active();
         if let Some(error) = error {
@@ -317,8 +290,6 @@ impl Spectre {
         if display_changed {
             self.mark_display_dirty();
         }
-        // Decoding a wallpaper costs a good fraction of a second; only a
-        // change to the background is worth paying it for.
         if desktop_changed {
             if let Some((w, h)) = self.output_pixel_size() {
                 self.wallpaper = None;
@@ -333,7 +304,6 @@ impl Spectre {
         self.broadcast(&Event::ConfigChanged);
     }
 
-    /// Send one event to every connected client.
     fn broadcast(&mut self, event: &Event) {
         let peers: Vec<u64> = self
             .ipc
@@ -345,7 +315,6 @@ impl Spectre {
         }
     }
 
-    /// Send one event to one client, marking it broken if the write fails.
     fn send_ipc(&mut self, id: u64, event: &Event) {
         let Ok(line) = encode_line(event) else {
             return;
@@ -354,14 +323,11 @@ impl Spectre {
         let Some(peer) = ipc.peers.get_mut(&id) else { return };
 
         if let Err(err) = peer.stream.write_all(line.as_bytes()) {
-            // A client that stopped reading must not be allowed to block the
-            // compositor, so it is dropped rather than retried.
             tracing::debug!(peer = id, ?err, "IPC write failed; dropping the client");
             peer.broken = true;
         }
     }
 
-    /// Publish the desktop state to every subscriber, if it changed.
     pub fn publish_desktop_state(&mut self) {
         let Some(ipc) = self.ipc.as_ref() else { return };
         if !ipc.dirty || ipc.peers.is_empty() {
@@ -395,7 +361,6 @@ impl Spectre {
         }
     }
 
-    /// Snapshot the desktop for clients.
     pub fn desktop_state(&mut self) -> Desktop {
         let active = self.workspaces.active_index();
         let mut windows = Vec::new();
@@ -432,12 +397,10 @@ impl Spectre {
         }
     }
 
-    /// The connected displays and what they can do.
     fn output_info(&self) -> Vec<spectre_ipc::Output> {
         let to_mode = |mode: smithay::output::Mode| spectre_ipc::Mode {
             width: mode.size.w,
             height: mode.size.h,
-            // Smithay carries mHz; the config and the UI speak whole Hz.
             refresh: (mode.refresh as f64 / 1000.0).round() as u32,
         };
 
@@ -476,7 +439,6 @@ impl Spectre {
         }
     }
 
-    /// The stable id for a window, assigning one on first sight.
     fn window_id(&mut self, window: &Window) -> protocol::WindowId {
         let Some(ipc) = self.ipc.as_mut() else { return 0 };
         if let Some((_, id)) = ipc.window_ids.iter().find(|(w, _)| w == window) {
@@ -493,8 +455,6 @@ impl Spectre {
         ipc.window_ids.iter().find(|(_, wid)| *wid == id).map(|(w, _)| w.clone())
     }
 
-    /// Forget ids for windows that no longer exist, so the table cannot grow
-    /// without bound over a long session.
     pub fn prune_ipc_windows(&mut self) {
         let live: Vec<Window> = self
             .workspaces

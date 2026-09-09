@@ -1,8 +1,3 @@
-//! Command line control for a running Spectre session.
-//!
-//! Small on purpose: it exists so the desktop can be inspected and driven from
-//! a terminal without a panel, which is how the IPC gets tested.
-
 use std::process::ExitCode;
 
 use spectre_ipc::{Client, Event, Request};

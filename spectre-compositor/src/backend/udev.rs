@@ -1,11 +1,3 @@
-//! Native backend: KMS/DRM output, libinput devices, libseat session.
-//!
-//! This is the real Spectre session, the one a display manager starts. It is
-//! deliberately single-GPU: the machines the project targets - old laptops,
-//! VMs, low-power desktops - have exactly one, and supporting a second one
-//! costs a buffer copy per frame that those machines cannot spare. Multi-GPU
-//! belongs in a later phase, behind the same `Backend` enum.
-
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,10 +32,8 @@ use smithay::backend::drm::compositor::PrimaryPlaneElement;
 use crate::render::{output_elements, PatternShader, RenderCache, SpectreElement};
 use crate::state::Spectre;
 
-/// One driven connector: its output, its DRM compositor and its damage state.
 struct Surface {
     output: Output,
-    /// Kept so a config reload can look the connector's modes up again.
     connector: connector::Handle,
     compositor: DrmCompositor<
         GbmAllocator<DrmDeviceFd>,
@@ -51,34 +41,14 @@ struct Surface {
         (),
         DrmDeviceFd,
     >,
-    /// Set while a page flip is in flight, so we do not queue two frames.
     awaiting_flip: bool,
-    /// When the last frame was queued, and the shortest gap allowed between
-    /// two frames. Drivers that complete a page flip immediately - vmwgfx does
-    /// - would otherwise let the compositor render as fast as the CPU allows.
     last_frame: Instant,
     frame_interval: Duration,
-    /// Hash of the elements the last frame was built from. When the scene
-    /// gains or loses something the damage history is thrown away, because a
-    /// region that was only ever painted into one buffer of the swapchain
-    /// shows the frame before it in the others - which is how a panel that had
-    /// just been mapped stayed half missing.
     last_scene: u64,
-    /// How long the last frame took to draw. On a machine without a real GPU
-    /// one frame can cost a tenth of a second; asking for sixty of those a
-    /// second buries the event loop and the session stops responding. Pacing
-    /// off the measured cost keeps the desktop slow rather than stuck.
     last_cost: Duration,
 }
 
-/// Everything the native backend owns.
-///
-/// Kept behind an `Rc<RefCell<..>>` rather than inside [`Spectre`] so the
-/// compositor state stays backend-agnostic: `Spectre` never has to know that
-/// DRM exists.
 struct Udev {
-    /// Held for the lifetime of the backend: dropping the session hands the
-    /// seat back to libseat and the compositor loses its devices.
     #[allow(dead_code)]
     session: LibSeatSession,
     renderer: GlesRenderer,
@@ -86,9 +56,7 @@ struct Udev {
     drm: DrmDevice,
     surfaces: HashMap<crtc::Handle, Surface>,
     shader: Option<PatternShader>,
-    /// Render-element identities, so an unchanged screen damages nothing.
     cache: RenderCache,
-    /// libseat can take the session away when the user switches VT.
     active: Arc<AtomicBool>,
 }
 
@@ -127,7 +95,6 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         state.spawn(&command);
     }
 
-    // Kick the first frame; from here vblank events drive the loop.
     render_all(&mut state, &shared);
 
     event_loop.run(Some(Duration::from_millis(16)), &mut state, |state| {
@@ -147,7 +114,6 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Open the primary GPU and build a renderer on it.
 fn open_primary_gpu(
     mut session: LibSeatSession,
     seat_name: &str,
@@ -188,7 +154,6 @@ fn open_primary_gpu(
     ))
 }
 
-/// Create an output and a DRM compositor for every connected connector.
 fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
     let mut udev = shared.borrow_mut();
     let resources = udev.drm.resource_handles()?;
@@ -278,8 +243,6 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
         tracing::info!(output = %name, mode = ?(w, h), refresh = mode.vrefresh(), "driving connector");
         state.workspaces.map_output(&output, (x, 0).into());
         state.refresh_wallpaper(w as i32, h as i32);
-        // One frame per refresh period. `vrefresh` is in Hz and can be zero on
-        // a virtual connector, so fall back to 60.
         let refresh = if mode.vrefresh() == 0 { 60 } else { mode.vrefresh() };
         udev.surfaces.insert(
             crtc,
@@ -303,7 +266,6 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Find a CRTC that can drive `connector` and is not already taken.
 fn pick_crtc(
     drm: &DrmDevice,
     resources: &smithay::reexports::drm::control::ResourceHandles,
@@ -372,10 +334,6 @@ fn init_input(
     Ok(())
 }
 
-/// Re-apply `[display]` to every driven connector.
-///
-/// A mode switch is a real DRM operation, so it only happens when the mode
-/// actually differs; the scale is cheap and is always refreshed.
 fn apply_display(state: &mut Spectre, shared: &Shared) {
     let scale = state.config.display.output_scale();
     let wanted: Vec<(crtc::Handle, Option<DrmMode>)> = {
@@ -433,8 +391,6 @@ fn apply_display(state: &mut Spectre, shared: &Shared) {
     state.mark_dirty();
 }
 
-/// The mode the config asks for, else the connector's preferred one, else the
-/// first it reports.
 fn pick_mode(modes: &[DrmMode], display: &spectre_config::Display) -> Option<DrmMode> {
     if let Some(wanted) = display.wanted_mode() {
         let matching: Vec<&DrmMode> = modes
@@ -465,7 +421,6 @@ fn pick_mode(modes: &[DrmMode], display: &spectre_config::Display) -> Option<Drm
         .copied()
 }
 
-/// Apply the `[input.pointer]` settings to a freshly plugged device.
 fn configure_device(device: &smithay::reexports::input::Device, config: &Config) {
     use smithay::reexports::input::{AccelProfile, ClickMethod, ScrollMethod};
 
@@ -507,11 +462,6 @@ fn init_drm_events(
         .loop_handle
         .insert_source(notifier, move |event, _, state: &mut Spectre| match event {
             DrmEvent::VBlank(crtc) => {
-                // Only retire the flip here. Rendering the next frame straight
-                // from the vblank handler turns into a busy loop on drivers
-                // that complete a page flip immediately (vmwgfx does), so the
-                // event loop's own tick decides when to draw again - and only
-                // when something actually changed.
                 let mut udev = shared.borrow_mut();
                 if let Some(surface) = udev.surfaces.get_mut(&crtc) {
                     surface.awaiting_flip = false;
@@ -565,21 +515,10 @@ fn init_session_events(
     Ok(())
 }
 
-/// Which DRM planes a frame may be handed to: none of them.
-///
-/// Handing an element straight to a plane skips compositing it, which is free
-/// when the driver honours it. Several do not - vmwgfx, which is what a VM
-/// gets, among them: the element vanishes and the region it should have
-/// covered keeps the clear colour, which is how the panel came up half
-/// missing and the pointer left black boxes behind it.
 const SCANOUT: FrameFlags = FrameFlags::empty();
 
-/// A queued page flip that has not been retired after this long is treated as
-/// lost. Without it a single missed vblank - vmwgfx drops one under load -
-/// leaves `awaiting_flip` set forever and the screen never updates again.
 const FLIP_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// What the frame is made of: every element's identity, in drawing order.
 fn scene_hash(elements: &[SpectreElement]) -> u64 {
     use smithay::backend::renderer::element::Element;
     use std::hash::{Hash, Hasher};
@@ -590,7 +529,6 @@ fn scene_hash(elements: &[SpectreElement]) -> u64 {
     hasher.finish()
 }
 
-/// Temporary instrumentation: how many frames the compositor really draws.
 fn frame_counter(elements: usize) {
     use std::cell::Cell;
     thread_local! {
@@ -614,24 +552,18 @@ fn frame_counter(elements: usize) {
 fn render_all(state: &mut Spectre, shared: &Shared) {
     let crtcs: Vec<crtc::Handle> = shared.borrow().surfaces.keys().copied().collect();
     for crtc in crtcs {
-        // A skipped output still owes a frame: putting the dirty flag back is
-        // what stops a paced-away or deferred repaint from being lost, which
-        // would leave the screen showing the frame before the change.
         if !render_crtc(state, shared, crtc) {
             state.mark_dirty();
         }
     }
 }
 
-/// Draw one output. Returns false when nothing was queued and the frame is
-/// still owed.
 fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool {
     let mut udev = shared.borrow_mut();
     if !udev.active.load(Ordering::SeqCst) {
         return true;
     }
 
-    // Resolve any dmabuf imports first; the renderer is right here.
     if !state.pending_dmabufs.is_empty() {
         for (dmabuf, notifier) in std::mem::take(&mut state.pending_dmabufs) {
             match udev.renderer.import_dmabuf(&dmabuf, None) {
@@ -662,9 +594,6 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
                 tracing::warn!(?err, "could not reset the surface after a lost flip");
             }
         }
-        // Pace to the output's refresh rate, and never spend more than half
-        // the wall clock drawing: a frame that took 100 ms buys the machine
-        // 100 ms to answer input before the next one starts.
         let pace = surface.frame_interval.max(surface.last_cost);
         if now.duration_since(surface.last_frame) < pace {
             return false;
@@ -690,13 +619,6 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
 
     match surface.compositor.render_frame(renderer, &elements, [0.0; 4], SCANOUT) {
         Ok(frame) if !frame.is_empty => {
-            // Rendering is asynchronous. Where the driver cannot fence - vmwgfx
-            // cannot, it answers a syncobj with "operation not supported" - it
-            // is the caller's job to wait, and flipping without waiting scans
-            // out a half-drawn frame: the finished part of the screen is
-            // correct and the rest is whatever the buffer held before. That is
-            // the black boxes behind the pointer and the panel that came up
-            // missing its left end.
             if frame.needs_sync() {
                 if let PrimaryPlaneElement::Swapchain(element) = &frame.primary_element {
                     if let Err(err) = element.sync.wait() {
@@ -721,7 +643,6 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
 
     drop(udev);
 
-    // Release clients to draw their next frame.
     let time = state.clock.now();
     for window in state.workspaces.active().elements() {
         window.send_frame(&output, time, Some(Duration::ZERO), |_, _| Some(output.clone()));

@@ -1,13 +1,3 @@
-//! Render-element identities that survive between frames.
-//!
-//! A damage tracker recognises an element by its [`Id`]. Handing it a fresh
-//! `Id::new()` every frame means it can only conclude that everything is new,
-//! so the whole output is repainted whether anything moved or not. On a machine
-//! without a real GPU that is the difference between a desktop and a slideshow.
-//!
-//! Each drawn thing therefore asks the cache for its identity under a stable
-//! key, and the commit counter only moves when the thing itself changed.
-
 use std::collections::HashMap;
 
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -19,27 +9,19 @@ use smithay::utils::{Logical, Physical, Rectangle};
 
 use super::ContourField;
 
-/// What a cached element belongs to, so two different things never collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
-    /// The flat colour behind everything.
     Backdrop,
-    /// The pattern drawn across the desktop.
     DesktopPattern,
-    /// A window's frame: rounded title bar, border and pattern.
     Frame(u32),
-    /// A rectangle of a window's decorations, numbered within the window.
     Decoration(u32, u8),
 }
 
-/// Identities and shader elements kept alive across frames.
 #[derive(Debug, Default)]
 pub struct RenderCache {
     solids: HashMap<Slot, SolidSlot>,
     shaders: HashMap<Slot, ShaderSlot>,
-    /// Slots touched while building the current frame.
     live: Vec<Slot>,
-    /// The desktop's contour field, baked once and scrolled.
     contour: Option<ContourField>,
 }
 
@@ -55,21 +37,14 @@ struct SolidSlot {
 struct ShaderSlot {
     element: PixelShaderElement,
     uniforms: Vec<Uniform<'static>>,
-    /// Where it sat last frame; a move has to be drawn whole, not banded.
     area: Rectangle<i32, Logical>,
 }
 
 impl RenderCache {
-    /// The slot the baked contour field lives in.
-    ///
-    /// It is not keyed like the others: there is one desktop, and the field
-    /// knows for itself when what it holds no longer matches what is wanted.
     pub fn contour(&mut self) -> &mut Option<ContourField> {
         &mut self.contour
     }
 
-    /// Start a frame. Slots not asked for before [`RenderCache::end_frame`] are
-    /// dropped, so a closed window does not keep its frame alive forever.
     pub fn begin_frame(&mut self) {
         self.live.clear();
     }
@@ -80,7 +55,6 @@ impl RenderCache {
         self.shaders.retain(|slot, _| live.contains(slot));
     }
 
-    /// A solid colour rectangle whose identity outlives the frame.
     pub fn solid(
         &mut self,
         slot: Slot,
@@ -103,14 +77,6 @@ impl RenderCache {
         SolidColorRenderElement::new(entry.id.clone(), geometry, entry.commit, color, kind)
     }
 
-    /// A pixel-shader element whose identity outlives the frame.
-    ///
-    /// The stored element is updated in place, so its commit counter only moves
-    /// when the area or a uniform actually differs from the last frame. The
-    /// flag says whether the element moved or was resized, which decides
-    /// whether it may be redrawn in part or has to be drawn whole.
-    /// `update_uniforms` bumps the counter unconditionally, which is why the
-    /// values are kept here and compared first.
     #[allow(clippy::too_many_arguments)]
     pub fn shader(
         &mut self,
@@ -225,7 +191,6 @@ mod tests {
         let first = cache.solid(Slot::Frame(7), rect(0, 0, 10, 10), [1.0; 4], Kind::Unspecified);
         cache.end_frame();
 
-        // A frame that draws something else entirely: the window closed.
         cache.begin_frame();
         cache.solid(Slot::Backdrop, rect(0, 0, 10, 10), [1.0; 4], Kind::Unspecified);
         cache.end_frame();

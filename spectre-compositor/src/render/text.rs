@@ -1,10 +1,3 @@
-//! Rasterised text, cached.
-//!
-//! Shaping a window caption costs far more than drawing it, and a caption
-//! changes only when the title, the width budget or the focus state changes.
-//! So every distinct label is rasterised once, uploaded once, and then reused
-//! until it falls out of the cache.
-
 use std::collections::HashMap;
 
 use smithay::backend::renderer::element::memory::{
@@ -15,15 +8,11 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Size, Transform};
 use spectre_text::{Image, Label, TextRenderer};
 
-/// How many rasterised labels to keep. A busy desktop has a few dozen windows
-/// and a handful of panel labels; beyond that the oldest entries are dropped.
 const CAPACITY: usize = 128;
 
-/// Identifies one rasterised label.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Key {
     text: String,
-    /// Quantised so a fractional scale does not defeat the cache.
     size_px: u32,
     max_width: u32,
     color: [u8; 4],
@@ -48,7 +37,6 @@ struct Entry {
     last_used: u64,
 }
 
-/// Shapes, rasterises and caches labels.
 pub struct TextCache {
     text: TextRenderer,
     entries: HashMap<Key, Entry>,
@@ -68,29 +56,20 @@ impl Default for TextCache {
 }
 
 impl TextCache {
-    /// Scans the system fonts, so call this once at start-up.
     pub fn new() -> Self {
         Self { text: TextRenderer::new(), entries: HashMap::new(), tick: 0 }
     }
 
-    /// Number of labels currently held. Read by the tests and by the
-    /// forthcoming settings page's diagnostics.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Size the label will occupy, in logical pixels at scale 1.
     pub fn measure(&mut self, label: &Label<'_>) -> Size<i32, Logical> {
         let (w, h) = self.text.measure(label);
         Size::from((w as i32, h as i32))
     }
 
-    /// A render element for `label`, positioned with its top-left at `location`.
-    ///
-    /// Returns `None` for empty text, for a label that rasterises to nothing,
-    /// and when the texture upload fails - in every case the caller simply
-    /// draws no caption rather than losing the frame.
     pub fn element(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -126,7 +105,6 @@ impl TextCache {
         }
     }
 
-    /// Fetch or build the cached buffer for `label`.
     fn entry(&mut self, label: &Label<'_>) -> Option<(MemoryRenderBuffer, Size<i32, Logical>)> {
         if label.text.trim().is_empty() {
             return None;
@@ -152,7 +130,6 @@ impl TextCache {
         Some((buffer, size))
     }
 
-    /// Drop the least recently used entry once the cache is full.
     fn evict_if_full(&mut self) {
         if self.entries.len() < CAPACITY {
             return;
@@ -165,10 +142,6 @@ impl TextCache {
     }
 }
 
-/// Wrap a rasterised image in a buffer the renderer can upload.
-///
-/// `spectre-text` produces premultiplied RGBA in memory order; DRM's
-/// `Abgr8888` is that same byte order, so no swizzle is needed.
 fn to_render_buffer(image: &Image) -> MemoryRenderBuffer {
     MemoryRenderBuffer::from_slice(
         &image.data,
@@ -199,8 +172,6 @@ mod tests {
 
     #[test]
     fn nearly_identical_sizes_still_share_a_key() {
-        // Quantising to quarter pixels keeps a fractional output scale from
-        // producing a new cache entry on every frame.
         let a = Key::new(&Label::new("x").size(13.0));
         let b = Key::new(&Label::new("x").size(13.01));
         assert_eq!(a, b);

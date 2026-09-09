@@ -1,73 +1,47 @@
-//! Messages exchanged between the compositor and its shell components.
-//!
-//! Newline-delimited JSON over a Unix stream socket. JSON rather than a packed
-//! binary format because the traffic is a handful of messages per second and
-//! being able to debug the desktop with `socat` is worth more than the bytes.
-
 use serde::{Deserialize, Serialize};
 use spectre_config::Profile;
 
-/// Opaque, stable-for-its-lifetime handle to a window.
 pub type WindowId = u64;
 
-/// Sent by a client to the compositor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "kebab-case")]
 pub enum Request {
-    /// Send the current state now, and again whenever it changes.
     Subscribe,
-    /// Send the current state once.
     GetState,
-    /// Switch to a workspace. 1-based, matching what the panel shows.
     SwitchWorkspace { index: u8 },
-    /// Focus a window, restoring it first if it is minimized.
     ActivateWindow { id: WindowId },
     MinimizeWindow { id: WindowId },
     CloseWindow { id: WindowId },
-    /// Change the performance profile at runtime.
     SetProfile { profile: Profile },
-    /// Turn every animation on or off.
     SetAnimations { enabled: bool },
-    /// Re-read the configuration file and apply it.
     ReloadConfig,
-    /// Open the application menu, or close it if it is already open.
     ToggleLauncher,
-    /// End the session.
     Quit,
 }
 
-/// Sent by the compositor to a client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum Event {
-    /// The full desktop state. Sent on subscribe and after every change.
     State(Desktop),
-    /// The configuration was re-read; shell components should reload too.
     ConfigChanged,
-    /// A request could not be carried out. Advisory: the connection stays open.
     Error { message: String },
 }
 
-/// Everything a panel needs to draw itself.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Desktop {
     pub workspaces: Vec<Workspace>,
     pub windows: Vec<Window>,
     pub profile: Profile,
-    /// Mirrors the animation kill switch.
     pub animations: bool,
-    /// Connected outputs and the modes they offer, for the settings app.
     #[serde(default)]
     pub outputs: Vec<Output>,
 }
 
-/// One connected display.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Output {
     pub name: String,
-    /// Every mode the display reports, de-duplicated and largest first.
     pub modes: Vec<Mode>,
     pub current: Option<Mode>,
     pub scale: f64,
@@ -78,12 +52,10 @@ pub struct Output {
 pub struct Mode {
     pub width: i32,
     pub height: i32,
-    /// Whole Hz.
     pub refresh: u32,
 }
 
 impl Mode {
-    /// `1920x1080@60`, the form the config file takes.
     pub fn label(&self) -> String {
         format!("{}x{}@{}", self.width, self.height, self.refresh)
     }
@@ -98,7 +70,6 @@ impl Desktop {
         self.windows.iter().find(|w| w.focused)
     }
 
-    /// Windows on the visible workspace, in stacking order.
     pub fn visible_windows(&self) -> impl Iterator<Item = &Window> {
         let active = self.active_workspace().map(|w| w.index);
         self.windows.iter().filter(move |w| Some(w.workspace) == active)
@@ -108,10 +79,8 @@ impl Desktop {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Workspace {
-    /// 1-based.
     pub index: u8,
     pub active: bool,
-    /// How many windows live here, including minimized ones.
     pub windows: u16,
 }
 
@@ -121,7 +90,6 @@ pub struct Window {
     pub id: WindowId,
     pub title: String,
     pub app_id: String,
-    /// 1-based workspace index.
     pub workspace: u8,
     pub focused: bool,
     pub minimized: bool,

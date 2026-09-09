@@ -1,9 +1,3 @@
-//! The Spectre notification daemon.
-//!
-//! Implements `org.freedesktop.Notifications` and draws the popups as a
-//! layer-shell surface in the top-right corner. Click a notification to dismiss
-//! it; the rest expire on their own, except critical ones, which do not.
-
 mod model;
 mod service;
 mod ui;
@@ -42,7 +36,6 @@ use crate::service::{CloseReason, Message, Service};
 use crate::ui::Card;
 
 const BTN_LEFT: u32 = 0x110;
-/// How many notifications are shown at once.
 const STACK_CAPACITY: usize = 5;
 
 fn main() -> anyhow::Result<()> {
@@ -68,7 +61,6 @@ fn main() -> anyhow::Result<()> {
         layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("spectre-notify"), None);
     layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    // Notifications float over everything; they must not reserve any room.
     layer.set_exclusive_zone(0);
     layer.set_size(ui::CARD_WIDTH as u32 + ui::SCREEN_MARGIN as u32 * 2, 1);
     layer.commit();
@@ -130,7 +122,6 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
-/// Claim the notification bus name and serve the interface.
 fn start_dbus(
     tx: smithay_client_toolkit::reexports::calloop::channel::Sender<Message>,
     ids: Arc<IdAllocator>,
@@ -147,7 +138,6 @@ fn start_dbus(
 
 struct Daemon {
     loop_handle: LoopHandle<'static, Daemon>,
-    /// The single armed expiry timer, if anything is waiting to expire.
     expiry_timer: Option<RegistrationToken>,
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -197,12 +187,6 @@ impl Daemon {
         self.redraw_if_needed();
     }
 
-    /// Arm a timer for the moment the next notification expires.
-    ///
-    /// A single timer is replaced rather than a repeating one polled, so a
-    /// daemon with nothing on screen - which is nearly always - does not wake
-    /// up at all. It has to be re-armed whenever the stack changes, because a
-    /// timer already waiting on a distant deadline cannot be shortened.
     fn rearm_expiry(&mut self) {
         if let Some(token) = self.expiry_timer.take() {
             self.loop_handle.remove(token);
@@ -210,7 +194,6 @@ impl Daemon {
         let Some(delay) = self.stack.next_deadline(Instant::now()) else {
             return;
         };
-        // Never zero: a timer that fires instantly would spin the loop.
         let delay = delay.max(Duration::from_millis(10));
 
         match self.loop_handle.insert_source(
@@ -235,7 +218,6 @@ impl Daemon {
         self.redraw_if_needed();
     }
 
-    /// Tell the sender its notification is gone, as the spec requires.
     fn announce_closed(&self, id: Id, reason: CloseReason) {
         let result = self.dbus.emit_signal(
             None::<&str>,
@@ -274,8 +256,6 @@ impl Daemon {
         self.cards = cards;
 
         if height == 0 {
-            // Nothing to show: unmap the surface so it stops covering the
-            // corner of the screen entirely.
             self.layer.wl_surface().attach(None, 0, 0);
             self.layer.commit();
             self.height = 1;
@@ -291,7 +271,6 @@ impl Daemon {
         let (pixel_width, pixel_height) = (width * scale, height * scale);
         self.canvas.resize(pixel_width, pixel_height);
 
-        // The cards are laid out in logical pixels; scale them for drawing.
         let scaled: Vec<Card> = self
             .cards
             .iter()
@@ -330,8 +309,6 @@ impl Daemon {
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(scale);
 
-        // Only the cards take clicks; the transparent margin around them must
-        // stay clickable through to whatever is underneath.
         if let Ok(region) = Region::new(&self.compositor) {
             for card in &self.cards {
                 region.add(card.rect.x, card.rect.y, card.rect.w, card.rect.h);
@@ -458,7 +435,6 @@ impl LayerShellHandler for Daemon {
         _configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        // The size is ours to choose: it follows the stack, not the output.
         self.configured = true;
         self.dirty = true;
         self.redraw_if_needed();

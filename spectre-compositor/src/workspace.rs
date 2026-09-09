@@ -1,32 +1,18 @@
-//! Virtual desktops.
-//!
-//! Each workspace owns a [`Space`], and every output is mapped into every
-//! space at the same coordinates. Switching workspaces is therefore just a
-//! change of which space gets rendered — no window ever has to be re-mapped,
-//! which is what keeps switching free on the Performance profile.
-
 use smithay::desktop::{Space, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::seat::WaylandFocus;
 
-/// A fixed set of workspaces plus the index of the visible one.
 #[derive(Debug)]
 pub struct Workspaces {
     spaces: Vec<Space<Window>>,
     active: usize,
-    /// Outputs, remembered so a newly created space can be given the same
-    /// geometry. `Space` does not expose its output mapping for cloning.
     outputs: Vec<(Output, Point<i32, Logical>)>,
 }
 
-/// Some accessors below are read by the panel IPC and the settings app rather
-/// than by the compositor itself, so they stay even without a caller here.
 #[allow(dead_code)]
 impl Workspaces {
-    /// Create `count` workspaces. `count` is clamped to at least one, because
-    /// a session with no workspace has nowhere to put a window.
     pub fn new(count: u8) -> Self {
         let count = (count as usize).max(1);
         Self {
@@ -40,7 +26,6 @@ impl Workspaces {
         self.spaces.len()
     }
 
-    /// Zero-based index of the visible workspace.
     pub fn active_index(&self) -> usize {
         self.active
     }
@@ -65,8 +50,6 @@ impl Workspaces {
         self.spaces.iter_mut()
     }
 
-    /// Switch to `index`. Returns `false` when the index is out of range or
-    /// already active, so callers can skip a redraw.
     pub fn switch(&mut self, index: usize) -> bool {
         if index >= self.spaces.len() || index == self.active {
             return false;
@@ -75,15 +58,12 @@ impl Workspaces {
         true
     }
 
-    /// Move to the next workspace, wrapping around.
     pub fn switch_relative(&mut self, delta: isize) -> bool {
         let n = self.spaces.len() as isize;
         let next = (self.active as isize + delta).rem_euclid(n) as usize;
         self.switch(next)
     }
 
-    /// Map an output into every workspace so windows keep their geometry when
-    /// the user switches.
     pub fn map_output(&mut self, output: &Output, location: Point<i32, Logical>) {
         self.outputs.retain(|(o, _)| o != output);
         self.outputs.push((output.clone(), location));
@@ -103,12 +83,10 @@ impl Workspaces {
         self.outputs.iter().map(|(o, _)| o)
     }
 
-    /// Every window in every workspace.
     pub fn windows(&self) -> impl Iterator<Item = &Window> {
         self.spaces.iter().flat_map(|s| s.elements())
     }
 
-    /// Find which workspace holds the window owning `surface`.
     pub fn find_surface(&self, surface: &WlSurface) -> Option<(usize, Window)> {
         self.spaces.iter().enumerate().find_map(|(i, space)| {
             space
@@ -118,8 +96,6 @@ impl Workspaces {
         })
     }
 
-    /// Move `window` from whichever workspace holds it to `target`, keeping its
-    /// position. Returns `false` if the window is unknown or already there.
     pub fn move_window(&mut self, window: &Window, target: usize) -> bool {
         if target >= self.spaces.len() {
             return false;
@@ -139,7 +115,6 @@ impl Workspaces {
         true
     }
 
-    /// Geometry of `output` in the active space, if it is mapped.
     pub fn output_geometry(&self, output: &Output) -> Option<Rectangle<i32, Logical>> {
         self.active().output_geometry(output)
     }
@@ -194,7 +169,6 @@ mod tests {
 
     #[test]
     fn moving_to_an_invalid_workspace_is_rejected() {
-        // No window is needed: an out-of-range target must be caught first.
         let mut w = Workspaces::new(2);
         let dummy = Space::<Window>::default();
         assert!(dummy.elements().next().is_none());

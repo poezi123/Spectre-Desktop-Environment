@@ -1,52 +1,28 @@
-//! Parameters for the Spectre Pattern — the animated topographic contour lines
-//! that run behind title bars, the panel and the lock screen.
-//!
-//! This module owns no rendering code. It only describes *what* to draw, so the
-//! compositor's GLES shader, the panel's software fallback and any future
-//! Vulkan path stay in agreement. Keeping the description declarative is also
-//! what makes the "Performance" profile cheap: the same struct just reports
-//! `animated == false` and the shader stops sampling time.
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Color, Gradient};
 
-/// Which pattern family to draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum PatternKind {
-    /// No pattern at all — flat surfaces.
     None,
-    /// Contour lines of a scrolling value-noise field. The Spectre default.
     #[default]
     Topographic,
-    /// Straight diagonal hairlines. Cheapest option that still reads as texture.
     Grid,
 }
 
-/// A fully resolved pattern description.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Pattern {
     pub kind: PatternKind,
-    /// Whether the field scrolls. When false the pattern is drawn once and
-    /// becomes static rather than disappearing.
     pub animated: bool,
-    /// Animation rate as a 0..1 knob; the settings UI shows this as a percentage.
     pub speed: f32,
-    /// Whether the contour colours travel along the accent gradient. Separate
-    /// from [`Pattern::animated`]: moving the colour is far cheaper than moving
-    /// the noise field, so the two are switched independently.
     pub color_cycle: bool,
-    /// Colour cycle rate as a 0..1 knob.
     pub color_speed: f32,
-    /// Line opacity as a 0..1 knob.
     pub intensity: f32,
-    /// Distance between contour lines, in logical pixels.
     pub line_spacing: f32,
-    /// Contour line thickness, in logical pixels.
     pub line_width: f32,
 }
 
@@ -66,7 +42,6 @@ impl Default for Pattern {
 }
 
 impl Pattern {
-    /// A pattern that draws nothing.
     pub const OFF: Pattern = Pattern {
         kind: PatternKind::None,
         animated: false,
@@ -78,15 +53,10 @@ impl Pattern {
         line_width: 1.0,
     };
 
-    /// True when a renderer can skip the pattern pass entirely this frame.
     pub fn is_noop(&self) -> bool {
         self.kind == PatternKind::None || self.intensity <= 0.0 || self.line_width <= 0.0
     }
 
-    /// True when the surface has to be repainted every frame.
-    ///
-    /// A static pattern still gets drawn, it just does not need a new frame, so
-    /// the compositor can leave the surface out of its damage list.
     pub fn needs_continuous_redraw(&self) -> bool {
         if self.is_noop() {
             return false;
@@ -94,27 +64,16 @@ impl Pattern {
         (self.animated && self.speed > 0.0) || self.cycles_color()
     }
 
-    /// True when the colours travel even though the lines may be standing still.
     pub fn cycles_color(&self) -> bool {
         self.color_cycle && self.color_speed > 0.0 && !self.is_noop()
     }
 
-    /// Cycles of the noise field per second at `speed == 1.0`. Slow enough to
-    /// read as ambient movement rather than as something happening.
     const DRIFT_PER_SECOND: f64 = 0.06;
 
-    /// Revolutions of the colour loop per second at `color_speed == 1.0`.
     const COLOR_REVS_PER_SECOND: f64 = 0.125;
 
-    /// How many noise cells one contour spacing is worth. The shaders divide by
-    /// the same number; it is what keeps the ridges broad enough to read as a
-    /// contour map at panel height as well as full screen.
     const CELL_SPACINGS: f32 = 6.0;
 
-    /// Phase to feed the shader at `elapsed` seconds since compositor start.
-    ///
-    /// Wrapped into `0.0..1000.0` so an f32 uniform keeps its precision on a
-    /// machine that has been up for weeks.
     pub fn phase(&self, elapsed_secs: f64) -> f32 {
         if !self.animated || self.speed <= 0.0 || self.is_noop() {
             return 0.0;
@@ -122,8 +81,6 @@ impl Pattern {
         ((elapsed_secs * self.speed as f64 * Self::DRIFT_PER_SECOND) % 1000.0) as f32
     }
 
-    /// Where the colour cycle stands at `elapsed` seconds, in `0.0..1.0`.
-    /// One revolution per 8 seconds at `color_speed = 1.0`.
     pub fn color_phase(&self, elapsed_secs: f64) -> f32 {
         if !self.cycles_color() {
             return 0.0;
@@ -132,34 +89,11 @@ impl Pattern {
             as f32
     }
 
-    /// Samples of one colour revolution that still read as a continuous sweep.
-    ///
-    /// The colour travels along a gradient rather than across pixels, so the
-    /// criterion is not travel but banding: below this many steps the sweep
-    /// starts to look like it is changing in jumps.
     const COLOR_STEPS: f64 = 120.0;
 
-    /// Fastest and slowest a moving pattern is redrawn, whatever the settings
-    /// say. The lower bound is there so a pattern turned up to its limit cannot
-    /// ask for more frames than a display can show; the upper bound keeps a
-    /// pattern turned right down still visibly creeping.
     const FASTEST_REDRAW: Duration = Duration::from_millis(16);
     const SLOWEST_REDRAW: Duration = Duration::from_millis(500);
 
-    /// How long this pattern may be left alone before the picture changes.
-    ///
-    /// Both movements are far slower than a display refresh, so a frame per
-    /// vblank draws the same image several times over - and on a machine
-    /// without a GPU each of those frames is a repaint of the whole surface.
-    ///
-    /// The field drifts [`Pattern::DRIFT_PER_SECOND`] noise cells a second at
-    /// full speed and a cell is `line_spacing * CELL_SPACINGS` device pixels
-    /// across, which gives the travel in pixels per second: one frame per pixel
-    /// of travel is all the movement there is to show. The colours are judged
-    /// by [`Pattern::COLOR_STEPS`] instead, since they move through a gradient
-    /// rather than across the screen.
-    ///
-    /// `None` means the pattern is standing still and needs no frames at all.
     pub fn redraw_interval(&self, scale: f32) -> Option<Duration> {
         if !self.needs_continuous_redraw() {
             return None;
@@ -187,14 +121,8 @@ impl Pattern {
         Some(Duration::from_secs_f64(seconds))
     }
 
-    /// How far the accent is darkened before it is drawn as a contour line.
-    ///
-    /// The pattern is where Spectre's colour lives, but it is texture in the
-    /// material rather than a graphic laid on top: at full accent brightness
-    /// the lines stop reading as topography and start reading as neon.
     const DARKEN: f32 = 0.62;
 
-    /// Colour of the contour lines over `background`.
     pub fn line_color(&self, accent: Color, background: Color) -> Color {
         if self.is_noop() {
             return Color::TRANSPARENT;
@@ -205,10 +133,8 @@ impl Pattern {
             .alpha(self.intensity.clamp(0.0, 1.0))
     }
 
-    /// How many accent stops the renderers carry, matching the shader uniforms.
     pub const STOPS: usize = 4;
 
-    /// The accent resampled to [`Pattern::STOPS`] contour-line colours.
     pub fn line_stops(&self, accent: &Gradient, background: Color) -> [Color; Self::STOPS] {
         let mut out = [Color::TRANSPARENT; Self::STOPS];
         for (i, slot) in out.iter_mut().enumerate() {
@@ -218,40 +144,26 @@ impl Pattern {
         out
     }
 
-    /// The line colour at `t` along the loop, wrapping. The CPU twin of the
-    /// shaders' `spectre_line_at`.
     pub fn line_at(stops: &[Color; Self::STOPS], t: f32) -> Color {
         let u = t.rem_euclid(1.0) * Self::STOPS as f32;
         let i = (u.floor() as usize) % Self::STOPS;
         stops[i].mix(stops[(i + 1) % Self::STOPS], u - u.floor())
     }
 
-    /// Force the pattern static, keeping it visible. Used by the Performance
-    /// profile and by the global animation kill switch.
     pub fn without_animation(mut self) -> Self {
         self.animated = false;
         self.color_cycle = false;
         self
     }
 
-    /// Freeze the contour field but keep the colours travelling.
     pub fn with_static_lines(mut self) -> Self {
         self.animated = false;
         self.color_cycle = true;
         self
     }
 
-    /// How many contour levels the height field is sliced into. The shaders
-    /// use the same number; changing one without the other makes the software
-    /// surfaces and the title bars disagree about what the pattern looks like.
     const LEVELS: f32 = 16.0;
 
-    /// Line coverage at a device pixel, in `0.0..=1.0`.
-    ///
-    /// This is the CPU twin of `spectre-compositor`'s `pattern.glsl`, for
-    /// surfaces drawn in software - the panel, the launcher, the settings
-    /// window, and any renderer without a GPU. The two must stay in step: the
-    /// constants below are the same ones the shader uses.
     pub fn coverage(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
         if self.is_noop() {
             return 0.0;
@@ -259,21 +171,11 @@ impl Pattern {
         self.line_coverage(self.height(x, y, phase, scale), scale)
     }
 
-    /// The height of the contour field at a device pixel.
-    ///
-    /// This is the expensive half of [`Pattern::coverage`], and the only half
-    /// that varies smoothly: one noise cell is `line_spacing * CELL_SPACINGS`
-    /// device pixels across, so a renderer can sample the height on a coarse
-    /// grid and interpolate between the samples. What must not be interpolated
-    /// is [`Pattern::line_coverage`], which turns the height into lines - that
-    /// is where the edges are, and blurring it is what makes a contour map look
-    /// like a smudge.
     pub fn height(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
         let cell = (self.line_spacing * scale).max(1.0) * Self::CELL_SPACINGS;
         fbm(x / cell + phase, y / cell)
     }
 
-    /// Line coverage at a pixel where the field stands at `height`.
     pub fn line_coverage(&self, height: f32, scale: f32) -> f32 {
         if self.is_noop() {
             return 0.0;
@@ -287,11 +189,6 @@ impl Pattern {
     }
 }
 
-/// The ground the lines sit on, tinted by the colour passing overhead.
-///
-/// Twin of `spectre_ground` in the shaders: near black at the cyan end of the
-/// accent, a deep magenta at the other, which is what gives the bar its depth
-/// instead of a flat fill.
 pub fn ground(base: Color, line: Color) -> Color {
     const TINT: f32 = 0.20;
     const MIX: f32 = 0.30;
@@ -311,13 +208,10 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// GLSL's `fract`: always the positive fractional part, unlike `f32::fract`.
 fn fract(v: f32) -> f32 {
     v - v.floor()
 }
 
-/// Twin of the shaders' `hash`. Polynomial rather than sine-based, because the
-/// same function runs per pixel on the CPU for the panel.
 fn hash(x: f32, y: f32) -> f32 {
     let mut q = [fract(x * 0.1031), fract(y * 0.1031), fract(x * 0.1031)];
     let d = q[0] * (q[1] + 33.33) + q[1] * (q[2] + 33.33) + q[2] * (q[0] + 33.33);
@@ -342,7 +236,6 @@ fn value_noise(x: f32, y: f32) -> f32 {
     top + (bottom - top) * uy
 }
 
-/// Four octaves, matching the shader.
 fn fbm(mut x: f32, mut y: f32) -> f32 {
     let mut v = 0.0;
     let mut amp = 0.5;
@@ -460,8 +353,6 @@ mod tests {
 
     #[test]
     fn wider_spacing_moves_the_field_faster_and_so_is_redrawn_more_often() {
-        // A cell is measured in contour spacings, so wider lines mean the field
-        // travels further per second in device pixels.
         let tight = Pattern { line_spacing: 8.0, color_cycle: false, ..Default::default() };
         let wide = Pattern { line_spacing: 64.0, color_cycle: false, ..Default::default() };
         assert!(wide.redraw_interval(1.0) < tight.redraw_interval(1.0));
@@ -523,7 +414,6 @@ mod tests {
     fn the_lines_keep_the_accent_hue_rather_than_going_grey() {
         let p = Pattern::default();
         let line = p.line_color(palette::ACCENT_0, palette::SURFACE);
-        // ACCENT_0 is teal: blue and green well above red.
         assert!(line.b > line.r && line.g > line.r, "the colour has to survive the darkening");
     }
 

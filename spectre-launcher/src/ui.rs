@@ -1,9 +1,3 @@
-//! Launcher layout and painting.
-//!
-//! The geometry is a pure function of the window size and the number of
-//! results, so the row a click lands on and the row that was drawn are always
-//! the same row.
-
 use spectre_draw::{Canvas, Rect};
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Palette, Pattern, Theme};
@@ -11,29 +5,16 @@ use spectre_theme::{Palette, Pattern, Theme};
 use crate::category::Category;
 use crate::entry::Entry;
 
-/// Height of the search field.
 pub const SEARCH_HEIGHT: i32 = 46;
-/// Height of one result row.
 pub const ROW_HEIGHT: i32 = 40;
-/// Padding inside the launcher window.
 pub const PADDING: i32 = 10;
-/// Font size of a result's name and of the query.
 pub const NAME_SIZE: f32 = 14.0;
-/// Font size of a result's description.
 pub const COMMENT_SIZE: f32 = 10.5;
-/// Width of the accent bar marking the selected row.
 pub const MARKER_WIDTH: i32 = 3;
-/// Width of the category column.
 pub const SIDEBAR_WIDTH: i32 = 176;
-/// Height of one category row.
 pub const CATEGORY_HEIGHT: i32 = 30;
-/// Gap between the menu and the screen edges it is anchored to.
 pub const EDGE_MARGIN: i32 = 8;
 
-/// Preferred launcher size for an output of the given size.
-///
-/// Clamped so it neither swallows a small screen nor floats as a postage stamp
-/// on a large one.
 pub fn window_size(output_width: i32, output_height: i32, rows: i32) -> (i32, i32) {
     let width = (output_width * 3 / 5).clamp(480, 900).min(output_width.max(1));
     let content = SEARCH_HEIGHT + rows.max(1) * ROW_HEIGHT + PADDING * 2;
@@ -42,12 +23,10 @@ pub fn window_size(output_width: i32, output_height: i32, rows: i32) -> (i32, i3
     (width, height)
 }
 
-/// The category column.
 pub fn sidebar_rect(height: i32) -> Rect {
     Rect::new(0, 0, SIDEBAR_WIDTH, height)
 }
 
-/// The rectangle of the `index`-th category.
 pub fn category_rect(index: usize) -> Rect {
     Rect::new(
         PADDING / 2,
@@ -57,7 +36,6 @@ pub fn category_rect(index: usize) -> Rect {
     )
 }
 
-/// Which category a point falls on.
 pub fn category_at(count: usize, height: i32, x: i32, y: i32) -> Option<usize> {
     (0..count).find(|&i| {
         let rect = category_rect(i);
@@ -65,17 +43,14 @@ pub fn category_at(count: usize, height: i32, x: i32, y: i32) -> Option<usize> {
     })
 }
 
-/// How many categories fit in a window of this height.
 pub fn visible_categories(height: i32) -> usize {
     ((height - PADDING * 2) / CATEGORY_HEIGHT).max(0) as usize
 }
 
-/// How many result rows fit in a window of this height.
 pub fn visible_rows(height: i32) -> usize {
     ((height - SEARCH_HEIGHT - PADDING * 2) / ROW_HEIGHT).max(0) as usize
 }
 
-/// The rectangle of the `index`-th visible row.
 pub fn row_rect(width: i32, index: usize) -> Rect {
     Rect::new(
         SIDEBAR_WIDTH + PADDING,
@@ -85,15 +60,11 @@ pub fn row_rect(width: i32, index: usize) -> Rect {
     )
 }
 
-/// Which visible row a point falls on.
 pub fn row_at(width: i32, height: i32, x: i32, y: i32) -> Option<usize> {
     let rows = visible_rows(height);
     (0..rows).find(|&index| row_rect(width, index).contains(x, y))
 }
 
-/// The window scrolled so `selected` is on screen.
-///
-/// Returns the index of the first row to draw.
 pub fn scroll_offset(selected: usize, rows: usize, previous: usize) -> usize {
     if rows == 0 {
         return 0;
@@ -107,21 +78,18 @@ pub fn scroll_offset(selected: usize, rows: usize, previous: usize) -> usize {
     }
 }
 
-/// Everything the launcher needs painting.
 pub struct Frame<'a> {
     pub theme: &'a Theme,
     pub query: &'a str,
     pub results: &'a [&'a Entry],
     pub selected: usize,
     pub offset: usize,
-    /// The categories in the column, and which one is showing.
     pub categories: &'a [Category],
     pub category: usize,
     pub mask: &'a spectre_draw::PatternMask,
     pub color_phase: f32,
 }
 
-/// Paint the launcher.
 pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
     let palette = &frame.theme.palette;
     let bounds = canvas.bounds();
@@ -185,14 +153,6 @@ fn draw_sidebar(canvas: &mut Canvas, text: &mut TextRenderer, height: i32, frame
     }
 }
 
-/// The pattern behind the menu, held well back: this surface is a wall of
-/// text, and at title bar intensity the contours read through it.
-///
-/// The field stands still here whatever the theme says. Scrolling it means
-/// rebuilding the mask - four octaves of noise across the whole window - and
-/// the launcher redraws on every keystroke, so an animated field put that
-/// rebuild between the key and the letter appearing. The colours still travel:
-/// they cost a blend per pixel, not a rebuild.
 pub fn launcher_pattern(theme: &Theme) -> Pattern {
     Pattern {
         intensity: theme.window_pattern.intensity * 0.3,
@@ -201,7 +161,6 @@ pub fn launcher_pattern(theme: &Theme) -> Pattern {
     }
 }
 
-/// A one pixel accent frame, so the launcher reads as its own surface.
 fn draw_border(canvas: &mut Canvas, bounds: Rect, palette: &Palette) {
     let steps = bounds.w.clamp(1, 48);
     for i in 0..steps {
@@ -247,7 +206,6 @@ fn draw_search(canvas: &mut Canvas, text: &mut TextRenderer, width: i32, frame: 
         let hint = Label::new("Type to search").size(NAME_SIZE).color(palette.text_muted);
         let image = text.rasterise(&hint);
         canvas.draw_image(text_x, field.y + (field.h - image.height as i32) / 2, &image);
-        // The caret sits where the first character will land.
         canvas.fill_rect(
             Rect::new(text_x - 3, field.y + 8, 1, field.h - 16),
             palette.accent.sample(0.5),
@@ -279,8 +237,6 @@ fn draw_row(
 ) {
     if selected {
         canvas.fill_rect(rect, palette.overlay);
-        // A short accent bar on the leading edge, rather than a full-width
-        // highlight: black first, RGB second.
         canvas.fill_rect(Rect::new(rect.x, rect.y + 4, MARKER_WIDTH, rect.h - 8), palette.accent.sample(0.3));
     }
 
@@ -359,9 +315,7 @@ mod tests {
             let rect = row_rect(width, i);
             assert_eq!(row_at(width, height, rect.x + 5, rect.y + 5), Some(i));
         }
-        // The search field is not a row.
         assert_eq!(row_at(width, height, 20, PADDING + 2), None);
-        // Past the last row.
         assert_eq!(row_at(width, height, 20, height - 1), None);
     }
 
@@ -436,8 +390,6 @@ mod timing {
         mask.prepare(w, h, &pattern, pattern.phase(0.0), 1.0);
         println!("mask built in {:?}", start.elapsed());
 
-        // What a keystroke a second later costs: nothing, because the field
-        // does not scroll. It used to be a full rebuild.
         let start = std::time::Instant::now();
         mask.prepare(w, h, &pattern, pattern.phase(1.0), 1.0);
         println!("mask after a keystroke in {:?}", start.elapsed());

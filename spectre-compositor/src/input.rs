@@ -1,6 +1,3 @@
-//! Input handling: turning libinput events into focus changes, pointer motion
-//! and [`Action`]s.
-
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
@@ -16,13 +13,8 @@ use crate::grabs::{MoveGrab, BTN_LEFT};
 use crate::render::Part;
 use crate::state::Spectre;
 
-/// Two clicks closer together than this on a title bar count as a double click.
 const DOUBLE_CLICK_MS: u32 = 400;
 
-/// The name Spectre uses for a keysym in a binding, e.g. `return`, `q`, `f1`.
-///
-/// xkb's canonical names are used verbatim, lowercased, so anything
-/// `xkbcli list` prints can be bound.
 pub fn keysym_name(sym: Keysym) -> Option<String> {
     let name = smithay::input::keyboard::xkb::keysym_get_name(sym);
     (!name.is_empty() && name != "NoSymbol").then(|| name.to_ascii_lowercase())
@@ -34,11 +26,9 @@ impl From<&ModifiersState> for ModifiersExt {
     }
 }
 
-/// Newtype so the `From` impl above can live in this crate.
 pub struct ModifiersExt(pub Modifiers);
 
 impl Spectre {
-    /// Feed one backend input event into the compositor.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
         match event {
             InputEvent::Keyboard { event } => self.on_key::<B>(event),
@@ -66,14 +56,10 @@ impl Spectre {
             serial,
             time,
             |state, modifiers, handle| {
-                // Compare against the unmodified symbol so `Mod+Shift+q` matches
-                // the physical Q key rather than the shifted keysym.
                 let sym = handle.raw_syms().first().copied().unwrap_or(handle.modified_sym());
                 let is_logo =
                     matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
 
-                // Only presses trigger bindings; releases always go to the client
-                // so a client never sees a press without its release.
                 if event.state() != smithay::backend::input::KeyState::Pressed {
                     if is_logo && std::mem::take(&mut state.logo_armed) {
                         return FilterResult::Intercept(Some(Action::ToggleLauncher));
@@ -81,9 +67,6 @@ impl Spectre {
                     return FilterResult::Forward;
                 }
 
-                // A tap of the logo key on its own opens the menu; pressing it
-                // as part of a binding, or pressing anything else while it is
-                // held, disarms that.
                 state.logo_armed =
                     is_logo && !modifiers.ctrl && !modifiers.alt && !modifiers.shift;
 
@@ -107,7 +90,6 @@ impl Spectre {
         }
     }
 
-    /// Execute a bound action.
     pub fn run_action(&mut self, action: Action) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Top;
 
@@ -132,8 +114,6 @@ impl Spectre {
                 }
             }
             Action::ToggleFloating => {
-                // Every window floats today; the tiling layout lands in a later
-                // phase, so this is deliberately inert rather than misleading.
                 tracing::debug!("toggle-floating is not implemented yet");
             }
             Action::Workspace { index } => {
@@ -165,7 +145,6 @@ impl Spectre {
         }
     }
 
-    /// Flip the animation kill switch at runtime.
     fn toggle_animations(&mut self) {
         let on = self.config.effects.window_animations;
         self.config.effects.window_animations = !on;
@@ -179,7 +158,6 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Cycle Performance -> Balanced -> Spectre -> Performance.
     fn cycle_profile(&mut self) {
         let next = match self.config.general.profile {
             Profile::Performance => Profile::Balanced,
@@ -195,12 +173,10 @@ impl Spectre {
         self.mark_dirty();
     }
 
-    /// Run a command detached from the compositor.
     pub fn spawn(&self, command: &str) {
         let _ = self.spawn_pid(command);
     }
 
-    /// Spawn `command`, returning the child's pid.
     pub fn spawn_pid(&self, command: &str) -> Option<u32> {
         let Some(argv) = shell_split(command) else {
             tracing::warn!(%command, "unbalanced quotes in spawn command");
@@ -212,9 +188,6 @@ impl Spectre {
         if let Some(socket) = self.ipc_socket_path() {
             cmd.env(spectre_ipc::SOCKET_ENV, socket);
         }
-        // The shell components must read the same file the session was started
-        // from, or a compositor run with `-c` ends up with a panel configured
-        // from somewhere else entirely.
         if let Some(path) = spectre_config::Config::active_path() {
             cmd.env(spectre_config::CONFIG_ENV, path);
         }
@@ -222,15 +195,12 @@ impl Spectre {
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "Spectre")
-            // A child must not inherit the compositor's stdio: a client writing
-            // to a closed pipe would take the whole session down.
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
         match cmd.spawn() {
             Ok(child) => {
-                // Nothing waits on it: SIGCHLD is ignored, so the kernel reaps.
                 let pid = child.id();
                 drop(child);
                 Some(pid)
@@ -242,8 +212,6 @@ impl Spectre {
         }
     }
 
-    /// Open the application menu, or close it if it is already up.
-    /// Take the focused window to the neighbouring workspace and follow it.
     fn carry_window(&mut self, delta: isize) {
         let count = self.workspaces.count();
         if count == 0 {
@@ -260,7 +228,6 @@ impl Spectre {
         }
     }
 
-    /// Start or stop the panel to match `[panel] enabled`.
     pub fn set_panel_running(&mut self, on: bool) {
         match on {
             true if self.panel.is_none() => self.panel = self.spawn_pid("spectre-panel"),
@@ -275,7 +242,6 @@ impl Spectre {
 
     fn toggle_launcher(&mut self) {
         if let Some(pid) = self.launcher.take() {
-            // Signal 0 only asks whether the process is still there.
             let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
             if alive {
                 unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
@@ -285,8 +251,6 @@ impl Spectre {
         self.launcher = self.spawn_pid("spectre-launcher");
     }
 
-    /// Spawn one of the helper components. These live in later phases; until
-    /// then the binding is a documented no-op rather than a crash.
     fn spawn_configured(&self, what: &str) {
         tracing::info!(component = what, "not implemented yet");
     }
@@ -315,7 +279,6 @@ impl Spectre {
         );
         pointer.frame(self);
         self.follow_mouse_focus();
-        // The pointer is drawn by us, so moving it is a visible change.
         self.mark_dirty();
     }
 
@@ -346,16 +309,12 @@ impl Spectre {
         let time = event.time_msec();
 
         if state == ButtonState::Pressed {
-            // Clicking while the logo key is held is a drag, not a menu tap.
             self.logo_armed = false;
-            // Decorations are ours: a press on one is handled here and never
-            // reaches the client, which would otherwise see a stray click.
             if let Some((window, part)) = self.decoration_under_pointer() {
                 self.focus_window(Some(&window));
                 self.on_decoration_press(&window, part, button, serial, time);
                 return;
             }
-            // Click to focus anywhere inside a window.
             if let Some(window) = self.window_under_pointer() {
                 if self.focus.as_ref() != Some(&window) {
                     self.focus_window(Some(&window));
@@ -368,7 +327,6 @@ impl Spectre {
         pointer.frame(self);
     }
 
-    /// Act on a press over a window's frame.
     fn on_decoration_press(
         &mut self,
         window: &smithay::desktop::Window,
@@ -400,8 +358,6 @@ impl Spectre {
                     self.set_maximized(window, !on);
                     return;
                 }
-                // A maximized window is not draggable: it has no position to
-                // drag to until the user restores it.
                 if self.has_state(window, Top::Maximized) {
                     return;
                 }
@@ -411,17 +367,14 @@ impl Spectre {
         }
     }
 
-    /// Whether this title bar press completes a double click.
     fn is_double_click(&mut self, window: &smithay::desktop::Window, time: u32) -> bool {
         let same = self.last_click.as_ref().is_some_and(|(w, t)| {
             w == window && time.saturating_sub(*t) <= DOUBLE_CLICK_MS
         });
-        // Consume the click either way, so a triple click is not two doubles.
         self.last_click = if same { None } else { Some((window.clone(), time)) };
         same
     }
 
-    /// Begin dragging `window` by its title bar.
     fn start_move(&mut self, window: &smithay::desktop::Window, serial: smithay::utils::Serial) {
         let Some(location) = self.workspaces.active().element_location(window) else {
             return;
@@ -466,13 +419,11 @@ impl Spectre {
         }
     }
 
-    /// Keep the pointer inside the union of all mapped outputs.
     fn clamp_to_outputs(&self, mut location: Point<f64, smithay::utils::Logical>) -> Point<f64, smithay::utils::Logical> {
         let outputs = self.outputs();
         if outputs.is_empty() {
             return location;
         }
-        // Already inside an output: nothing to do.
         if outputs
             .iter()
             .filter_map(|o| self.workspaces.output_geometry(o))
@@ -480,7 +431,6 @@ impl Spectre {
         {
             return location;
         }
-        // Otherwise clamp into the nearest output's rectangle.
         if let Some(geometry) = outputs.first().and_then(|o| self.workspaces.output_geometry(o)) {
             let g = geometry.to_f64();
             location.x = location.x.clamp(g.loc.x, g.loc.x + g.size.w - 1.0);
@@ -490,10 +440,6 @@ impl Spectre {
     }
 }
 
-/// Split a command line on whitespace, honouring single and double quotes.
-///
-/// Returns `None` when a quote is left open, so a typo in the config produces a
-/// warning instead of a mangled `argv`.
 pub fn shell_split(input: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     let mut current = String::new();

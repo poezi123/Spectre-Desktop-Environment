@@ -1,29 +1,13 @@
-//! Ranking launcher results.
-//!
-//! A subsequence match with a score, the same shape every fuzzy finder uses.
-//! Kept pure so the ranking can be pinned down by tests instead of by feel:
-//! typing `fire` must put Firefox first, every time.
-
 use crate::entry::Entry;
 
-/// How well a query matches, higher is better.
 pub type Score = i32;
 
-/// Points for a character that continues the previous match.
 const CONSECUTIVE: Score = 8;
-/// Points for a character at the start of a word.
 const WORD_START: Score = 12;
-/// Points for the very first character of the name.
 const PREFIX: Score = 20;
-/// Penalty per character skipped between matches.
 const GAP: Score = -1;
-/// Multiplier applied when the match came from the keywords rather than the
-/// name, so a name match always outranks a category match.
 const KEYWORD_PENALTY: Score = 3;
 
-/// Score `query` against `text`, or `None` if it is not a subsequence.
-///
-/// Matching is case-insensitive; an empty query matches everything at zero.
 pub fn score(query: &str, text: &str) -> Option<Score> {
     if query.is_empty() {
         return Some(0);
@@ -52,7 +36,6 @@ pub fn score(query: &str, text: &str) -> Option<Score> {
         cursor = found + 1;
     }
 
-    // Shorter names win ties: "Files" should beat "File Roller" for "file".
     Some(total - (haystack.len() as Score / 8))
 }
 
@@ -63,10 +46,6 @@ fn is_word_start(haystack: &[char], index: usize) -> bool {
             .is_some_and(|c| !c.is_alphanumeric())
 }
 
-/// Filter and rank entries for a query.
-///
-/// An empty query returns everything in its existing (alphabetical) order,
-/// which is what a launcher should show before the user has typed anything.
 pub fn rank<'a>(query: &str, entries: &'a [Entry]) -> Vec<&'a Entry> {
     if query.trim().is_empty() {
         return entries.iter().collect();
@@ -84,8 +63,6 @@ pub fn rank<'a>(query: &str, entries: &'a [Entry]) -> Vec<&'a Entry> {
         })
         .collect();
 
-    // Sort by score, then by name, so equal scores come out in a stable and
-    // predictable order rather than whatever the filter happened to produce.
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
     scored.into_iter().map(|(_, entry)| entry).collect()
 }
@@ -171,9 +148,7 @@ mod tests {
 
     #[test]
     fn categories_and_commands_are_searchable_but_rank_below_names() {
-        // "terminal" appears only in Konsole's categories.
         assert_eq!(names("terminal")[0], "Konsole");
-        // A name match must still beat a category match for the same query.
         let mixed = vec![
             entry("Network Tools", "Utility", "nettools"),
             entry("Wireshark", "Network;Monitor", "wireshark"),

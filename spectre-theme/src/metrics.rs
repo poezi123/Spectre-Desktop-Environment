@@ -1,41 +1,24 @@
-//! Sizes, radii and spacing, in logical pixels.
-//!
-//! Every value is pre-scale: renderers multiply by the output's fractional
-//! scale. Keeping one table here stops the panel and the compositor from
-//! disagreeing about how tall a title bar is.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Metrics {
-    /// Height of a server-side title bar.
     pub titlebar_height: u32,
-    /// Window border thickness. `0` disables borders.
     pub border_width: u32,
-    /// Corner radius of windows, menus and dialogs.
     pub corner_radius: u32,
-    /// Gap between tiled windows and between a window and the screen edge.
     pub gap: u32,
 
-    /// Panel thickness along its anchored edge.
     pub panel_height: u32,
-    /// Inner padding at the panel's short ends.
     pub panel_padding: u32,
-    /// Gap between adjacent panel widgets.
     pub panel_spacing: u32,
-    /// Edge margin when the panel is in floating mode.
     pub panel_margin: u32,
 
-    /// Square size of a title bar button hit box.
     pub button_size: u32,
-    /// Icon edge length inside a panel button or tray slot.
     pub icon_size: u32,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        // Matches the proportions in Fensterconcept.png / Taskleiste Concept.png.
         Self {
             titlebar_height: 32,
             border_width: 1,
@@ -52,11 +35,6 @@ impl Default for Metrics {
 }
 
 impl Metrics {
-    /// Scale every metric for an output, rounding to whole device pixels.
-    ///
-    /// A border that rounds to zero is clamped back to one pixel: losing the
-    /// focus outline entirely on a fractional scale would be a usability bug,
-    /// and the project rules say the desktop stays usable without effects.
     pub fn scaled(self, scale: f64) -> Self {
         let s = |v: u32| (v as f64 * scale).round() as u32;
         Self {
@@ -73,7 +51,6 @@ impl Metrics {
         }
     }
 
-    /// Total decoration inset around a window's content: `(top, right, bottom, left)`.
     pub fn decoration_insets(self, decorated: bool) -> (u32, u32, u32, u32) {
         if !decorated {
             return (0, 0, 0, 0);

@@ -1,9 +1,3 @@
-//! Painting the panel.
-//!
-//! Takes the layout's rectangles and turns them into pixels. Nothing here
-//! decides *where* anything goes - that is [`crate::layout`] - so a change to
-//! the look cannot move a click target.
-
 use spectre_config::PanelPosition;
 use spectre_text::{EllipsisSide, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Pattern, Theme};
@@ -11,39 +5,22 @@ use spectre_theme::{Color, Palette, Pattern, Theme};
 use spectre_draw::{Canvas, PatternMask, Rect};
 use crate::layout::{Item, Placed, CHIP_PADDING};
 
-/// Font size for panel labels, in logical pixels.
 pub const LABEL_SIZE: f32 = 12.0;
-/// Font size for the clock's date line.
 pub const DATE_SIZE: f32 = 9.0;
-/// Thickness of the accent underline beneath the active workspace.
 pub const UNDERLINE: i32 = 2;
 
-/// How much of the launcher button the Spectre mark fills.
-///
-/// The mark is a hexagon with a lot of empty corner, so it needs to run a
-/// little larger than a square icon would to carry the same visual weight.
 const LOGO_FILL: f32 = 0.78;
 
-/// Everything the panel needs to draw itself that is not in the layout.
 pub struct Frame<'a> {
     pub theme: &'a Theme,
-    /// Panel-local pointer position, `None` when the pointer is elsewhere.
     pub pointer: Option<(i32, i32)>,
-    /// `HH:MM`.
     pub time: &'a str,
-    /// The line under the clock.
     pub date: &'a str,
-    /// The CPU and memory line, for a panel wide enough to show it in one.
     pub resources: &'a str,
-    /// The same two readings on their own, for a panel on its side.
     pub cpu: &'a str,
     pub memory: &'a str,
-    /// Cached contour coverage, prepared by the caller for this canvas.
     pub mask: &'a PatternMask,
-    /// Where the pattern's colour loop stands, 0..1.
     pub color_phase: f32,
-    /// Which edge the panel sits on. A panel on its side is one button wide,
-    /// so its widgets stack and their labels shrink to fit.
     pub position: PanelPosition,
 }
 
@@ -53,15 +30,12 @@ impl Frame<'_> {
     }
 }
 
-/// Paint the whole panel.
 pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], frame: &Frame<'_>) {
     let palette = &frame.theme.palette;
     let bounds = canvas.bounds();
 
     canvas.fill_pattern(bounds, frame.mask, palette.surface, &palette.accent, frame.color_phase);
 
-    // A hairline along the edge that faces the desktop separates the panel
-    // from it even with every effect switched off.
     let hairline = match frame.position {
         PanelPosition::Bottom => Rect::new(0, 0, bounds.w, 1),
         PanelPosition::Top => Rect::new(0, bounds.h - 1, bounds.w, 1),
@@ -79,8 +53,6 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
 }
 
 pub fn panel_pattern(theme: &Theme) -> Pattern {
-    // The panel is a thin strip: the same line spacing that reads well on a
-    // title bar reads well here, so it shares the window pattern outright.
     theme.panel_pattern
 }
 
@@ -120,7 +92,6 @@ fn draw_item(
             if *active {
                 accent_underline(canvas, rect, palette);
             } else if *occupied {
-                // A dim pip marks a workspace that has windows but is not shown.
                 let dot = Rect::new(rect.x + rect.w / 2 - 1, rect.bottom() - UNDERLINE - 2, 2, 2);
                 canvas.fill_rect(dot, palette.text_muted);
             }
@@ -133,8 +104,6 @@ fn draw_item(
                 (false, false) => palette.text_dim,
             };
             if frame.vertical() {
-                // One button wide: a title has nowhere to go, so the window
-                // is named by its initial the way a dock names it by its icon.
                 let initial = initial_of(title);
                 centre_label(
                     canvas,
@@ -182,8 +151,6 @@ fn draw_item(
         }
         Item::Clock => {
             if frame.vertical() {
-                // `HH:MM` does not fit across a button, so the hours sit over
-                // the minutes and the date goes; the panel has no room for it.
                 let (hours, minutes) = frame.time.split_once(':').unwrap_or((frame.time, ""));
                 stacked(
                     canvas,
@@ -194,8 +161,6 @@ fn draw_item(
                 );
                 return;
             }
-            // Time over date, both monospace so the panel does not twitch as
-            // the digits change.
             let time = Label::new(frame.time)
                 .size(LABEL_SIZE)
                 .color(palette.text)
@@ -219,7 +184,6 @@ fn draw_item(
     }
 }
 
-/// Two monospace lines centred in `rect`, one over the other.
 fn stacked(
     canvas: &mut Canvas,
     text: &mut TextRenderer,
@@ -239,10 +203,6 @@ fn stacked(
     canvas.draw_image(rect.x + (rect.w - b.width as i32) / 2, y, &b);
 }
 
-/// The letter that stands for a window on a panel too narrow for its title.
-///
-/// Toolkits put the application's name last - `~ : fish - Konsole` - so the
-/// tail of the title is what names the window, not its head.
 fn initial_of(title: &str) -> String {
     let tail = title
         .rsplit(['\u{2014}', '\u{2013}', '|'])
@@ -255,11 +215,6 @@ fn initial_of(title: &str) -> String {
         .unwrap_or_else(|| String::from("?"))
 }
 
-/// The Spectre mark, centred in the launcher button.
-///
-/// Rasterised at the size it is drawn at rather than scaled up from a smaller
-/// one, so the contour lines inside the hexagon survive on a tall panel
-/// instead of turning into mush.
 fn spectre_mark(canvas: &mut Canvas, rect: Rect) {
     let side = ((rect.w.min(rect.h) as f32) * LOGO_FILL).round().max(1.0) as u32;
     let image = spectre_draw::logo(side);
@@ -271,22 +226,15 @@ fn spectre_mark(canvas: &mut Canvas, rect: Rect) {
     canvas.draw_image(x, y, &image);
 }
 
-/// A power symbol: a broken ring with a stroke through the gap.
-///
-/// Drawn rather than typeset because U+23FB is missing from most font stacks -
-/// including the one Garuda ships - and a session button that renders as a
-/// blank box is worse than one that is a few rectangles.
 fn power_icon(canvas: &mut Canvas, rect: Rect, color: Color) {
     let size = rect.w.min(rect.h).clamp(8, 16);
     let cx = rect.x + rect.w / 2;
     let cy = rect.y + rect.h / 2;
     let radius = size / 2;
 
-    // The ring, as a circle of single-pixel steps, with a gap at the top.
     let steps = (radius * 8).max(24);
     for i in 0..steps {
         let angle = std::f32::consts::TAU * i as f32 / steps as f32;
-        // Leave the top eighth open, where the stroke goes.
         let from_top = (angle - std::f32::consts::FRAC_PI_2 * 3.0).abs();
         if from_top < 0.45 {
             continue;
@@ -296,18 +244,15 @@ fn power_icon(canvas: &mut Canvas, rect: Rect, color: Color) {
         canvas.fill_rect(Rect::new(x, y, 1, 1), color);
     }
 
-    // The stroke.
     canvas.fill_rect(Rect::new(cx, cy - radius - 1, 1, radius + 1), color);
 }
 
-/// The hover plate behind an interactive item.
 fn plate(canvas: &mut Canvas, rect: Rect, hovered: bool, palette: &Palette) {
     if hovered {
         canvas.fill_rect(rect.inset(2), palette.overlay);
     }
 }
 
-/// The accent bar marking the active workspace or focused task.
 fn accent_underline(canvas: &mut Canvas, rect: Rect, palette: &Palette) {
     let y = rect.bottom() - UNDERLINE;
     let steps = rect.w.clamp(1, 24);
@@ -349,7 +294,6 @@ mod tests {
         }
     }
 
-    /// A mask sized for the canvas the test is about to draw into.
     fn mask(theme: &Theme, width: i32, height: i32) -> PatternMask {
         let mut mask = PatternMask::new();
         mask.prepare(width, height, &panel_pattern(theme), 0.0, 1.0);
@@ -426,8 +370,6 @@ mod tests {
         let items = [Placed { item: Item::Launcher, rect }];
         draw(&mut canvas, &mut text, &items, &frame(&theme, &mask));
 
-        // The mark is the only thing in the button, so any pixel there that is
-        // brighter than the panel behind it came from the logo.
         let bytes = canvas.as_bytes();
         let at = |x: i32, y: i32| {
             let i = (y as usize * 120 + x as usize) * 4;
@@ -501,7 +443,6 @@ mod tests {
         let mut canvas = Canvas::new(20, 32);
         let mask = mask(&theme, 20, 32);
         let mut text = TextRenderer::new();
-        // An item deliberately hanging off both ends.
         let items = [
             Placed { item: Item::Launcher, rect: Rect::new(-40, 0, 30, 32) },
             Placed { item: Item::Clock, rect: Rect::new(500, 0, 60, 32) },

@@ -1,22 +1,13 @@
-//! Individually switchable visual effects.
-//!
-//! Each field here must be independently toggleable — that is the "every
-//! expensive animation is optional" rule, and the reason profiles are only a
-//! preset over this struct rather than a separate code path.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceTransition {
-    /// Instant switch. Always available, costs nothing.
     None,
     Fade,
     #[default]
     Slide,
-    /// Slide with a scale-back, giving a sense of depth.
     Depth,
-    /// Workspaces mapped onto the faces of a rotating cube.
     Cube,
     Coverflow,
 }
@@ -42,13 +33,10 @@ impl WorkspaceTransition {
         }
     }
 
-    /// Whether the transition needs the full scene rendered off-screen first.
-    /// These are the ones a low-end GPU should avoid.
     pub fn needs_offscreen_pass(self) -> bool {
         matches!(self, WorkspaceTransition::Cube | WorkspaceTransition::Coverflow)
     }
 
-    /// Default duration in milliseconds.
     pub fn duration_ms(self) -> u32 {
         match self {
             WorkspaceTransition::None => 0,
@@ -68,16 +56,13 @@ pub struct Effects {
     pub shadows: bool,
     pub rounded_corners: bool,
     pub window_animations: bool,
-    /// Multiplier on every animation duration. Higher is faster.
     pub animation_speed: f32,
     pub workspace_transition: WorkspaceTransition,
-    /// Strength of the RGB accent glow, 0..1. `0.0` leaves a flat accent border.
     pub rgb_glow: f32,
 }
 
 impl Default for Effects {
     fn default() -> Self {
-        // Mirrors the Balanced profile, which is the documented default.
         Profile::Balanced.effects().expect("Balanced is not Custom")
     }
 }
@@ -85,10 +70,6 @@ impl Default for Effects {
 use crate::profile::Profile;
 
 impl Effects {
-    /// Duration of a workspace transition under the current settings.
-    ///
-    /// Returns `0` whenever animations are off, so callers can branch on the
-    /// duration alone instead of checking two flags.
     pub fn transition_duration_ms(&self) -> u32 {
         if !self.window_animations {
             return 0;
@@ -97,7 +78,6 @@ impl Effects {
         (self.workspace_transition.duration_ms() as f32 / speed) as u32
     }
 
-    /// Turn off everything that costs a GPU pass, keeping layout intact.
     pub fn minimal(self) -> Self {
         Profile::Performance.effects().expect("Performance is not Custom")
     }

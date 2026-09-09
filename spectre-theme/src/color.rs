@@ -1,14 +1,7 @@
-//! Colour primitives.
-//!
-//! Everything is stored as non-premultiplied sRGB with a linear alpha, which is
-//! what both Cairo and the GLES renderer expect. Conversion to linear light only
-//! happens inside a shader, never here.
-
 use std::fmt;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-/// An sRGB colour with straight alpha, each channel in `0.0..=1.0`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: f32,
@@ -28,8 +21,6 @@ impl Color {
         Self::rgba(r, g, b, 1.0)
     }
 
-    /// Build a colour from `0xRRGGBB`. Intended for the palette constants below,
-    /// where the literal reads much better than four floats.
     pub const fn hex(v: u32) -> Self {
         Self::hex_a(v, 255)
     }
@@ -43,12 +34,10 @@ impl Color {
         )
     }
 
-    /// Same colour at a different opacity.
     pub const fn alpha(self, a: f32) -> Self {
         Self { a, ..self }
     }
 
-    /// Scale the RGB channels, keeping alpha. `f > 1.0` brightens.
     pub fn scaled(self, f: f32) -> Self {
         Self {
             r: (self.r * f).clamp(0.0, 1.0),
@@ -58,8 +47,6 @@ impl Color {
         }
     }
 
-    /// Linear interpolation in sRGB space. Good enough for the short hops the
-    /// accent gradient makes; a full Oklab mix is not worth the cost here.
     pub fn mix(self, other: Color, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
@@ -70,7 +57,6 @@ impl Color {
         }
     }
 
-    /// Straight alpha over an opaque backdrop.
     pub fn over(self, backdrop: Color) -> Self {
         backdrop.mix(self.alpha(1.0), self.a)
     }
@@ -79,7 +65,6 @@ impl Color {
         [self.r, self.g, self.b, self.a]
     }
 
-    /// Premultiplied, which is what the GLES renderer wants for blending.
     pub fn to_premultiplied(self) -> [f32; 4] {
         [self.r * self.a, self.g * self.a, self.b * self.a, self.a]
     }
@@ -94,7 +79,6 @@ impl Color {
         let n = |from: usize, to: usize| -> Result<u8, ParseColorError> {
             u8::from_str_radix(&h[from..to], 16).map_err(|_| ParseColorError(s.to_owned()))
         };
-        // Accept #rgb, #rgba, #rrggbb and #rrggbbaa.
         let expand = |v: u8| v * 17;
         match h.len() {
             3 | 4 => {
@@ -145,7 +129,6 @@ impl fmt::Display for Color {
     }
 }
 
-/// The string was not a `#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa` literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseColorError(String);
 
@@ -170,8 +153,6 @@ impl<'de> Deserialize<'de> for Color {
     }
 }
 
-/// A multi-stop gradient, used for the RGB accent that runs along focused
-/// window borders, the active workspace pip and the panel underline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Gradient {
     pub stops: Vec<Color>,
@@ -182,13 +163,10 @@ impl Gradient {
         Self { stops: stops.into() }
     }
 
-    /// Flat gradient from a single colour, for `accent = "#rrggbb"` configs.
     pub fn solid(color: Color) -> Self {
         Self { stops: vec![color] }
     }
 
-    /// Sample at `t` in `0.0..=1.0`. An empty gradient samples transparent so a
-    /// broken config degrades to "no accent" instead of panicking mid-frame.
     pub fn sample(&self, t: f32) -> Color {
         match self.stops.len() {
             0 => Color::TRANSPARENT,
@@ -201,8 +179,6 @@ impl Gradient {
         }
     }
 
-    /// Sample at `t` with the stops treated as a loop, so a cycle through the
-    /// gradient has no seam.
     pub fn sample_cyclic(&self, t: f32) -> Color {
         match self.stops.len() {
             0 => Color::TRANSPARENT,
@@ -215,8 +191,6 @@ impl Gradient {
         }
     }
 
-    /// Average colour, for places that need one flat value (a 1px border on a
-    /// low-end profile, an icon tint).
     pub fn average(&self) -> Color {
         if self.stops.is_empty() {
             return Color::TRANSPARENT;

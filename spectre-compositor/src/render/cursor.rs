@@ -1,46 +1,24 @@
-//! The pointer.
-//!
-//! Clients set their own cursor surface as soon as the pointer is over them;
-//! over the desktop, the panel's gaps and anything that has not asked for one,
-//! Spectre draws its own arrow. Without that last part there is simply no
-//! pointer on screen, which is what a compositor that only forwards client
-//! cursors ends up with.
-//!
-//! The arrow is a polygon rather than a bitmap, because the size is a setting.
-//! Scaling pixel art up gives stairs and scaling it down eats the outline,
-//! while a filled outline at the size actually asked for is sharp at any of
-//! them - and costs a few hundred microseconds, once, at startup.
-
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::utils::{Size, Transform};
 use spectre_theme::Color;
 
-/// The arrow's outline, clockwise from the tip, in the units [`ART_HEIGHT`]
-/// measures. The shape is the familiar left-pointing pointer: a triangular
-/// head with a 45-degree hypotenuse, a notch under it, and a tail.
 const ARROW: [(f32, f32); 7] = [
-    (0.0, 0.0),   // the tip, which is also the hotspot
-    (0.0, 15.0),  // straight down the left edge
-    (3.4, 11.4),  // up into the notch
-    (6.4, 18.6),  // down the left side of the tail
-    (8.8, 17.6),  // across the end of the tail
-    (6.6, 10.9),  // back up its right side
-    (10.6, 10.9), // out to the corner of the head
+    (0.0, 0.0),
+    (0.0, 15.0),
+    (3.4, 11.4),
+    (6.4, 18.6),
+    (8.8, 17.6),
+    (6.6, 10.9),
+    (10.6, 10.9),
 ];
 
-/// How tall [`ARROW`] is in its own units. Everything is scaled by
-/// `height / ART_HEIGHT`, so the proportions hold at any size.
 const ART_HEIGHT: f32 = 19.0;
 
-/// The outline is this fraction of the arrow's height, and never thinner than
-/// one device pixel: an unoutlined pointer disappears over its own colour.
 const OUTLINE_RATIO: f32 = 1.0 / 14.0;
 
-/// Spectre's own pointer, ready to hand to the renderer.
 pub struct CursorImage {
     pub buffer: MemoryRenderBuffer,
-    /// Where the tip sits inside the buffer, in device pixels.
     pub hotspot: (i32, i32),
     pub size: (i32, i32),
 }
@@ -52,8 +30,6 @@ impl std::fmt::Debug for CursorImage {
 }
 
 impl CursorImage {
-    /// Build the arrow `height` device pixels tall, filled with `fill` and
-    /// edged with `outline`.
     pub fn new(height: i32, fill: Color, outline: Color) -> Self {
         let art = Art::new(height);
         let pixels = art.rasterise(fill, outline);
@@ -69,14 +45,9 @@ impl CursorImage {
     }
 }
 
-/// The arrow worked out for one size: where its outline runs and how big a
-/// buffer it needs.
 struct Art {
-    /// [`ARROW`] scaled to the wanted height, in buffer coordinates.
     points: [(f32, f32); ARROW.len()],
-    /// Total thickness of the outline, in device pixels.
     outline: f32,
-    /// Margin around the shape, so the outline and its feathering fit.
     pad: i32,
     width: i32,
     height: i32,
@@ -84,13 +55,9 @@ struct Art {
 
 impl Art {
     fn new(height: i32) -> Self {
-        // A pointer smaller than this is not a pointer any more, and a zero
-        // sized buffer is a crash rather than a small cursor.
         let height = height.max(6);
         let scale = height as f32 / ART_HEIGHT;
         let outline = (height as f32 * OUTLINE_RATIO).max(1.0);
-        // Half the outline sticks out past the polygon, and the antialiasing
-        // needs another pixel beyond that.
         let pad = (outline / 2.0 + 1.0).ceil() as i32;
 
         let mut points = ARROW;
@@ -111,21 +78,16 @@ impl Art {
         }
     }
 
-    /// Draw the arrow into an `Argb8888` buffer.
     fn rasterise(&self, fill: Color, outline: Color) -> Vec<u8> {
         let mut out = vec![0u8; (self.width * self.height * 4) as usize];
         let half = self.outline / 2.0;
 
         for y in 0..self.height {
             for x in 0..self.width {
-                // Distance from the pixel's centre to the outline, negative
-                // inside the shape.
                 let d = signed_distance(
                     (x as f32 + 0.5, y as f32 + 0.5),
                     &self.points,
                 );
-                // The arrow is the polygon grown by half the outline; the fill
-                // is the same polygon shrunk by it. Between the two is the edge.
                 let covered = coverage(half - d);
                 if covered <= 0.0 {
                     continue;
@@ -136,7 +98,6 @@ impl Art {
                 let a = ((a as f32) * covered).round() as u8;
 
                 let i = ((y * self.width + x) * 4) as usize;
-                // Argb8888 is [B, G, R, A] in memory, premultiplied.
                 let m = |c: u8| ((c as u16 * a as u16) / 255) as u8;
                 out[i] = m(b);
                 out[i + 1] = m(g);
@@ -148,16 +109,10 @@ impl Art {
     }
 }
 
-/// How much of a pixel a boundary `x` device pixels away covers: a one pixel
-/// ramp, which is the cheapest antialiasing that does not shimmer.
 fn coverage(x: f32) -> f32 {
     (x + 0.5).clamp(0.0, 1.0)
 }
 
-/// Signed distance from `p` to the closed polygon `points`, negative inside.
-///
-/// The winding test is the usual crossing count, folded into the same loop
-/// that measures the distance so the polygon is only walked once.
 fn signed_distance(p: (f32, f32), points: &[(f32, f32)]) -> f32 {
     let mut squared = distance_squared(p, points[0], points[0]);
     let mut sign = 1.0f32;
@@ -167,7 +122,6 @@ fn signed_distance(p: (f32, f32), points: &[(f32, f32)]) -> f32 {
         let b = points[(i + points.len() - 1) % points.len()];
         squared = squared.min(distance_squared(p, a, b));
 
-        // A ray cast to the right crosses this edge: flip the sign.
         let edge = (b.0 - a.0, b.1 - a.1);
         let to_p = (p.0 - a.0, p.1 - a.1);
         let crossings = [
@@ -182,7 +136,6 @@ fn signed_distance(p: (f32, f32), points: &[(f32, f32)]) -> f32 {
     sign * squared.sqrt()
 }
 
-/// Squared distance from `p` to the segment `a`-`b`.
 fn distance_squared(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let edge = (b.0 - a.0, b.1 - a.1);
     let to_p = (p.0 - a.0, p.1 - a.1);
@@ -203,7 +156,6 @@ mod tests {
     const WHITE: Color = Color::hex(0xffffff);
     const BLACK: Color = Color::hex(0x000000);
 
-    /// The alpha channel of a rasterised arrow, plus its dimensions.
     fn alpha(height: i32) -> (Vec<u8>, i32, i32) {
         let art = Art::new(height);
         let pixels = art.rasterise(WHITE, BLACK);
@@ -216,7 +168,6 @@ mod tests {
         for height in [12, 24, 48] {
             let image = CursorImage::new(height, WHITE, BLACK);
             let drawn = image.size.1;
-            // The margin for the outline is the only thing added on top.
             assert!(
                 (drawn - height).abs() <= height / 6 + 3,
                 "asked for {height}, drew {drawn}"
@@ -241,7 +192,6 @@ mod tests {
             let i = ((y * art.width + x) * 4) as usize;
             (pixels[i], pixels[i + 3])
         };
-        // A row a third of the way down crosses outline, fill, then outline.
         let y = art.height / 3;
         let row: Vec<(u8, u8)> = (0..art.width).map(|x| at(x, y)).collect();
         let solid: Vec<usize> =
@@ -286,10 +236,8 @@ mod tests {
     #[test]
     fn the_inside_of_the_shape_measures_as_inside() {
         let art = Art::new(38);
-        // A point well within the head, on the diagonal's inner side.
         let inside = (art.pad as f32 + 4.0, art.pad as f32 + 12.0);
         assert!(signed_distance(inside, &art.points) < 0.0);
-        // And one past the hypotenuse, which is empty.
         let outside = (art.pad as f32 + 30.0, art.pad as f32 + 2.0);
         assert!(signed_distance(outside, &art.points) > 0.0);
     }
@@ -300,8 +248,6 @@ mod tests {
         assert!(distance_squared(p, (0.0, 0.0), (0.0, 0.0)).is_finite());
     }
 
-    /// Writes the pointer out as raw RGBA, for looking at rather than asserting
-    /// on. See the testing chapter in `TASKS.md` for turning it into a PNG.
     #[test]
     #[ignore = "writes a file, only for looking at"]
     fn dump_a_preview() {

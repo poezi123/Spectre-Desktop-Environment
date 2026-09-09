@@ -1,8 +1,3 @@
-//! Wayland protocol handlers.
-//!
-//! Policy lives here; the actual drawing lives in [`crate::render`] and the
-//! layout maths in [`crate::layout`].
-
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
 use smithay::delegate_dmabuf;
@@ -55,8 +50,6 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 
 use crate::state::{ClientState, Spectre};
 
-// --- compositor --------------------------------------------------------------
-
 impl CompositorHandler for Spectre {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
@@ -69,16 +62,11 @@ impl CompositorHandler for Spectre {
     fn commit(&mut self, surface: &WlSurface) {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
 
-        // A sync subsurface commits with its parent, so there is nothing to do
-        // until the root surface commits.
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            // Pending windows need this just as much as mapped ones: their
-            // geometry stays empty until `on_commit` reads the new buffer, and
-            // `map_new_window` refuses to place a zero-sized window.
             let window = self
                 .pending_windows
                 .iter()
@@ -94,9 +82,6 @@ impl CompositorHandler for Spectre {
         self.ensure_initial_configure(surface);
         self.map_new_window(surface);
 
-        // Any surface commit is new content on screen, including a panel
-        // attaching its first buffer. Without this the compositor would sit
-        // idle while a layer surface waited to be shown.
         self.update_layer_focus();
         self.mark_dirty();
     }
@@ -120,8 +105,6 @@ impl DmabufHandler for Spectre {
     }
 
     fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
-        // The renderer lives in the backend, so the import is deferred to it.
-        // Queue the request and let the next frame resolve it.
         self.pending_dmabufs.push((dmabuf, notifier));
         self.mark_dirty();
     }
@@ -133,25 +116,18 @@ delegate_compositor!(Spectre);
 delegate_shm!(Spectre);
 delegate_output!(Spectre);
 
-// --- xdg shell ---------------------------------------------------------------
-
 impl XdgShellHandler for Spectre {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        // Spectre draws its own decorations, so every toplevel is told up front
-        // that it is server-side decorated. Clients that insist on CSD say so
-        // through xdg-decoration and are honoured in `request_mode`.
         surface.with_pending_state(|state| {
             state.decoration_mode = Some(DecorationMode::ServerSide);
         });
         surface.send_configure();
 
         let window = Window::new_wayland_window(surface);
-        // Placement waits for the first commit: the client has not told us its
-        // size yet, so centring now would centre a zero-sized rectangle.
         self.pending_windows.push(window);
     }
 
@@ -259,8 +235,6 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Spectre 
     }
 
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
-        // Client-side decoration is honoured when asked for: fighting a client
-        // that wants to draw its own frame only produces a double title bar.
         toplevel.with_pending_state(|state| state.decoration_mode = Some(mode));
         toplevel.send_pending_configure();
     }
@@ -275,8 +249,6 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Spectre 
 
 delegate_xdg_shell!(Spectre);
 delegate_xdg_decoration!(Spectre);
-
-// --- layer shell -------------------------------------------------------------
 
 impl WlrLayerShellHandler for Spectre {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
@@ -321,8 +293,6 @@ impl WlrLayerShellHandler for Spectre {
         });
 
         if let Some(output) = found {
-            // Removing an exclusive zone changes how much room windows have,
-            // and a dismissed launcher has to hand the keyboard back.
             self.reflow_output(&output);
             self.update_layer_focus();
         }
@@ -330,8 +300,6 @@ impl WlrLayerShellHandler for Spectre {
 }
 
 delegate_layer_shell!(Spectre);
-
-// --- seat and selection ------------------------------------------------------
 
 impl SeatHandler for Spectre {
     type KeyboardFocus = WlSurface;
@@ -379,10 +347,7 @@ delegate_seat!(Spectre);
 delegate_data_device!(Spectre);
 delegate_primary_selection!(Spectre);
 
-// --- helpers used by the handlers above --------------------------------------
-
 impl Spectre {
-    /// The window wrapping `toplevel`, if it is mapped.
     pub fn window_for_toplevel(&self, toplevel: &ToplevelSurface) -> Option<Window> {
         self.workspaces
             .windows()
@@ -390,8 +355,6 @@ impl Spectre {
             .cloned()
     }
 
-    /// Send the first configure once a toplevel has committed but has not been
-    /// configured yet. Sending it earlier is a protocol error.
     fn ensure_initial_configure(&mut self, surface: &WlSurface) {
         if let Some(window) = self
             .pending_windows
@@ -414,10 +377,6 @@ impl Spectre {
             }
         }
 
-        // Layer surfaces are laid out again on every commit, not only on the
-        // first: a panel that moves to another edge changes its anchor and its
-        // size on a surface that is already mapped, and without a fresh
-        // arrange it would keep the geometry it was given when it started.
         for output in self.outputs() {
             let mut map = layer_map_for_output(&output);
             if map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL).is_none() {
@@ -426,8 +385,6 @@ impl Spectre {
             map.arrange();
             let configured = map
                 .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-                // Only when something actually changed, or client and
-                // compositor would configure each other in a circle.
                 .and_then(|layer| layer.layer_surface().send_pending_configure())
                 .is_some();
             drop(map);
@@ -438,8 +395,6 @@ impl Spectre {
         }
     }
 
-    /// Move a toplevel from `pending_windows` into the active workspace once it
-    /// has a real size.
     fn map_new_window(&mut self, surface: &WlSurface) {
         let Some(index) = self
             .pending_windows
@@ -474,8 +429,6 @@ impl Spectre {
             return;
         };
 
-        // The positioner works relative to the toplevel, so translate the
-        // output rectangle into that space before clamping.
         let mut target = output_geo;
         target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
         target.loc -= window_loc;
@@ -486,7 +439,6 @@ impl Spectre {
     }
 }
 
-/// Whether a layer surface has already received its first configure.
 fn initial_configure_sent(surface: &WlSurface) -> bool {
     with_states(surface, |states| {
         states

@@ -1,5 +1,3 @@
-//! The shaders Spectre draws its own furniture with.
-
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{
@@ -64,7 +62,6 @@ const UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_bg", UniformType::_4f),
 ];
 
-/// How much of the colour loop spans one surface.
 const COLOR_SPAN: f32 = 1.0;
 
 fn stop_uniforms(stops: &[Color; Pattern::STOPS], color_phase: f32) -> Vec<Uniform<'static>> {
@@ -78,12 +75,6 @@ fn stop_uniforms(stops: &[Color; Pattern::STOPS], color_phase: f32) -> Vec<Unifo
     ]
 }
 
-/// Every program Spectre compiles.
-///
-/// Compilation is fallible on purpose: a machine whose GL driver rejects a
-/// shader must still get a desktop, just a plainer one. Each program is
-/// optional on its own, so a driver that chokes on one does not cost the
-/// others.
 #[derive(Debug, Clone)]
 pub struct PatternShader {
     program: GlesPixelProgram,
@@ -93,7 +84,6 @@ pub struct PatternShader {
 }
 
 impl PatternShader {
-    /// Compile the shaders for `renderer`.
     pub fn compile(renderer: &mut GlesRenderer) -> Option<Self> {
         let names = |list: &[(&'static str, UniformType)]| -> Vec<UniformName<'static>> {
             list.iter().map(|(n, t)| UniformName::new(*n, *t)).collect()
@@ -137,24 +127,16 @@ impl PatternShader {
         Some(Self { program, frame, rounded, contour })
     }
 
-    /// The program that rounds a client surface, if it compiled.
     pub fn rounded_program(&self) -> Option<&GlesTexProgram> {
         self.rounded.as_ref()
     }
 
-    /// The program that colours a baked contour field, if it compiled.
     pub fn contour_program(&self) -> Option<&GlesTexProgram> {
         self.contour.as_ref()
     }
 
-    /// How much of the colour loop spans one surface.
     pub const COLOR_SPAN: f32 = COLOR_SPAN;
 
-    /// The window frame: rounded title bar, hairline border and the pattern,
-    /// with the client area left transparent.
-    ///
-    /// Returns `None` when the frame shader is unavailable or the window is
-    /// undecorated, so the caller can fall back to plain rectangles.
     #[allow(clippy::too_many_arguments)]
     pub fn frame_element(
         &self,
@@ -201,11 +183,8 @@ impl PatternShader {
         ];
         uniforms.extend(stop_uniforms(&stops, color_phase));
 
-        // Rounded corners and a hollow middle: nothing here is opaque.
         let (element, moved) =
             cache.shader(slot, program, outer, None, 1.0, uniforms, Kind::Unspecified);
-        // The pattern only stirs inside the title bar. Saying so keeps an
-        // animated frame from recompositing the client surface underneath it.
         let band = (!moved).then(|| {
             let height = ((titlebar_height as f64 * scale).ceil() as i32).max(1);
             let width = (outer.size.w as f64 * scale).ceil() as i32;
@@ -214,15 +193,6 @@ impl PatternShader {
         Some(Banded::new(element, band))
     }
 
-    /// Build a render element covering `area`.
-    ///
-    /// `scale` converts the pattern's logical line metrics into the device
-    /// pixels the shader works in, so the pattern keeps its density on a HiDPI
-    /// output instead of turning into a fine haze.
-    ///
-    /// Returns `None` when the pattern would draw nothing, which lets the
-    /// caller skip the draw call entirely rather than blending a transparent
-    /// full-screen quad.
     #[allow(clippy::too_many_arguments)]
     pub fn element(
         &self,
@@ -241,8 +211,6 @@ impl PatternShader {
         }
 
         let stops = pattern.line_stops(accent, background);
-        // Grid is the cheap variant: same shader, but the noise is flattened by
-        // pushing the spacing far apart so the level set degenerates to bands.
         let spacing = match pattern.kind {
             PatternKind::Grid => pattern.line_spacing * 0.5,
             _ => pattern.line_spacing,
@@ -257,11 +225,8 @@ impl PatternShader {
         ];
         uniforms.extend(stop_uniforms(&stops, color_phase));
 
-        // The background is opaque, so declaring the whole area opaque lets the
-        // damage tracker skip everything behind it.
         let opaque = (background.a >= 1.0).then(|| vec![area]);
 
-        // This one paints every pixel it covers, so it reports all of itself.
         let (element, _) =
             cache.shader(slot, &self.program, area, opaque, 1.0, uniforms, Kind::Unspecified);
         Some(Banded::whole(element))

@@ -1,43 +1,26 @@
-//! Notification popup layout and painting.
-//!
-//! One layer surface holds the whole stack, newest at the top. Card heights
-//! depend on how much text there is, so the geometry is computed once per frame
-//! and reused for both drawing and hit testing.
-
 use spectre_draw::{Canvas, Rect};
 use spectre_text::{EllipsisSide, FontFamily, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Theme};
 
 use crate::model::{Notification, Urgency};
 
-/// Card width, in logical pixels.
 pub const CARD_WIDTH: i32 = 380;
-/// Gap between cards.
 pub const CARD_GAP: i32 = 8;
-/// Distance from the screen edge.
 pub const SCREEN_MARGIN: i32 = 12;
-/// Padding inside a card.
 pub const PADDING: i32 = 12;
-/// Width of the urgency bar down the leading edge.
 pub const ACCENT_WIDTH: i32 = 3;
 
 pub const APP_SIZE: f32 = 9.5;
 pub const SUMMARY_SIZE: f32 = 13.0;
 pub const BODY_SIZE: f32 = 11.5;
-/// How many lines of body text a card will show.
 pub const BODY_LINES: u16 = 3;
 
-/// A card and the notification it shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Card {
     pub id: crate::model::Id,
     pub rect: Rect,
 }
 
-/// Measure and stack the cards, newest at the top.
-///
-/// `measure_body` reports how tall the body text will be at the card's inner
-/// width, so a one-line body does not reserve room for three.
 pub fn layout(
     notifications: &[&Notification],
     mut measure_body: impl FnMut(&str) -> i32,
@@ -56,7 +39,6 @@ pub fn layout(
     cards
 }
 
-/// Height of one card.
 fn card_height(notification: &Notification, measure_body: &mut impl FnMut(&str) -> i32) -> i32 {
     let app_line = (APP_SIZE * 1.3).ceil() as i32;
     let summary_line = (SUMMARY_SIZE * 1.3).ceil() as i32;
@@ -68,7 +50,6 @@ fn card_height(notification: &Notification, measure_body: &mut impl FnMut(&str) 
     PADDING * 2 + app_line + 2 + summary_line + body
 }
 
-/// The surface the whole stack needs.
 pub fn surface_size(cards: &[Card]) -> (i32, i32) {
     let width = CARD_WIDTH + SCREEN_MARGIN * 2;
     let height = cards
@@ -78,12 +59,10 @@ pub fn surface_size(cards: &[Card]) -> (i32, i32) {
     (width, height.max(0))
 }
 
-/// The card at a surface-local point.
 pub fn card_at(cards: &[Card], x: i32, y: i32) -> Option<&Card> {
     cards.iter().find(|card| card.rect.contains(x, y))
 }
 
-/// The colour of a card's urgency bar.
 pub fn urgency_color(urgency: Urgency, palette: &Palette) -> Color {
     match urgency {
         Urgency::Low => palette.accent.sample(0.0),
@@ -92,7 +71,6 @@ pub fn urgency_color(urgency: Urgency, palette: &Palette) -> Color {
     }
 }
 
-/// Paint the stack.
 pub fn draw(
     canvas: &mut Canvas,
     text: &mut TextRenderer,
@@ -103,7 +81,6 @@ pub fn draw(
     scale: f32,
 ) {
     let palette = &theme.palette;
-    // The surface is a transparent sheet; only the cards are painted.
     canvas.clear(Color::TRANSPARENT);
 
     for (notification, card) in notifications.iter().zip(cards) {
@@ -123,7 +100,6 @@ fn draw_card(
     let rect = card.rect;
     canvas.fill_rect(rect, if hovered { palette.elevated } else { palette.surface });
 
-    // A hairline frame, and the urgency bar down the leading edge.
     for edge in [
         Rect::new(rect.x, rect.y, rect.w, 1),
         Rect::new(rect.x, rect.bottom() - 1, rect.w, 1),
@@ -185,7 +161,6 @@ mod tests {
         }
     }
 
-    /// Pretend every body is one line tall.
     fn one_line(_: &str) -> i32 {
         15
     }
@@ -259,7 +234,6 @@ mod tests {
             let hit = card_at(&cards, card.rect.x + 5, card.rect.y + 5);
             assert_eq!(hit.map(|c| c.id), Some(card.id));
         }
-        // The gap between cards belongs to nobody.
         assert!(card_at(&cards, cards[0].rect.x + 5, cards[0].rect.bottom() + 2).is_none());
         assert!(card_at(&cards, 0, 0).is_none());
     }
