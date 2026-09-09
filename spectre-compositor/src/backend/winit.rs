@@ -208,8 +208,8 @@ fn draw(
         elements
     };
 
-    let age = backend.buffer_age().unwrap_or(0);
     let (renderer, mut framebuffer) = backend.bind()?;
+    let age = 0;
     let result = damage_tracker.render_output(renderer, &mut framebuffer, age, &elements, [0.0; 4])?;
     drop(framebuffer);
 
