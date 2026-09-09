@@ -9,7 +9,11 @@
 // which is exactly the extension a weak GPU or a VM's software GL is likely to
 // be missing, and the project targets those machines.
 
-precision mediump float;
+// Highp, not mediump: the hash below folds large products back through
+// fract(), and a driver that reads mediump as licence to compute in half
+// precision loses the low bits it is made of - quietly, drawing a smoother and
+// sparser field than the CPU twin in spectre-theme draws.
+precision highp float;
 
 varying vec2 v_coords;
 uniform vec2 size;

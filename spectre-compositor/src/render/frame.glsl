@@ -11,7 +11,13 @@
 // Compiled by GlesRenderer::compile_custom_pixel_shader, so `size` and `alpha`
 // come from the renderer and `v_coords` runs 0..1 across the element.
 
-precision mediump float;
+// Highp, not mediump: the noise below folds large products back through
+// fract(), and a driver that takes mediump as licence to compute in half
+// precision loses exactly the low bits the hash is made of. It does not fail
+// visibly - it quietly draws a smoother, sparser field than the panel does,
+// which is why the title bars and the taskbar used to show two different
+// patterns.
+precision highp float;
 
 varying vec2 v_coords;
 uniform vec2 size;
