@@ -28,6 +28,7 @@ use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::X11Wm;
 use spectre_config::{Config, Keybinds};
+use spectre_theme::Color;
 
 use crate::workspace::Workspaces;
 
@@ -264,8 +265,7 @@ impl Spectre {
     }
 
     fn build_cursor(config: &Config) -> crate::render::CursorImage {
-        let palette = &config.theme.palette;
-        let (fill, outline) = config.input.cursor.colors(palette.text, palette.base);
+        let (fill, outline) = config.input.cursor.colors(Color::hex(0x000000), Color::hex(0xffffff));
         crate::render::CursorImage::new(config.input.cursor.height(config.display.scale), fill, outline)
     }
 
