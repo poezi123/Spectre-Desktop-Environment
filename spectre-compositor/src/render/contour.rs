@@ -22,41 +22,22 @@ pub struct ContourField {
 }
 
 impl ContourField {
-    pub fn prepare<'a>(
-        held: &'a mut Option<Self>,
-        pattern: &Pattern,
-        output: Size<i32, Physical>,
-        scale: f64,
-        phase: f32,
-    ) -> Option<&'a mut Self> {
-        if pattern.is_noop() || output.w <= 0 || output.h <= 0 {
-            *held = None;
-            return None;
-        }
-        let wanted = field_offset(pattern, scale, phase);
-        let reusable = held.as_ref().is_some_and(|field| {
-            field.pattern == *pattern
-                && field.scale == scale
-                && field.output == output
-                && field.holds(wanted)
-        });
-        if !reusable {
-            *held = Self::bake(pattern, output, scale, wanted);
-        }
-        let field = held.as_mut()?;
-        field.look_at(wanted);
-        Some(field)
+    fn is_for(&self, pattern: &Pattern, output: Size<i32, Physical>, scale: f64) -> bool {
+        self.pattern == *pattern && self.scale == scale && self.output == output
     }
 
     fn holds(&self, offset: f64) -> bool {
-        let local = offset - self.origin;
-        local >= 0.0 && local + self.output.w as f64 <= self.size.w as f64
+        let start = offset - self.origin;
+        let end = start + self.output.w as f64;
+        start >= 0.0 && end <= self.size.w as f64
     }
 
     fn look_at(&mut self, offset: f64) {
-        let local = (offset - self.origin).clamp(0.0, (self.size.w - self.output.w).max(0) as f64);
-        if (local - self.offset).abs() >= 0.1 {
-            self.offset = local;
+        let furthest = (self.size.w - self.output.w).max(0) as f64;
+        let start = (offset - self.origin).clamp(0.0, furthest);
+        let moved = (start - self.offset).abs();
+        if moved >= 0.1 {
+            self.offset = start;
             self.commit.increment();
         }
     }
@@ -79,8 +60,12 @@ impl ContourField {
         }
 
         let mut pixels = vec![0u8; (size.w * size.h * 4) as usize];
-        for (out, &c) in pixels.chunks_exact_mut(4).zip(coverage) {
-            out.copy_from_slice(&[c, c, c, c]);
+        for (index, value) in coverage.iter().enumerate() {
+            let i = index * 4;
+            pixels[i] = *value;
+            pixels[i + 1] = *value;
+            pixels[i + 2] = *value;
+            pixels[i + 3] = *value;
         }
 
         let buffer = MemoryRenderBuffer::from_slice(
@@ -126,6 +111,31 @@ impl ContourField {
 
 fn cell_size(pattern: &Pattern, scale: f64) -> f64 {
     (pattern.line_spacing as f64 * scale).max(1.0) * 6.0
+}
+
+pub fn update(
+    held: &mut Option<ContourField>,
+    pattern: &Pattern,
+    output: Size<i32, Physical>,
+    scale: f64,
+    phase: f32,
+) {
+    if pattern.is_noop() || output.w <= 0 || output.h <= 0 {
+        *held = None;
+        return;
+    }
+
+    let offset = field_offset(pattern, scale, phase);
+    let mut usable = false;
+    if let Some(field) = held.as_ref() {
+        usable = field.is_for(pattern, output, scale) && field.holds(offset);
+    }
+    if !usable {
+        *held = ContourField::bake(pattern, output, scale, offset);
+    }
+    if let Some(field) = held.as_mut() {
+        field.look_at(offset);
+    }
 }
 
 fn field_offset(pattern: &Pattern, scale: f64, phase: f32) -> f64 {
@@ -271,19 +281,19 @@ mod tests {
     #[test]
     fn a_pattern_that_draws_nothing_is_not_baked_at_all() {
         let mut held = None;
-        assert!(ContourField::prepare(&mut held, &Pattern::OFF, output(), 1.0, 0.0).is_none());
+        update(&mut held, &Pattern::OFF, output(), 1.0, 0.0);
         assert!(held.is_none());
     }
 
     #[test]
     fn the_same_phase_neither_bakes_again_nor_damages_anything() {
         let mut held = None;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
         let (origin, commit) = {
             let field = held.as_ref().unwrap();
             (field.origin, field.commit())
         };
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
         let field = held.as_ref().unwrap();
         assert_eq!(field.origin, origin, "nothing changed, so nothing was baked again");
         assert_eq!(field.commit(), commit, "and the desktop is not repainted");
@@ -292,13 +302,13 @@ mod tests {
     #[test]
     fn scrolling_inside_the_texture_moves_the_source_and_damages_the_element() {
         let mut held = None;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
         let before = held.as_ref().unwrap().commit();
         let origin = held.as_ref().unwrap().origin;
 
         let cell = cell_size(&moving(), 1.0);
         let phase = ((origin + 100.0) / cell) as f32;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, phase);
+        update(&mut held, &moving(), output(), 1.0, phase);
         let field = held.as_ref().unwrap();
         assert!((field.source().loc.x - 100.0).abs() < 1.0, "{:?}", field.source());
         assert_ne!(field.commit(), before, "a scrolled field has to be redrawn");
@@ -307,10 +317,10 @@ mod tests {
     #[test]
     fn scrolling_past_the_margin_bakes_again_rather_than_running_off_the_edge() {
         let mut held = None;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
         let cell = cell_size(&moving(), 1.0);
         let far = ((MARGIN as f64 + 400.0) / cell) as f32;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, far);
+        update(&mut held, &moving(), output(), 1.0, far);
         let field = held.as_ref().unwrap();
         assert!(field.holds(field.origin), "the new bake has to cover where we are looking");
         assert_eq!(field.source().loc.x, 0.0, "and start at the left edge of it");
@@ -319,15 +329,15 @@ mod tests {
     #[test]
     fn a_new_output_size_is_baked_again() {
         let mut held = None;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
-        ContourField::prepare(&mut held, &moving(), Size::from((1920, 1080)), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), Size::from((1920, 1080)), 1.0, 0.0);
         assert_eq!(held.as_ref().unwrap().size.h, 1080);
     }
 
     #[test]
     fn the_visible_window_is_reported_as_a_fraction_of_the_texture() {
         let mut held = None;
-        ContourField::prepare(&mut held, &moving(), output(), 1.0, 0.0);
+        update(&mut held, &moving(), output(), 1.0, 0.0);
         let (origin, span) = held.as_ref().unwrap().uv_window();
         assert_eq!(origin, 0.0);
         assert!((span - 1280.0 / (1280.0 + MARGIN as f32)).abs() < 1e-6);

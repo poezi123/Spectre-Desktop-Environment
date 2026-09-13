@@ -96,9 +96,9 @@ impl<E: Element> Element for RoundedElement<E> {
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         let origin = self.element.geometry(scale).loc;
         let window = Rectangle::new(self.window.loc - origin, self.window.size);
-        opaque_after_rounding(&self.element.opaque_regions(scale), window, self.corners)
-            .into_iter()
-            .collect()
+        let regions = self.element.opaque_regions(scale);
+        let remaining = opaque_after_rounding(&regions, window, self.corners);
+        OpaqueRegions::from_slice(&remaining)
     }
 
     fn alpha(&self) -> f32 {
@@ -119,49 +119,67 @@ fn opaque_after_rounding(
     window: Rectangle<i32, Physical>,
     corners: Corners,
 ) -> Vec<Rectangle<i32, Physical>> {
+    let mut result = Vec::new();
     if regions.is_empty() {
-        return Vec::new();
+        return result;
     }
     let Some(solid) = inset(window, FEATHER) else {
-        return Vec::new();
+        return result;
     };
     let cut = corner_boxes(window, corners);
-    regions
-        .iter()
-        .filter_map(|region| region.intersection(solid))
-        .flat_map(|region| region.subtract_rects(cut.iter().copied()))
-        .filter(|region| !region.is_empty())
-        .collect()
+
+    for region in regions {
+        let Some(inside) = region.intersection(solid) else {
+            continue;
+        };
+        for piece in inside.subtract_rects(cut.clone()) {
+            if !piece.is_empty() {
+                result.push(piece);
+            }
+        }
+    }
+    result
 }
 
 fn inset(rect: Rectangle<i32, Physical>, by: i32) -> Option<Rectangle<i32, Physical>> {
-    let (w, h) = (rect.size.w - 2 * by, rect.size.h - 2 * by);
-    (w > 0 && h > 0)
-        .then(|| Rectangle::new(rect.loc + Point::from((by, by)), Size::from((w, h))))
+    let width = rect.size.w - 2 * by;
+    let height = rect.size.h - 2 * by;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let corner = rect.loc + Point::from((by, by));
+    Some(Rectangle::new(corner, Size::from((width, height))))
 }
 
-fn corner_boxes(
-    window: Rectangle<i32, Physical>,
-    corners: Corners,
-) -> Vec<Rectangle<i32, Physical>> {
-    let (w, h) = (window.size.w, window.size.h);
-    let side = |radius: f32| (radius.ceil() as i32).saturating_add(FEATHER).max(0);
-    [
-        (side(corners.top_left), (0, 0)),
-        (side(corners.top_right), (w, 0)),
-        (side(corners.bottom_right), (w, h)),
-        (side(corners.bottom_left), (0, h)),
-    ]
-    .into_iter()
-    .filter(|(side, _)| *side > FEATHER)
-    .map(|(side, (x, y))| {
-        let loc = Point::from((
-            window.loc.x + if x == 0 { 0 } else { w - side },
-            window.loc.y + if y == 0 { 0 } else { h - side },
-        ));
-        Rectangle::new(loc, Size::from((side, side)))
-    })
-    .collect()
+fn corner_boxes(window: Rectangle<i32, Physical>, corners: Corners) -> Vec<Rectangle<i32, Physical>> {
+    let left = window.loc.x;
+    let top = window.loc.y;
+    let right = window.loc.x + window.size.w;
+    let bottom = window.loc.y + window.size.h;
+
+    let mut boxes = Vec::new();
+    add_corner_box(&mut boxes, corners.top_left, left, top, false, false);
+    add_corner_box(&mut boxes, corners.top_right, right, top, true, false);
+    add_corner_box(&mut boxes, corners.bottom_right, right, bottom, true, true);
+    add_corner_box(&mut boxes, corners.bottom_left, left, bottom, false, true);
+    boxes
+}
+
+fn add_corner_box(
+    boxes: &mut Vec<Rectangle<i32, Physical>>,
+    radius: f32,
+    x: i32,
+    y: i32,
+    from_right: bool,
+    from_bottom: bool,
+) {
+    if radius <= 0.0 {
+        return;
+    }
+    let side = radius.ceil() as i32 + FEATHER;
+    let box_x = if from_right { x - side } else { x };
+    let box_y = if from_bottom { y - side } else { y };
+    boxes.push(Rectangle::new(Point::from((box_x, box_y)), Size::from((side, side))));
 }
 
 impl<E> RenderElement<GlesRenderer> for RoundedElement<E>

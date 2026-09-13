@@ -207,13 +207,8 @@ fn contour_element(
     let program = shader?.contour_program()?;
 
     let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(Scale::from(scale));
-    let field = ContourField::prepare(
-        cache.contour(),
-        pattern,
-        physical.size,
-        scale,
-        state.desktop_phase(),
-    )?;
+    contour::update(cache.contour(), pattern, physical.size, scale, state.desktop_phase());
+    let field = cache.contour().as_ref()?;
 
     let element = MemoryRenderBufferRenderElement::from_buffer(
         renderer,

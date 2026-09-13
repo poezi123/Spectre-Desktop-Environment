@@ -61,19 +61,20 @@ impl Art {
         let pad = (outline / 2.0 + 1.0).ceil() as i32;
 
         let mut points = ARROW;
+        let mut widest = 0.0f32;
+        let mut lowest = 0.0f32;
         for point in &mut points {
             point.0 = point.0 * scale + pad as f32;
             point.1 = point.1 * scale + pad as f32;
+            widest = widest.max(point.0);
+            lowest = lowest.max(point.1);
         }
 
-        let extent = |axis: fn(&(f32, f32)) -> f32| {
-            points.iter().map(axis).fold(0.0f32, f32::max).ceil() as i32 + pad
-        };
         Self {
             outline,
             pad,
-            width: extent(|p| p.0),
-            height: extent(|p| p.1),
+            width: widest.ceil() as i32 + pad,
+            height: lowest.ceil() as i32 + pad,
             points,
         }
     }
@@ -98,15 +99,18 @@ impl Art {
                 let a = ((a as f32) * covered).round() as u8;
 
                 let i = ((y * self.width + x) * 4) as usize;
-                let m = |c: u8| ((c as u16 * a as u16) / 255) as u8;
-                out[i] = m(b);
-                out[i + 1] = m(g);
-                out[i + 2] = m(r);
+                out[i] = premultiply(b, a);
+                out[i + 1] = premultiply(g, a);
+                out[i + 2] = premultiply(r, a);
                 out[i + 3] = a;
             }
         }
         out
     }
+}
+
+fn premultiply(channel: u8, alpha: u8) -> u8 {
+    (channel as u16 * alpha as u16 / 255) as u8
 }
 
 fn coverage(x: f32) -> f32 {
@@ -124,12 +128,12 @@ fn signed_distance(p: (f32, f32), points: &[(f32, f32)]) -> f32 {
 
         let edge = (b.0 - a.0, b.1 - a.1);
         let to_p = (p.0 - a.0, p.1 - a.1);
-        let crossings = [
-            p.1 >= a.1,
-            p.1 < b.1,
-            edge.0 * to_p.1 > edge.1 * to_p.0,
-        ];
-        if crossings.iter().all(|c| *c) || crossings.iter().all(|c| !*c) {
+        let at_or_below_start = p.1 >= a.1;
+        let above_end = p.1 < b.1;
+        let left_of_edge = edge.0 * to_p.1 > edge.1 * to_p.0;
+        let all_true = at_or_below_start && above_end && left_of_edge;
+        let all_false = !at_or_below_start && !above_end && !left_of_edge;
+        if all_true || all_false {
             sign = -sign;
         }
     }
