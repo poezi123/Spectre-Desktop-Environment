@@ -77,8 +77,51 @@ impl Spectre {
         loc.y = loc.y.max(area.loc.y + top);
 
         self.workspaces.active_mut().map_element(window.clone(), loc, true);
+        self.tell_x11_where(&window);
         self.focus_window(Some(&window));
         self.mark_dirty();
+    }
+
+    pub fn close_window(&self, window: &Window) {
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.send_close();
+            return;
+        }
+        if let Some(x11) = window.x11_surface() {
+            let _ = x11.close();
+        }
+    }
+
+    fn tell_x11_where(&self, window: &Window) {
+        let Some(x11) = window.x11_surface() else {
+            return;
+        };
+        if x11.is_override_redirect() {
+            return;
+        }
+        let Some(location) = self.workspaces.active().element_location(window) else {
+            return;
+        };
+        let size = window.geometry().size;
+        let _ = x11.configure(Rectangle::new(location, size));
+    }
+
+    fn place_x11_centered(&mut self, window: &Window) {
+        let Some(x11) = window.x11_surface() else {
+            return;
+        };
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let area = self.working_area(&output);
+        let top = self.top_inset(window);
+        let width = (area.size.w * 2 / 3).max(1);
+        let height = ((area.size.h - top) * 2 / 3).max(1);
+        let x = area.loc.x + (area.size.w - width) / 2;
+        let y = area.loc.y + top + (area.size.h - top - height) / 2;
+        let location = Point::from((x, y));
+        self.workspaces.active_mut().map_element(window.clone(), location, true);
+        let _ = x11.configure(Rectangle::new(location, Size::from((width, height))));
     }
 
     pub fn unmap_window(&mut self, window: &Window) {
@@ -112,11 +155,21 @@ impl Spectre {
                 });
                 toplevel.send_pending_configure();
             }
+            if let Some(x11) = w.x11_surface() {
+                if !x11.is_override_redirect() {
+                    let _ = x11.set_activated(active);
+                }
+            }
         }
 
         match window {
             Some(w) => {
                 self.workspaces.active_mut().raise_element(w, true);
+                if let Some(x11) = w.x11_surface() {
+                    if let Some(xwm) = self.xwm.as_mut() {
+                        let _ = xwm.raise_window(x11);
+                    }
+                }
                 keyboard.set_focus(self, w.wl_surface().map(|s| s.into_owned()), serial);
                 self.focus = Some(w.clone());
             }
@@ -190,6 +243,7 @@ impl Spectre {
         loc.y = loc.y.clamp(area.loc.y + top, area.loc.y + area.size.h - MIN_VISIBLE);
 
         self.workspaces.active_mut().map_element(window.clone(), loc, false);
+        self.tell_x11_where(window);
         self.mark_dirty();
     }
 
@@ -216,6 +270,7 @@ impl Spectre {
         };
         let (window, location) = self.minimized.remove(index);
         self.workspaces.active_mut().map_element(window.clone(), location, true);
+        self.tell_x11_where(&window);
         self.focus_window(Some(&window));
     }
 
@@ -246,7 +301,8 @@ impl Spectre {
         loc.x = loc.x.clamp(area.loc.x, (area.loc.x + area.size.w - size.w).max(area.loc.x));
         loc.y = loc.y.clamp(area.loc.y, (area.loc.y + area.size.h - size.h).max(area.loc.y));
 
-        space.map_element(window, loc, true);
+        space.map_element(window.clone(), loc, true);
+        self.tell_x11_where(&window);
         self.mark_dirty();
     }
 
@@ -255,9 +311,6 @@ impl Spectre {
             return;
         };
         let area = self.working_area(&output);
-        let Some(toplevel) = window.toplevel().cloned() else {
-            return;
-        };
         let top = self.top_inset(window);
         let border = if self.is_decorated(window) {
             self.config.theme.metrics.border_width as i32
@@ -268,21 +321,30 @@ impl Spectre {
             (area.size.w - border * 2).max(1),
             (area.size.h - top - border).max(1),
         ));
+        let location = Point::from((area.loc.x + border, area.loc.y + top));
 
-        toplevel.with_pending_state(|state| {
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                if maximized {
+                    state.states.set(xdg_toplevel::State::Maximized);
+                    state.size = Some(size);
+                } else {
+                    state.states.unset(xdg_toplevel::State::Maximized);
+                    state.size = None;
+                }
+            });
+            toplevel.send_pending_configure();
             if maximized {
-                state.states.set(xdg_toplevel::State::Maximized);
-                state.size = Some(size);
-            } else {
-                state.states.unset(xdg_toplevel::State::Maximized);
-                state.size = None;
+                self.workspaces.active_mut().map_element(window.clone(), location, true);
             }
-        });
-        toplevel.send_pending_configure();
-
-        if maximized {
-            let location = Point::from((area.loc.x + border, area.loc.y + top));
-            self.workspaces.active_mut().map_element(window.clone(), location, true);
+        } else if let Some(x11) = window.x11_surface() {
+            let _ = x11.set_maximized(maximized);
+            if maximized {
+                self.workspaces.active_mut().map_element(window.clone(), location, true);
+                let _ = x11.configure(Rectangle::new(location, size));
+            } else {
+                self.place_x11_centered(window);
+            }
         }
         self.mark_dirty();
     }
@@ -294,23 +356,29 @@ impl Spectre {
         let Some(geometry) = self.workspaces.output_geometry(&output) else {
             return;
         };
-        let Some(toplevel) = window.toplevel().cloned() else {
-            return;
-        };
 
-        toplevel.with_pending_state(|state| {
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                if fullscreen {
+                    state.states.set(xdg_toplevel::State::Fullscreen);
+                    state.size = Some(geometry.size);
+                } else {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.size = None;
+                }
+            });
+            toplevel.send_pending_configure();
             if fullscreen {
-                state.states.set(xdg_toplevel::State::Fullscreen);
-                state.size = Some(geometry.size);
-            } else {
-                state.states.unset(xdg_toplevel::State::Fullscreen);
-                state.size = None;
+                self.workspaces.active_mut().map_element(window.clone(), geometry.loc, true);
             }
-        });
-        toplevel.send_pending_configure();
-
-        if fullscreen {
-            self.workspaces.active_mut().map_element(window.clone(), geometry.loc, true);
+        } else if let Some(x11) = window.x11_surface() {
+            let _ = x11.set_fullscreen(fullscreen);
+            if fullscreen {
+                self.workspaces.active_mut().map_element(window.clone(), geometry.loc, true);
+                let _ = x11.configure(geometry);
+            } else {
+                self.place_x11_centered(window);
+            }
         }
         self.mark_dirty();
     }
@@ -320,8 +388,8 @@ impl Spectre {
     }
 
     pub fn close_focused(&mut self) {
-        if let Some(toplevel) = self.focus.as_ref().and_then(|w| w.toplevel().cloned()) {
-            toplevel.send_close();
+        if let Some(window) = self.focus.clone() {
+            self.close_window(&window);
         }
     }
 

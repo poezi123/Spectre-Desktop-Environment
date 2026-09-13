@@ -191,6 +191,9 @@ impl Spectre {
         if let Some(path) = spectre_config::Config::active_path() {
             cmd.env(spectre_config::CONFIG_ENV, path);
         }
+        if let Some(display) = self.xdisplay {
+            cmd.env("DISPLAY", format!(":{display}"));
+        }
         cmd.args(args)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("XDG_SESSION_TYPE", "wayland")
@@ -198,6 +201,14 @@ impl Spectre {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+                Ok(())
+            });
+        }
 
         match cmd.spawn() {
             Ok(child) => {
@@ -342,11 +353,7 @@ impl Spectre {
         }
 
         match part {
-            Part::Close => {
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.send_close();
-                }
-            }
+            Part::Close => self.close_window(window),
             Part::Minimize => self.minimize(window),
             Part::Maximize => {
                 let on = self.has_state(window, Top::Maximized);
@@ -375,7 +382,7 @@ impl Spectre {
         same
     }
 
-    fn start_move(&mut self, window: &smithay::desktop::Window, serial: smithay::utils::Serial) {
+    pub fn start_move(&mut self, window: &smithay::desktop::Window, serial: smithay::utils::Serial) {
         let Some(location) = self.workspaces.active().element_location(window) else {
             return;
         };

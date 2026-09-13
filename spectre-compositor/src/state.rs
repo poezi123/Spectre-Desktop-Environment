@@ -25,6 +25,8 @@ use smithay::wayland::shm::ShmState;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::xwayland_shell::XWaylandShellState;
+use smithay::xwayland::X11Wm;
 use spectre_config::{Config, Keybinds};
 
 use crate::workspace::Workspaces;
@@ -97,6 +99,9 @@ pub struct Spectre {
     )>,
     pub socket_name: String,
     pub ipc: Option<crate::ipc::Ipc>,
+    pub xwayland_shell_state: XWaylandShellState,
+    pub xwm: Option<X11Wm>,
+    pub xdisplay: Option<u32>,
 }
 
 impl Spectre {
@@ -118,6 +123,7 @@ impl Spectre {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(dh);
         let data_device_state = DataDeviceState::new::<Self>(dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
+        let xwayland_shell_state = XWaylandShellState::new::<Self>(dh);
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, seat_name);
@@ -192,6 +198,9 @@ impl Spectre {
             pending_dmabufs: Vec::new(),
             socket_name,
             ipc: None,
+            xwayland_shell_state,
+            xwm: None,
+            xdisplay: None,
         })
     }
 
@@ -395,6 +404,9 @@ impl Spectre {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
+        if let Some(x11) = window.x11_surface() {
+            return x11.class();
+        }
         let Some(surface) = window.wl_surface() else {
             return String::new();
         };
@@ -411,6 +423,17 @@ impl Spectre {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
+        if let Some(x11) = window.x11_surface() {
+            let title = x11.title();
+            if !title.trim().is_empty() {
+                return title;
+            }
+            let class = x11.class();
+            if !class.trim().is_empty() {
+                return class;
+            }
+            return String::from("Window");
+        }
         let Some(surface) = window.wl_surface() else {
             return String::from("Window");
         };
@@ -430,6 +453,12 @@ impl Spectre {
     pub fn is_decorated(&self, window: &Window) -> bool {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
+        if let Some(x11) = window.x11_surface() {
+            if x11.is_override_redirect() || x11.is_popup() || x11.is_decorated() {
+                return false;
+            }
+            return !x11.is_fullscreen();
+        }
         let Some(toplevel) = window.toplevel() else {
             return false;
         };
@@ -446,10 +475,18 @@ impl Spectre {
     }
 
     pub fn has_state(&self, window: &Window, wanted: xdg_toplevel::State) -> bool {
-        window
-            .toplevel()
-            .map(|t| t.with_pending_state(|state| state.states.contains(wanted)))
-            .unwrap_or(false)
+        if let Some(toplevel) = window.toplevel() {
+            return toplevel.with_pending_state(|state| state.states.contains(wanted));
+        }
+        if let Some(x11) = window.x11_surface() {
+            return match wanted {
+                xdg_toplevel::State::Maximized => x11.is_maximized(),
+                xdg_toplevel::State::Fullscreen => x11.is_fullscreen(),
+                xdg_toplevel::State::Activated => x11.is_activated(),
+                _ => false,
+            };
+        }
+        false
     }
 
     pub fn refresh(&mut self) {

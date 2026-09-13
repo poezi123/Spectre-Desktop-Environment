@@ -56,6 +56,9 @@ impl CompositorHandler for Spectre {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        if let Some(xwayland) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &xwayland.compositor_state;
+        }
         &client.get_data::<ClientState>().unwrap().compositor_state
     }
 
@@ -395,7 +398,7 @@ impl Spectre {
         }
     }
 
-    fn map_new_window(&mut self, surface: &WlSurface) {
+    pub fn map_new_window(&mut self, surface: &WlSurface) {
         let Some(index) = self
             .pending_windows
             .iter()

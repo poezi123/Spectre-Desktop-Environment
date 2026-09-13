@@ -8,6 +8,7 @@ mod render;
 mod transition;
 mod state;
 mod workspace;
+mod xwayland;
 
 use anyhow::{bail, Context};
 use spectre_config::{Config, Profile};

@@ -564,12 +564,13 @@ fn decoration_text(
 
 fn element_key(window: &smithay::desktop::Window) -> u32 {
     use smithay::reexports::wayland_server::Resource;
-    use smithay::wayland::shell::xdg::ToplevelSurface;
-    window
-        .toplevel()
-        .map(ToplevelSurface::wl_surface)
-        .map(|s| s.id().protocol_id())
-        .unwrap_or(0)
+    if let Some(toplevel) = window.toplevel() {
+        return toplevel.wl_surface().id().protocol_id();
+    }
+    if let Some(x11) = window.x11_surface() {
+        return x11.window_id();
+    }
+    0
 }
 
 pub fn solid(

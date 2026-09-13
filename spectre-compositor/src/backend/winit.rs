@@ -57,6 +57,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     let mut cache = RenderCache::default();
 
     state.start_ipc();
+    state.start_xwayland();
     tracing::info!(socket = %state.socket_name, "Spectre is up (nested)");
     state.set_panel_running(state.config.panel.enabled);
     let startup = state.config.general.startup_commands(false);

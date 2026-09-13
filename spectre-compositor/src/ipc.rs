@@ -233,11 +233,7 @@ impl Spectre {
                 None => self.send_ipc(id, &unknown_window(window_id)),
             },
             Request::CloseWindow { id: window_id } => match self.window_by_id(window_id) {
-                Some(window) => {
-                    if let Some(toplevel) = window.toplevel() {
-                        toplevel.send_close();
-                    }
-                }
+                Some(window) => self.close_window(&window),
                 None => self.send_ipc(id, &unknown_window(window_id)),
             },
             Request::SetProfile { profile } => {
@@ -371,6 +367,11 @@ impl Spectre {
             };
             let elements: Vec<smithay::desktop::Window> = space.elements().cloned().collect();
             for window in elements {
+                if let Some(x11) = window.x11_surface() {
+                    if x11.is_override_redirect() {
+                        continue;
+                    }
+                }
                 windows.push(self.window_info(&window, index as u8 + 1, false));
             }
         }
