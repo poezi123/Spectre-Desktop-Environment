@@ -4,6 +4,7 @@ mod handlers;
 mod input;
 mod ipc;
 mod layout;
+mod overview;
 mod render;
 mod transition;
 mod state;

@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
-use smithay::backend::renderer::gles::{GlesPixelProgram, Uniform};
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexture, Uniform};
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::utils::{Logical, Physical, Rectangle};
+use smithay::backend::renderer::element::texture::TextureBuffer;
+use smithay::utils::{Logical, Physical, Rectangle, Size};
 
 use super::ContourField;
 
@@ -23,6 +24,10 @@ pub struct RenderCache {
     shaders: HashMap<Slot, ShaderSlot>,
     live: Vec<Slot>,
     contour: Option<ContourField>,
+    snapshots: Vec<TextureBuffer<GlesTexture>>,
+    snapshot_size: Size<i32, Physical>,
+    face_commit: CommitCounter,
+    face_angle: f32,
 }
 
 #[derive(Debug)]
@@ -41,6 +46,27 @@ struct ShaderSlot {
 }
 
 impl RenderCache {
+    pub fn snapshots(&self) -> &[TextureBuffer<GlesTexture>] {
+        &self.snapshots
+    }
+
+    pub fn snapshot_size(&self) -> Size<i32, Physical> {
+        self.snapshot_size
+    }
+
+    pub fn set_snapshots(&mut self, snapshots: Vec<TextureBuffer<GlesTexture>>, size: Size<i32, Physical>) {
+        self.snapshots = snapshots;
+        self.snapshot_size = size;
+    }
+
+    pub fn face_commit(&mut self, angle: f32) -> CommitCounter {
+        if (angle - self.face_angle).abs() > 0.00001 {
+            self.face_angle = angle;
+            self.face_commit.increment();
+        }
+        self.face_commit
+    }
+
     pub fn contour(&mut self) -> &mut Option<ContourField> {
         &mut self.contour
     }

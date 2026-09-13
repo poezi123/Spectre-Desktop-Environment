@@ -43,6 +43,7 @@ pub struct RoundedElement<E> {
     program: GlesTexProgram,
     window: Rectangle<i32, Physical>,
     corners: Corners,
+    output_scale: f64,
 }
 
 impl<E: Element> RoundedElement<E> {
@@ -51,6 +52,7 @@ impl<E: Element> RoundedElement<E> {
         program: Option<&GlesTexProgram>,
         window: Rectangle<i32, Physical>,
         corners: Corners,
+        output_scale: f64,
     ) -> Result<Self, E> {
         match program {
             Some(program) if !corners.is_square() && !window.is_empty() => Ok(Self {
@@ -58,6 +60,7 @@ impl<E: Element> RoundedElement<E> {
                 program: program.clone(),
                 window,
                 corners,
+                output_scale,
             }),
             _ => Err(element),
         }
@@ -194,13 +197,22 @@ where
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        let min = self.window.loc - dst.loc;
-        let max = min + self.window.size;
+        let geometry = self.element.geometry(Scale::from(self.output_scale));
+        let mut factor = 1.0f32;
+        if geometry.size.w > 0 {
+            factor = dst.size.w as f32 / geometry.size.w as f32;
+        }
+        let offset = self.window.loc - geometry.loc;
+        let min_x = offset.x as f32 * factor;
+        let min_y = offset.y as f32 * factor;
+        let max_x = min_x + self.window.size.w as f32 * factor;
+        let max_y = min_y + self.window.size.h as f32 * factor;
+        let radii = self.corners.to_array().map(|radius| radius * factor);
         let uniforms = vec![
             Uniform::new("spectre_size", (dst.size.w as f32, dst.size.h as f32)),
-            Uniform::new("spectre_window_min", (min.x as f32, min.y as f32)),
-            Uniform::new("spectre_window_max", (max.x as f32, max.y as f32)),
-            Uniform::new("spectre_radii", self.corners.to_array()),
+            Uniform::new("spectre_window_min", (min_x, min_y)),
+            Uniform::new("spectre_window_max", (max_x, max_y)),
+            Uniform::new("spectre_radii", radii),
         ];
 
         frame.override_default_tex_program(self.program.clone(), uniforms);

@@ -4,6 +4,7 @@ mod pattern;
 mod banded;
 mod cache;
 mod contour;
+mod cube;
 mod rounded;
 mod text;
 mod wallpaper;
@@ -32,7 +33,7 @@ use smithay::desktop::layer_map_for_output;
 use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 use smithay::output::Output;
 use smithay::render_elements;
-use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use spectre_theme::Color;
 
 use crate::state::Spectre;
@@ -47,6 +48,7 @@ render_elements! {
     Solid = SolidColorRenderElement,
     Pattern = Banded<PixelShaderElement>,
     Contour = Contoured<MemoryRenderBufferRenderElement<GlesRenderer>>,
+    Face = cube::CubeFace,
 }
 
 type MovedElement = RelocateRenderElement<RescaleRenderElement<WorkspaceElement>>;
@@ -87,6 +89,13 @@ fn build_output_elements(
     let theme = &state.config.theme;
     let geometry = state.workspaces.output_geometry(output);
     let width = geometry.map(|g| g.size.w).unwrap_or(0);
+
+    if let Some(overview) = state.overview.as_ref() {
+        return overview_elements(state, overview, output, renderer, shader, cache, scale);
+    }
+    if cache.snapshot_size().w != 0 {
+        cache.set_snapshots(Vec::new(), Size::from((0, 0)));
+    }
 
     let mut elements: Vec<SpectreElement> = Vec::new();
 
@@ -172,6 +181,118 @@ fn build_output_elements(
     }
 
     elements
+}
+
+fn overview_elements(
+    state: &Spectre,
+    overview: &crate::overview::Overview,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+    scale: f64,
+) -> Vec<SpectreElement> {
+    let mut elements: Vec<SpectreElement> = Vec::new();
+    elements.extend(
+        cursor_elements(state, output, renderer, scale)
+            .into_iter()
+            .map(SpectreElement::Plain),
+    );
+
+    let Some(area) = state.workspaces.output_geometry(output) else {
+        return elements;
+    };
+    let Some(program) = shader.and_then(PatternShader::cube_program) else {
+        return elements;
+    };
+    let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(Scale::from(scale));
+
+    if cache.snapshot_size().w == 0 {
+        let (snapshots, size) = capture_workspaces(state, output, renderer, shader, cache, overview.faces(), scale);
+        cache.set_snapshots(snapshots, size);
+    }
+
+    let now = std::time::Instant::now();
+    let commit = cache.face_commit(overview.angle(now));
+    let texture_size = cache.snapshot_size();
+    let aspect = area.size.h as f32 / area.size.w.max(1) as f32;
+    for index in 0..overview.faces() {
+        if !overview.is_visible(index, now) {
+            continue;
+        }
+        let Some(buffer) = cache.snapshots().get(index) else {
+            continue;
+        };
+        let view = cube::FaceView {
+            angle: overview.face_angle(index, now),
+            faces: overview.faces(),
+            aspect,
+            flip: false,
+        };
+        let face = cube::CubeFace::new(buffer, texture_size, program, area.size, view, commit);
+        elements.push(SpectreElement::Plain(WorkspaceElement::Face(face)));
+    }
+
+    let ground = cache.solid(Slot::Backdrop, physical, [0.02, 0.02, 0.03, 1.0], Kind::Unspecified);
+    elements.push(SpectreElement::Plain(WorkspaceElement::Solid(ground)));
+    elements
+}
+
+fn capture_workspaces(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+    faces: usize,
+    scale: f64,
+) -> (
+    Vec<smithay::backend::renderer::element::texture::TextureBuffer<smithay::backend::renderer::gles::GlesTexture>>,
+    Size<i32, Physical>,
+) {
+    let Some(area) = state.workspaces.output_geometry(output) else {
+        return (Vec::new(), Size::from((1, 1)));
+    };
+    let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(Scale::from(scale));
+    let small = Size::from((
+        (physical.size.w as f64 * cube::SNAPSHOT_SCALE).round() as i32,
+        (physical.size.h as f64 * cube::SNAPSHOT_SCALE).round() as i32,
+    ));
+
+    let mut textures = Vec::new();
+    for index in 0..faces {
+        let mut scene = workspace_elements(state, output, renderer, shader, cache, index, 1.0);
+        match wallpaper_element(state, renderer, area, scale) {
+            Some(wallpaper) => scene.push(WorkspaceElement::Text(wallpaper)),
+            None => {
+                if let Some(backdrop) = contour_element(state, renderer, cache, shader, area, scale) {
+                    scene.push(backdrop);
+                }
+            }
+        }
+        let base = state.config.theme.palette.base.to_premultiplied();
+        let ground = cache.solid(Slot::Backdrop, physical, base, Kind::Unspecified);
+        scene.push(WorkspaceElement::Solid(ground));
+
+        let mut shrunk = Vec::new();
+        for element in scene {
+            let origin = Point::<i32, Physical>::from((0, 0));
+            shrunk.push(RescaleRenderElement::from_element(element, origin, cube::SNAPSHOT_SCALE));
+        }
+
+        let Some(texture) = cube::capture(renderer, small, &shrunk) else {
+            break;
+        };
+        let buffer = smithay::backend::renderer::element::texture::TextureBuffer::from_texture(
+            renderer,
+            texture,
+            1,
+            Transform::Normal,
+            None,
+        );
+        textures.push(buffer);
+    }
+    (textures, small)
 }
 
 pub fn dump_scene(elements: &[SpectreElement], scale: f64) {
@@ -457,6 +578,7 @@ fn workspace_elements(
                 shader.and_then(PatternShader::rounded_program),
                 window_physical,
                 corners,
+                scale,
             ) {
                 Ok(rounded) => elements.push(WorkspaceElement::Rounded(rounded)),
                 Err(plain) => elements.push(WorkspaceElement::Surface(plain)),

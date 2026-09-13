@@ -402,6 +402,30 @@ impl Spectre {
         true
     }
 
+    pub fn open_overview(&mut self) {
+        if self.overview.is_some() || self.workspaces.count() < 2 {
+            return;
+        }
+        self.transition = None;
+        let faces = self.workspaces.count();
+        let active = self.workspaces.active_index();
+        self.overview = Some(crate::overview::Overview::open(faces, active));
+        self.mark_dirty();
+    }
+
+    pub fn close_overview(&mut self, choice: Option<usize>) {
+        if self.overview.take().is_none() {
+            return;
+        }
+        if let Some(index) = choice {
+            if self.workspaces.switch(index) {
+                let next = self.workspaces.active().elements().last().cloned();
+                self.focus_window(next.as_ref());
+            }
+        }
+        self.mark_dirty();
+    }
+
     pub fn switch_workspace_relative(&mut self, delta: isize) -> bool {
         let from = self.workspaces.active_index();
         if !self.workspaces.switch_relative(delta) {

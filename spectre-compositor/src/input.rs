@@ -6,10 +6,12 @@ use smithay::input::keyboard::{keysyms, FilterResult, Keysym, ModifiersState};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent,
 };
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Point, SERIAL_COUNTER};
 use spectre_config::{Action, Keybind, Modifiers, Profile};
 
 use crate::grabs::{MoveGrab, BTN_LEFT};
+use crate::overview::CORNER_DWELL;
 use crate::render::Part;
 use crate::state::Spectre;
 
@@ -57,6 +59,12 @@ impl Spectre {
             time,
             |state, modifiers, handle| {
                 let sym = handle.raw_syms().first().copied().unwrap_or(handle.modified_sym());
+                if state.overview.is_some() {
+                    if event.state() == smithay::backend::input::KeyState::Pressed {
+                        state.pending_overview_key = Some(sym);
+                    }
+                    return FilterResult::Intercept(None);
+                }
                 let is_logo =
                     matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
 
@@ -85,9 +93,108 @@ impl Spectre {
             },
         );
 
+        if let Some(sym) = self.pending_overview_key.take() {
+            self.overview_key(sym);
+        }
         if let Some(action) = action.flatten() {
             self.run_action(action);
         }
+    }
+
+    fn overview_key(&mut self, sym: Keysym) {
+        let now = std::time::Instant::now();
+        match sym.raw() {
+            keysyms::KEY_Escape => self.close_overview(None),
+            keysyms::KEY_Left => {
+                if let Some(overview) = self.overview.as_mut() {
+                    overview.step(-1, now);
+                }
+            }
+            keysyms::KEY_Right => {
+                if let Some(overview) = self.overview.as_mut() {
+                    overview.step(1, now);
+                }
+            }
+            keysyms::KEY_Return | keysyms::KEY_KP_Enter | keysyms::KEY_space => {
+                let chosen = self.overview.as_ref().map(|overview| overview.front(now));
+                self.close_overview(chosen);
+            }
+            _ => {}
+        }
+        self.mark_dirty();
+    }
+
+    fn pointer_in_hot_corner(&self) -> bool {
+        let Some(output) = self.active_output() else {
+            return false;
+        };
+        let Some(area) = self.workspaces.output_geometry(&output) else {
+            return false;
+        };
+        let pointer = self.pointer_position();
+        let right = (area.loc.x + area.size.w) as f64;
+        let top = area.loc.y as f64;
+        pointer.x >= right - 2.0 && pointer.y <= top + 1.0
+    }
+
+    fn watch_hot_corner(&mut self) {
+        if !self.pointer_in_hot_corner() {
+            self.corner_armed = false;
+            return;
+        }
+        if self.corner_armed || self.overview.is_some() {
+            return;
+        }
+        self.corner_armed = true;
+        let timer = Timer::from_duration(CORNER_DWELL);
+        let inserted = self.loop_handle.insert_source(timer, |_, _, state| {
+            if state.corner_armed && state.pointer_in_hot_corner() {
+                state.open_overview();
+            }
+            TimeoutAction::Drop
+        });
+        if let Err(err) = inserted {
+            tracing::warn!(?err, "could not time the hot corner");
+        }
+    }
+
+    fn overview_pointer_moved(&mut self) {
+        let x = self.pointer_position().x;
+        let mut width = 1.0;
+        if let Some(output) = self.active_output() {
+            if let Some(area) = self.workspaces.output_geometry(&output) {
+                width = area.size.w as f64;
+            }
+        }
+        if let Some(overview) = self.overview.as_mut() {
+            overview.drag_to(x, width);
+        }
+        self.mark_dirty();
+    }
+
+    fn overview_button(&mut self, button: u32, state: ButtonState) {
+        let now = std::time::Instant::now();
+        if button != BTN_LEFT {
+            if state == ButtonState::Pressed {
+                self.close_overview(None);
+            }
+            return;
+        }
+        let x = self.pointer_position().x;
+        let Some(overview) = self.overview.as_mut() else {
+            return;
+        };
+        let chosen = match state {
+            ButtonState::Pressed => {
+                overview.press(x, now);
+                None
+            }
+            ButtonState::Released => overview.release(now),
+        };
+        if let Some(index) = chosen {
+            self.close_overview(Some(index));
+        }
+        self.mark_dirty();
     }
 
     pub fn run_action(&mut self, action: Action) {
@@ -271,6 +378,10 @@ impl Spectre {
         let delta = event.delta();
         let location = self.clamp_to_outputs(self.pointer_position() + delta);
         self.set_pointer_position(location);
+        if self.overview.is_some() {
+            self.overview_pointer_moved();
+            return;
+        }
         let under = self.surface_under_pointer();
 
         let pointer = self.pointer.clone();
@@ -290,6 +401,7 @@ impl Spectre {
         );
         pointer.frame(self);
         self.follow_mouse_focus();
+        self.watch_hot_corner();
         self.mark_dirty();
     }
 
@@ -304,12 +416,17 @@ impl Spectre {
         let serial = SERIAL_COUNTER.next_serial();
         let location = geometry.loc.to_f64() + event.position_transformed(geometry.size);
         self.set_pointer_position(location);
+        if self.overview.is_some() {
+            self.overview_pointer_moved();
+            return;
+        }
         let under = self.surface_under_pointer();
 
         let pointer = self.pointer.clone();
         pointer.motion(self, under, &MotionEvent { location, serial, time: event.time_msec() });
         pointer.frame(self);
         self.follow_mouse_focus();
+        self.watch_hot_corner();
         self.mark_dirty();
     }
 
@@ -318,6 +435,11 @@ impl Spectre {
         let button = event.button_code();
         let state = event.state();
         let time = event.time_msec();
+
+        if self.overview.is_some() {
+            self.overview_button(button, state);
+            return;
+        }
 
         if state == ButtonState::Pressed {
             self.logo_armed = false;
@@ -397,6 +519,9 @@ impl Spectre {
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, event: B::PointerAxisEvent) {
+        if self.overview.is_some() {
+            return;
+        }
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
 
         for axis in [Axis::Horizontal, Axis::Vertical] {

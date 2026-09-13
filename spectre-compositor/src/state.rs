@@ -103,6 +103,9 @@ pub struct Spectre {
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
     pub xdisplay: Option<u32>,
+    pub overview: Option<crate::overview::Overview>,
+    pub corner_armed: bool,
+    pub pending_overview_key: Option<smithay::input::keyboard::Keysym>,
 }
 
 impl Spectre {
@@ -202,6 +205,9 @@ impl Spectre {
             xwayland_shell_state,
             xwm: None,
             xdisplay: None,
+            overview: None,
+            corner_armed: false,
+            pending_overview_key: None,
         })
     }
 
@@ -362,6 +368,12 @@ impl Spectre {
     pub fn animation_interval(&self) -> Option<Duration> {
         if self.transition.is_some() {
             return Some(TRANSITION_INTERVAL);
+        }
+        if let Some(overview) = self.overview.as_ref() {
+            if overview.is_moving(Instant::now()) {
+                return Some(TRANSITION_INTERVAL);
+            }
+            return None;
         }
         let scale = self.animation_scale();
         let theme = &self.config.theme;

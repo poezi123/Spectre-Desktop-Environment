@@ -12,6 +12,7 @@ const SHADER_SRC: &str = include_str!("pattern.glsl");
 const FRAME_SRC: &str = include_str!("frame.glsl");
 const ROUNDED_SRC: &str = include_str!("rounded.glsl");
 const CONTOUR_SRC: &str = include_str!("contour.glsl");
+const CUBE_SRC: &str = include_str!("cube.glsl");
 
 const FRAME_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_radius", UniformType::_1f),
@@ -40,6 +41,15 @@ const CONTOUR_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_bg", UniformType::_4f),
     ("spectre_uv_origin", UniformType::_1f),
     ("spectre_uv_span", UniformType::_1f),
+];
+
+const CUBE_UNIFORMS: &[(&str, UniformType)] = &[
+    ("spectre_angle", UniformType::_1f),
+    ("spectre_apothem", UniformType::_1f),
+    ("spectre_camera", UniformType::_1f),
+    ("spectre_scale", UniformType::_1f),
+    ("spectre_aspect", UniformType::_1f),
+    ("spectre_flip", UniformType::_1f),
 ];
 
 const ROUNDED_UNIFORMS: &[(&str, UniformType)] = &[
@@ -81,6 +91,7 @@ pub struct PatternShader {
     frame: Option<GlesPixelProgram>,
     rounded: Option<GlesTexProgram>,
     contour: Option<GlesTexProgram>,
+    cube: Option<GlesTexProgram>,
 }
 
 impl PatternShader {
@@ -124,11 +135,20 @@ impl PatternShader {
             })
             .ok();
 
-        Some(Self { program, frame, rounded, contour })
+        let cube = renderer
+            .compile_custom_texture_shader(CUBE_SRC, &names(CUBE_UNIFORMS))
+            .inspect_err(|err| tracing::warn!(?err, "the workspace cube shader did not compile"))
+            .ok();
+
+        Some(Self { program, frame, rounded, contour, cube })
     }
 
     pub fn rounded_program(&self) -> Option<&GlesTexProgram> {
         self.rounded.as_ref()
+    }
+
+    pub fn cube_program(&self) -> Option<&GlesTexProgram> {
+        self.cube.as_ref()
     }
 
     pub fn contour_program(&self) -> Option<&GlesTexProgram> {
