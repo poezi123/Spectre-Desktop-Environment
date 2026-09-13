@@ -1,10 +1,5 @@
-//! The Spectre settings application.
-//!
-//! An ordinary xdg-shell window, so the compositor decorates it like any other.
-//! Every change is written to the configuration file and applied to the running
-//! session over the control socket.
-
 mod model;
+mod thumbnail;
 mod ui;
 
 use std::time::{Duration, Instant};
@@ -41,8 +36,11 @@ use wayland_client::{Connection, QueueHandle};
 use crate::model::{Control, Field, Settings};
 
 const BTN_LEFT: u32 = 0x110;
-/// Repaint interval while the pattern is moving.
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(33);
+
+const RESET_CONFIRM_WINDOW: Duration = Duration::from_secs(4);
+
+const THUMBNAIL_SIZE: u32 = 64;
 
 fn main() -> anyhow::Result<()> {
     init_tracing();
@@ -51,12 +49,8 @@ fn main() -> anyhow::Result<()> {
     if let Some(error) = error {
         tracing::error!(%error, "using built-in defaults");
     }
-    // The file as written, not as resolved: the settings window edits what is
-    // in the file, and the profile is one of the rows.
     let mut settings = Settings::new(config);
 
-    // Ask the session what the display can actually do, so the resolution row
-    // offers real modes rather than a guessed list.
     let mut ipc = Client::connect().ok();
     if let Some(client) = ipc.as_mut() {
         match client.request_state() {
@@ -112,6 +106,8 @@ fn main() -> anyhow::Result<()> {
         section: 0,
         row: 0,
         dragging: None,
+        armed_at: None,
+        thumbnails: thumbnail::Cache::default(),
         status: String::new(),
         ipc,
         started: Instant::now(),
@@ -123,8 +119,12 @@ fn main() -> anyhow::Result<()> {
         .insert_source(Timer::from_duration(ANIMATION_INTERVAL), |_, _, app: &mut App| {
             if app.settings.config.theme.window_pattern.needs_continuous_redraw() {
                 app.dirty = true;
-                app.redraw_if_needed();
             }
+            if app.armed_at.is_some() && !app.reset_armed() {
+                app.armed_at = None;
+                app.dirty = true;
+            }
+            app.redraw_if_needed();
             TimeoutAction::ToDuration(ANIMATION_INTERVAL)
         })
         .map_err(|err| anyhow::anyhow!("could not start the settings animation: {err}"))?;
@@ -170,8 +170,9 @@ struct App {
     settings: Settings,
     section: usize,
     row: usize,
-    /// The slider the button is being held down on, if any.
     dragging: Option<Field>,
+    armed_at: Option<Instant>,
+    thumbnails: thumbnail::Cache,
     status: String,
     ipc: Option<Client>,
     started: Instant,
@@ -205,7 +206,6 @@ impl App {
         self.dirty = true;
     }
 
-    /// Change the selected row and apply the result.
     fn edit(&mut self, delta: i32) {
         let Some(section) = self.sections().into_iter().nth(self.section) else {
             return;
@@ -213,13 +213,16 @@ impl App {
         let Some(row) = section.rows.get(self.row) else {
             return;
         };
+        if row.field == Field::Reset {
+            self.press_reset();
+            return;
+        }
         if self.settings.step(row.field, delta) {
             self.apply();
         }
         self.dirty = true;
     }
 
-    /// Set a slider directly, for a click on the bar.
     fn set_slider(&mut self, value: f32) {
         let Some(section) = self.sections().into_iter().nth(self.section) else {
             return;
@@ -234,7 +237,27 @@ impl App {
         }
     }
 
-    /// Write the config and ask the session to re-read it.
+    fn reset_armed(&self) -> bool {
+        match self.armed_at {
+            Some(pressed) => pressed.elapsed() < RESET_CONFIRM_WINDOW,
+            None => false,
+        }
+    }
+
+    fn press_reset(&mut self) {
+        if self.reset_armed() {
+            self.armed_at = None;
+            if self.settings.reset() {
+                self.apply();
+            } else {
+                self.status = String::from("Already at the shipped settings");
+            }
+        } else {
+            self.armed_at = Some(Instant::now());
+        }
+        self.dirty = true;
+    }
+
     fn apply(&mut self) {
         match self.settings.save() {
             Ok(_) => {
@@ -280,6 +303,11 @@ impl App {
         self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), self.scale as f32);
 
         let sections = self.settings.sections();
+        let reset_armed = self.reset_armed();
+        let wallpaper_thumbnail = match &self.settings.config.desktop.wallpaper {
+            Some(path) => self.thumbnails.get(path, THUMBNAIL_SIZE),
+            None => None,
+        };
         let frame = ui::Frame {
             theme: &self.settings.config.theme,
             sections: &sections,
@@ -288,6 +316,8 @@ impl App {
             mask: &self.mask,
             color_phase: pattern.color_phase(elapsed),
             status: &self.status,
+            reset_armed,
+            wallpaper_thumbnail,
         };
         ui::draw(&mut self.canvas, &mut self.text, &frame);
 
@@ -431,9 +461,6 @@ impl PointerHandler for App {
             let (w, h) = (self.width * self.scale, self.height * self.scale);
             match event.kind {
                 PointerEventKind::Motion { .. } => match self.dragging {
-                    // Held on a slider: follow the pointer. Writing the file
-                    // on every pixel would be a hundred saves per drag, so it
-                    // waits for the button to come up.
                     Some(field) => {
                         let rect = ui::control_rect(ui::row_rect(w, self.row));
                         self.settings.set_slider(field, ui::slider_value_at(rect, x));
@@ -451,8 +478,6 @@ impl PointerHandler for App {
                 PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
                     if self.dragging.take().is_some() {
                         self.apply();
-                        // `apply` leaves a word in the status line; without a
-                        // redraw nobody ever reads it.
                         self.dirty = true;
                     }
                 }
@@ -481,7 +506,6 @@ impl PointerHandler for App {
 }
 
 impl App {
-    /// A click inside the selected row: on the control, or anywhere else.
     fn click_row(&mut self, x: i32, y: i32) {
         let rect = ui::row_rect(self.width * self.scale, self.row);
         let control = ui::control_rect(rect);
@@ -497,8 +521,6 @@ impl App {
                 self.dragging = Some(row.field);
                 self.set_slider(ui::slider_value_at(control, x));
             }
-            // Clicking the left half of a choice steps back, the right half
-            // forward, which is what the arrows drawn there promise.
             Control::Choice { .. } if control.contains(x, y) => {
                 let forward = x > control.x + control.w / 2;
                 self.edit(if forward { 1 } else { -1 })

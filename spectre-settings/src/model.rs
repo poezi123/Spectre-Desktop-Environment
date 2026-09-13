@@ -1,9 +1,3 @@
-//! What the settings window shows, and what changing a row does to the config.
-//!
-//! Kept free of Wayland and of drawing: every row is a [`Field`] with a getter
-//! and a setter over [`Config`], so the list that is drawn, the list that is
-//! clicked and the list that is written are the same list.
-
 use std::path::PathBuf;
 
 use spectre_config::{Config, PanelPosition, Profile, WallpaperMode, WorkspaceTransition};
@@ -38,16 +32,16 @@ pub enum Field {
     PanelPosition,
     PanelFloating,
     PanelOpacity,
+
+    Reset,
 }
 
-/// How a row is drawn and what changing it means.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Control {
     Toggle(bool),
-    /// One of a fixed list, cycled left and right.
     Choice { index: usize, options: Vec<String> },
-    /// A 0..1 knob, shown as a bar.
     Slider { value: f32, label: String },
+    Button { label: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,10 +60,7 @@ pub struct Section {
 
 pub struct Settings {
     pub config: Config,
-    /// Wallpapers found on this machine, with "None" as the first choice.
     pub wallpapers: Vec<Option<PathBuf>>,
-    /// Resolutions the display reports, with "Auto" first. Empty until the
-    /// compositor has answered, which is why "Auto" is always a valid choice.
     pub resolutions: Vec<String>,
 }
 
@@ -77,7 +68,6 @@ impl Settings {
     pub fn new(config: Config) -> Self {
         let mut wallpapers: Vec<Option<PathBuf>> = vec![None];
         wallpapers.extend(spectre_config::desktop::find_wallpapers().into_iter().map(Some));
-        // A wallpaper set by hand may live outside the search path.
         if let Some(current) = config.desktop.wallpaper.clone() {
             if !wallpapers.iter().any(|w| w.as_ref() == Some(&current)) {
                 wallpapers.push(Some(current));
@@ -86,8 +76,6 @@ impl Settings {
         Self { config, wallpapers, resolutions: vec![AUTO.to_owned()] }
     }
 
-    /// The ends of a slider field's range, in the field's own units.
-    /// `None` for anything that is not a slider.
     pub fn slider_range(&self, field: Field) -> Option<(f32, f32)> {
         match field {
             Field::OutputScale => Some((MIN_SCALE as f32, MAX_SCALE as f32)),
@@ -107,24 +95,16 @@ impl Settings {
             _ => None,
         }
     }
-    /// Set a slider field straight to `value`, given as 0..1 of its range.
-    ///
-    /// Assigning rather than stepping is what makes dragging one smooth; the
-    /// range still comes from one place, so a slider and the arrow keys cannot
-    /// disagree about where the ends are.
     pub fn set_slider(&mut self, field: Field, value: f32) -> bool {
         let Some((min, max)) = self.slider_range(field) else {
             return false;
         };
         let before = self.config.clone();
-        // `f32::clamp` hands NaN straight back, and a slider whose control is
-        // zero pixels wide produces one; treat it as the low end.
         let t = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
         let scaled = min + t * (max - min);
         let pixels = |v: f32| v.round().clamp(0.0, u32::MAX as f32) as u32;
 
         match field {
-            // Two decimals: finer is below what the output can be driven at.
             Field::OutputScale => {
                 self.config.display.scale = ((scaled as f64) * 100.0).round() / 100.0
             }
@@ -142,18 +122,14 @@ impl Settings {
             }
             Field::PanelOpacity => self.config.panel.opacity = scaled.max(0.1),
 
-            // slider_range answered, so every slider is covered above.
             _ => return false,
         }
         before != self.config
     }
 
-    /// Take the modes the compositor reported for its first output.
     pub fn set_modes(&mut self, modes: &[spectre_ipc::Mode]) {
         let mut list = vec![AUTO.to_owned()];
         list.extend(modes.iter().map(|m| m.label()));
-        // A resolution written by hand stays selectable even if the display
-        // stops offering it, so the row never shows something that is not there.
         let current = self.config.display.resolution.clone();
         if !current.eq_ignore_ascii_case(AUTO) && !list.contains(&current) {
             list.push(current);
@@ -211,6 +187,10 @@ impl Settings {
                     self.row(Field::PanelFloating, "Floating", "Leave a margin around it"),
                     self.row(Field::PanelOpacity, "Opacity", "Background transparency"),
                 ],
+            },
+            Section {
+                title: "About",
+                rows: vec![self.row(Field::Reset, "Factory reset", "Back to the shipped settings")],
             },
         ]
     }
@@ -274,6 +254,8 @@ impl Settings {
             ),
             Field::PanelFloating => Control::Toggle(cfg.panel.floating),
             Field::PanelOpacity => percent(cfg.panel.opacity),
+
+            Field::Reset => Control::Button { label: String::from("Reset") },
         }
     }
 
@@ -291,10 +273,6 @@ impl Settings {
             .unwrap_or(0)
     }
 
-    /// Step a row: `delta` is -1 or 1, and a toggle flips either way.
-    ///
-    /// Returns true when something actually changed, so the caller only writes
-    /// the file when there is something to write.
     pub fn step(&mut self, field: Field, delta: i32) -> bool {
         let before = self.config.clone();
         match field {
@@ -303,8 +281,6 @@ impl Settings {
                 self.config.display.resolution = self.resolutions[index].clone();
             }
             Field::OutputScale => {
-                // Quarter steps: anything finer is invisible and makes the row
-                // impossible to land on with an arrow key.
                 let scale = (self.config.display.output_scale() + delta as f64 * 0.25)
                     .clamp(MIN_SCALE, MAX_SCALE);
                 self.config.display.scale = (scale * 100.0).round() / 100.0;
@@ -312,8 +288,6 @@ impl Settings {
             Field::Profile => {
                 let index = cycle(&Profile::ALL, self.control_index(field), delta);
                 self.config.general.profile = Profile::ALL[index];
-                // Anything but Custom overwrites the effect switches, and the
-                // user has to see that immediately or the rows below lie.
                 if let Some(effects) = self.config.general.profile.effects() {
                     self.config.effects = effects;
                 }
@@ -400,18 +374,22 @@ impl Settings {
             Field::PanelOpacity => {
                 self.config.panel.opacity = step_unit(self.config.panel.opacity, delta).max(0.1)
             }
+
+            Field::Reset => {}
         }
         before != self.config
     }
 
-    /// Editing an effect switch only means something under the Custom profile,
-    /// so touching one moves the profile there rather than silently doing
-    /// nothing on the next reload.
+    pub fn reset(&mut self) -> bool {
+        let before = self.config.clone();
+        self.config = Config::default();
+        before != self.config
+    }
+
     fn custom(&mut self) {
         self.config.general.profile = Profile::Custom;
     }
 
-    /// Patterns are edited together: one Spectre Pattern, drawn in three places.
     fn set_patterns(&mut self, edit: impl Fn(&mut spectre_theme::Pattern)) {
         edit(&mut self.config.theme.window_pattern);
         edit(&mut self.config.theme.panel_pattern);
@@ -425,7 +403,6 @@ impl Settings {
         }
     }
 
-    /// Write the config to the file the session is running from.
     pub fn save(&self) -> Result<PathBuf, String> {
         let path = Config::active_path().ok_or("no configuration directory")?;
         if let Some(parent) = path.parent() {
@@ -437,7 +414,6 @@ impl Settings {
     }
 }
 
-/// The string that means "whatever the display prefers".
 pub const AUTO: &str = "Auto";
 const MIN_SCALE: f64 = 0.5;
 const MAX_SCALE: f64 = 3.0;
@@ -445,7 +421,6 @@ const MAX_SCALE: f64 = 3.0;
 const MAX_RADIUS: u32 = 24;
 const MAX_TITLEBAR: u32 = 48;
 const MAX_BORDER: u32 = 6;
-/// The top of the animation speed slider.
 const MAX_SPEED: f32 = 2.0;
 
 const MODES: [(WallpaperMode, &str); 4] = [
@@ -744,5 +719,53 @@ mod tests {
         let s = Settings::new(config);
         assert!(s.wallpapers.contains(&Some(PathBuf::from("/tmp/mine.png"))));
         assert!(s.wallpaper_index() > 0);
+    }
+
+    #[test]
+    fn a_reset_puts_back_the_shipped_settings() {
+        let mut s = settings();
+        s.step(Field::Blur, 1);
+        s.step(Field::PanelPosition, 1);
+        assert!(s.reset());
+        assert_eq!(s.config, Config::default());
+    }
+
+    #[test]
+    fn resetting_settings_that_were_never_changed_reports_nothing() {
+        let mut s = settings();
+        assert!(!s.reset());
+    }
+
+    #[test]
+    fn a_reset_keeps_what_the_machine_offers() {
+        let mut s = settings();
+        s.wallpapers.push(Some(PathBuf::from("/tmp/a.png")));
+        s.set_modes(&[mode(1920, 1080, 60)]);
+        s.step(Field::Blur, 1);
+        s.reset();
+        assert!(s.wallpapers.contains(&Some(PathBuf::from("/tmp/a.png"))));
+        assert!(s.resolutions.contains(&String::from("1920x1080@60")));
+    }
+
+    #[test]
+    fn the_about_section_has_exactly_one_button() {
+        let s = settings();
+        let about = s.sections().into_iter().find(|section| section.title == "About").unwrap();
+        let mut buttons = 0;
+        for row in &about.rows {
+            if let Control::Button { .. } = row.control {
+                buttons += 1;
+            }
+        }
+        assert_eq!(buttons, 1);
+    }
+
+    #[test]
+    fn stepping_the_reset_row_changes_nothing_by_itself() {
+        let mut s = settings();
+        s.step(Field::Blur, 1);
+        let before = s.config.clone();
+        assert!(!s.step(Field::Reset, 1));
+        assert_eq!(s.config, before);
     }
 }

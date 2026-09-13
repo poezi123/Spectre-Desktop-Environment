@@ -1,13 +1,8 @@
-//! Settings layout and painting.
-//!
-//! Geometry is a pure function of the window size, so a click lands on the row
-//! that was drawn there.
-
 use spectre_draw::{Canvas, PatternMask, Rect};
-use spectre_text::{EllipsisSide, Label, TextRenderer};
+use spectre_text::{EllipsisSide, Image, Label, TextRenderer};
 use spectre_theme::{Palette, Pattern, Theme};
 
-use crate::model::{Control, Section};
+use crate::model::{Control, Field, Section};
 
 pub const SIDEBAR_WIDTH: i32 = 190;
 pub const HEADER_HEIGHT: i32 = 52;
@@ -18,10 +13,8 @@ pub const TITLE_SIZE: f32 = 16.0;
 pub const LABEL_SIZE: f32 = 13.0;
 pub const HELP_SIZE: f32 = 10.5;
 pub const MARKER_WIDTH: i32 = 3;
-/// Width of the control on the right of a row.
 pub const CONTROL_WIDTH: i32 = 190;
 
-/// A comfortable size for the window on an output of this size.
 pub fn window_size(output_width: i32, output_height: i32) -> (i32, i32) {
     let width = (output_width * 3 / 5).clamp(560, 880).min(output_width.max(1));
     let height = (output_height * 3 / 4).clamp(420, 620).min(output_height.max(1));
@@ -58,8 +51,6 @@ pub fn row_at(width: i32, height: i32, x: i32, y: i32) -> Option<usize> {
     (0..visible_rows(height)).find(|&i| row_rect(width, i).contains(x, y))
 }
 
-/// The control's own rectangle inside a row, which is what a click on a slider
-/// is measured against.
 pub fn control_rect(row: Rect) -> Rect {
     let width = CONTROL_WIDTH.min((row.w - PADDING * 2).max(0));
     Rect::new(row.right() - PADDING - width, row.y + (row.h - 20) / 2, width, 20)
@@ -72,8 +63,9 @@ pub struct Frame<'a> {
     pub row: usize,
     pub mask: &'a PatternMask,
     pub color_phase: f32,
-    /// Shown under the title: what happened to the last change.
     pub status: &'a str,
+    pub reset_armed: bool,
+    pub wallpaper_thumbnail: Option<&'a Image>,
 }
 
 pub fn settings_pattern(theme: &Theme) -> Pattern {
@@ -123,7 +115,16 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
         y += name_image.height as i32;
         canvas.draw_image(x, y, &help_image);
 
-        draw_control(canvas, text, control_rect(rect), &row.control, selected, palette);
+        let mut control = control_rect(rect);
+        if row.field == Field::Wallpaper {
+            if let Some(image) = frame.wallpaper_thumbnail {
+                let y = rect.y + (rect.h - image.height as i32) / 2;
+                canvas.draw_image(control.x, y, image);
+                let used = image.width as i32 + PADDING;
+                control = Rect::new(control.x + used, control.y, (control.w - used).max(0), control.h);
+            }
+        }
+        draw_control(canvas, text, control, &row.control, selected, frame.reset_armed, palette);
     }
 }
 
@@ -189,6 +190,7 @@ fn draw_control(
     rect: Rect,
     control: &Control,
     selected: bool,
+    armed: bool,
     palette: &Palette,
 ) {
     match control {
@@ -242,10 +244,25 @@ fn draw_control(
             let image = text.rasterise(&value);
             canvas.draw_image(rect.x, rect.y + (rect.h - image.height as i32) / 2, &image);
         }
+        Control::Button { label } => {
+            let background = if selected { palette.line } else { palette.elevated };
+            canvas.fill_rect(rect, background);
+
+            let caption = if armed { "Click again to confirm" } else { label.as_str() };
+            let color = if armed { palette.accent.sample(0.5) } else { palette.text };
+            let caption = Label::new(caption)
+                .size(HELP_SIZE)
+                .color(color)
+                .max_width((rect.w - 8).max(1) as u32)
+                .ellipsis(EllipsisSide::End);
+            let image = text.rasterise(&caption);
+            let x = rect.x + (rect.w - image.width as i32) / 2;
+            let y = rect.y + (rect.h - image.height as i32) / 2;
+            canvas.draw_image(x, y, &image);
+        }
     }
 }
 
-/// Where along a slider a click at `x` falls, in `0.0..=1.0`.
 pub fn slider_value_at(rect: Rect, x: i32) -> f32 {
     let bar_x = rect.x + 40;
     let bar_w = (rect.w - 40).max(1);

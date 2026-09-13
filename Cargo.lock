@@ -2310,6 +2310,7 @@ name = "spectre-settings"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
  "smithay-client-toolkit 0.21.1",
  "spectre-config",
  "spectre-draw",
