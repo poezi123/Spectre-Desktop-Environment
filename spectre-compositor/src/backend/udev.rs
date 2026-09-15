@@ -538,12 +538,21 @@ fn scene_hash(elements: &[SpectreElement], skip: usize) -> u64 {
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, Default)]
+struct FramePhases {
+    built: Duration,
+    rendered: Duration,
+    waited: Duration,
+    queued: Duration,
+}
+
 #[derive(Debug)]
 struct FrameStats {
     since: Instant,
     frames: u32,
     total: Duration,
     slowest: Duration,
+    phases: FramePhases,
     full_redraws: u32,
 }
 
@@ -554,25 +563,35 @@ impl FrameStats {
             frames: 0,
             total: Duration::ZERO,
             slowest: Duration::ZERO,
+            phases: FramePhases::default(),
             full_redraws: 0,
         }
     }
 
-    fn record(&mut self, cost: Duration, full_redraw: bool) {
+    fn record(&mut self, cost: Duration, phases: FramePhases, full_redraw: bool) {
         self.frames += 1;
         self.total += cost;
         self.slowest = self.slowest.max(cost);
+        self.phases.built += phases.built;
+        self.phases.rendered += phases.rendered;
+        self.phases.waited += phases.waited;
+        self.phases.queued += phases.queued;
         if full_redraw {
             self.full_redraws += 1;
         }
         if self.since.elapsed() < STATS_INTERVAL {
             return;
         }
-        let average = self.total / self.frames.max(1);
+        let frames = self.frames.max(1);
+        let average = |total: Duration| (total / frames).as_millis() as u64;
         tracing::info!(
             frames = self.frames,
-            average_ms = average.as_millis() as u64,
+            average_ms = average(self.total),
             slowest_ms = self.slowest.as_millis() as u64,
+            build_ms = average(self.phases.built),
+            render_ms = average(self.phases.rendered),
+            wait_ms = average(self.phases.waited),
+            queue_ms = average(self.phases.queued),
             full_redraws = self.full_redraws,
             "render stats"
         );
@@ -636,6 +655,7 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
     let Udev { renderer, shader, surfaces, cache, .. } = &mut *udev;
     let elements: Vec<SpectreElement> =
         output_elements(state, &output, renderer, shader.as_ref(), cache);
+    let built = started.elapsed();
 
     let Some(surface) = surfaces.get_mut(&crtc) else {
         return true;
@@ -653,6 +673,7 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
 
     match surface.compositor.render_frame(renderer, &elements, [0.0; 4], SCANOUT) {
         Ok(frame) if !frame.is_empty => {
+            let rendered = started.elapsed();
             if frame.needs_sync() {
                 if let PrimaryPlaneElement::Swapchain(element) = &frame.primary_element {
                     if let Err(err) = element.sync.wait() {
@@ -660,12 +681,14 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
                     }
                 }
             }
+            let waited = started.elapsed();
             match surface.compositor.queue_frame(()) {
                 Ok(()) => {
                     surface.awaiting_flip = true;
                     surface.last_frame = now;
                     surface.last_cost = started.elapsed();
-                    surface.stats.record(surface.last_cost, full_redraw);
+                    let phases = FramePhases { built, rendered: rendered - built, waited: waited - rendered, queued: surface.last_cost - waited };
+                    surface.stats.record(surface.last_cost, phases, full_redraw);
                     tracing::trace!(?crtc, elements = elements.len(), "frame queued");
                 }
                 Err(err) => tracing::warn!(?err, "could not queue a frame"),
