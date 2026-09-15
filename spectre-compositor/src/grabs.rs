@@ -13,6 +13,8 @@ use crate::state::Spectre;
 
 pub const BTN_LEFT: u32 = 0x110;
 
+pub const BTN_RIGHT: u32 = 0x111;
+
 pub const MIN_WIDTH: i32 = 160;
 
 pub const MIN_HEIGHT: i32 = 100;

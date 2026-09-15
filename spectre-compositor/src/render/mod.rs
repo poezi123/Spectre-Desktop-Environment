@@ -112,6 +112,9 @@ fn build_output_elements(
     cache.set_cursor_elements(cursor.len());
     elements.extend(cursor.into_iter().map(SpectreElement::Plain));
 
+    let menu = menu_elements(state, output, renderer, cache, scale);
+    elements.extend(menu.into_iter().map(SpectreElement::Plain));
+
     elements.extend(layer_elements(state, output, renderer, cache, scale, true));
 
     match state.transition.as_ref() {
@@ -403,6 +406,64 @@ fn cursor_elements(
             .collect()
         }
     }
+}
+
+fn menu_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
+    scale: f64,
+) -> Vec<WorkspaceElement> {
+    use spectre_text::Label;
+
+    let mut elements = Vec::new();
+    let Some(menu) = state.window_menu.as_ref() else {
+        return elements;
+    };
+    let Some(area) = state.workspaces.output_geometry(output) else {
+        return elements;
+    };
+    let palette = &state.config.theme.palette;
+
+    let mut text = state.text.borrow_mut();
+    for (index, item) in menu.items.iter().enumerate() {
+        let rect = on_output(menu.item_rect(index), area);
+        let mut color = palette.text_dim;
+        if menu.hovered == Some(index) {
+            color = palette.text;
+        }
+        let label = Label::new(item.label()).size(CAPTION_SIZE).color(color);
+        let size = text.measure(&label);
+        let location = Point::from((rect.loc.x + 12, rect.loc.y + (rect.size.h - size.h).max(0) / 2));
+        if let Some(element) = text.element(renderer, &label, location, scale, 1.0) {
+            elements.push(WorkspaceElement::Text(element));
+        }
+    }
+    drop(text);
+
+    if let Some(index) = menu.hovered {
+        let rect = on_output(menu.item_rect(index), area);
+        if let Some(element) = solid(cache, Slot::Menu(2), rect, palette.overlay, scale) {
+            elements.push(WorkspaceElement::Solid(element));
+        }
+    }
+    let outer = on_output(menu.rect(), area);
+    let inner = Rectangle::new(
+        Point::from((outer.loc.x + 1, outer.loc.y + 1)),
+        Size::from((outer.size.w - 2, outer.size.h - 2)),
+    );
+    if let Some(element) = solid(cache, Slot::Menu(1), inner, palette.elevated, scale) {
+        elements.push(WorkspaceElement::Solid(element));
+    }
+    if let Some(element) = solid(cache, Slot::Menu(0), outer, palette.line, scale) {
+        elements.push(WorkspaceElement::Solid(element));
+    }
+    elements
+}
+
+fn on_output(rect: Rectangle<i32, Logical>, area: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+    Rectangle::new(rect.loc - area.loc, rect.size)
 }
 
 fn named_cursor(state: &Spectre, icon: smithay::input::pointer::CursorIcon) -> Option<&CursorImage> {

@@ -1,4 +1,5 @@
 mod animation;
+mod window_menu;
 mod backend;
 mod grabs;
 mod handlers;

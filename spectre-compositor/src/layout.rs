@@ -12,6 +12,7 @@ use spectre_config::Direction;
 
 use crate::animation::{Closing, LauncherClosing, Pop, Slide};
 use crate::grabs::{resize_icon, ActiveResize, ResizeGrab, BTN_LEFT};
+use crate::window_menu::{MenuItem, WindowMenu};
 use crate::render::{decorations, Edges, Frame, Part, LAUNCHER_NAMESPACE};
 use crate::state::Spectre;
 
@@ -242,6 +243,10 @@ impl Spectre {
         self.opening.retain(|(opening, _)| opening != window);
         self.snapped.retain(|(snapped, _, _)| snapped != window);
         self.desktop_hidden.retain(|hidden| hidden != window);
+        let menu_window = self.window_menu.as_ref().map(|menu| menu.window.clone());
+        if menu_window.as_ref() == Some(window) {
+            self.window_menu = None;
+        }
         for space in self.workspaces.iter_mut() {
             space.unmap_elem(window);
         }
@@ -577,6 +582,88 @@ impl Spectre {
             self.resize = None;
         }
         self.mark_dirty();
+    }
+
+    pub fn open_window_menu(&mut self, window: &Window, at: Point<i32, Logical>) {
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let Some(area) = self.workspaces.output_geometry(&output) else {
+            return;
+        };
+        let maximized = self.has_state(window, xdg_toplevel::State::Maximized);
+        self.window_menu = Some(WindowMenu::new(window.clone(), at, maximized, area));
+        self.cursor_status = CursorImageStatus::default_named();
+        self.edge_cursor = false;
+        self.mark_dirty();
+    }
+
+    pub fn close_window_menu(&mut self) {
+        self.window_menu = None;
+        self.mark_dirty();
+    }
+
+    pub fn menu_pointer_moved(&mut self) {
+        let pointer = self.pointer_position();
+        let Some(menu) = self.window_menu.as_mut() else {
+            return;
+        };
+        let hovered = menu.item_at(pointer);
+        if menu.hovered != hovered {
+            menu.hovered = hovered;
+            self.mark_dirty();
+        }
+    }
+
+    pub fn menu_button(&mut self, pressed: bool) {
+        if !pressed {
+            return;
+        }
+        let pointer = self.pointer_position();
+        let Some(menu) = self.window_menu.as_ref() else {
+            return;
+        };
+        match menu.item_at(pointer) {
+            Some(index) => self.activate_menu_item(index),
+            None => self.close_window_menu(),
+        }
+    }
+
+    pub fn activate_menu_item(&mut self, index: usize) {
+        let Some(menu) = self.window_menu.take() else {
+            return;
+        };
+        self.mark_dirty();
+        let Some(item) = menu.items.get(index).copied() else {
+            return;
+        };
+        let window = menu.window;
+        match item {
+            MenuItem::Minimize => self.minimize(&window),
+            MenuItem::Maximize => self.set_maximized(&window, true),
+            MenuItem::Restore => self.set_maximized(&window, false),
+            MenuItem::Fullscreen => {
+                let on = self.has_state(&window, xdg_toplevel::State::Fullscreen);
+                self.set_fullscreen(&window, !on);
+            }
+            MenuItem::SnapLeft => {
+                self.focus_window(Some(&window));
+                self.snap_focused(Direction::Left);
+            }
+            MenuItem::SnapRight => {
+                self.focus_window(Some(&window));
+                self.snap_focused(Direction::Right);
+            }
+            MenuItem::PreviousWorkspace => {
+                self.focus_window(Some(&window));
+                self.run_action(spectre_config::Action::MoveToPrevWorkspace);
+            }
+            MenuItem::NextWorkspace => {
+                self.focus_window(Some(&window));
+                self.run_action(spectre_config::Action::MoveToNextWorkspace);
+            }
+            MenuItem::Close => self.close_window(&window),
+        }
     }
 
     pub fn finish_resize(&mut self, window: &Window) {

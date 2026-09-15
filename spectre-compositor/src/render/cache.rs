@@ -16,6 +16,7 @@ pub enum Slot {
     DesktopPattern,
     Frame(u32),
     Decoration(u32, u8),
+    Menu(u8),
 }
 
 #[derive(Debug, Default)]

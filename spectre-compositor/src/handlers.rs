@@ -22,7 +22,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Client;
-use smithay::utils::Serial;
+use smithay::utils::{Logical, Point, Serial};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
@@ -248,6 +248,22 @@ impl XdgShellHandler for Spectre {
         if let Some(window) = self.window_for_toplevel(&surface) {
             self.start_resize(&window, edges_from_xdg(edges), serial);
         }
+    }
+
+    fn show_window_menu(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: WlSeat,
+        _serial: Serial,
+        location: Point<i32, Logical>,
+    ) {
+        let Some(window) = self.window_for_toplevel(&surface) else {
+            return;
+        };
+        let Some(origin) = self.workspaces.active().element_location(&window) else {
+            return;
+        };
+        self.open_window_menu(&window, origin + location);
     }
 }
 

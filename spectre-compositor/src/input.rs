@@ -11,7 +11,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Point, SERIAL_COUNTER};
 use spectre_config::{Action, Keybind, Modifiers, Profile};
 
-use crate::grabs::{resize_icon, MoveGrab, BTN_LEFT};
+use crate::grabs::{resize_icon, MoveGrab, BTN_LEFT, BTN_RIGHT};
 use crate::overview::CORNER_DWELL;
 use crate::render::Part;
 use crate::state::Spectre;
@@ -66,6 +66,12 @@ impl Spectre {
                     }
                     return FilterResult::Intercept(None);
                 }
+                if state.window_menu.is_some() {
+                    if event.state() == smithay::backend::input::KeyState::Pressed {
+                        state.pending_menu_key = Some(sym);
+                    }
+                    return FilterResult::Intercept(None);
+                }
                 let is_logo =
                     matches!(sym.raw(), keysyms::KEY_Super_L | keysyms::KEY_Super_R);
 
@@ -97,8 +103,39 @@ impl Spectre {
         if let Some(sym) = self.pending_overview_key.take() {
             self.overview_key(sym);
         }
+        if let Some(sym) = self.pending_menu_key.take() {
+            self.menu_key(sym);
+        }
         if let Some(action) = action.flatten() {
             self.run_action(action);
+        }
+    }
+
+    fn menu_key(&mut self, sym: Keysym) {
+        match sym.raw() {
+            keysyms::KEY_Escape => self.close_window_menu(),
+            keysyms::KEY_Up => {
+                if let Some(menu) = self.window_menu.as_mut() {
+                    menu.step(-1);
+                }
+                self.mark_dirty();
+            }
+            keysyms::KEY_Down => {
+                if let Some(menu) = self.window_menu.as_mut() {
+                    menu.step(1);
+                }
+                self.mark_dirty();
+            }
+            keysyms::KEY_Return | keysyms::KEY_KP_Enter | keysyms::KEY_space => {
+                let mut hovered = None;
+                if let Some(menu) = self.window_menu.as_ref() {
+                    hovered = menu.hovered;
+                }
+                if let Some(index) = hovered {
+                    self.activate_menu_item(index);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -412,6 +449,10 @@ impl Spectre {
             self.overview_pointer_moved();
             return;
         }
+        if self.window_menu.is_some() {
+            self.menu_pointer_moved();
+            return;
+        }
         let under = self.surface_under_pointer();
         if !self.is_resizing() {
             self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
@@ -454,6 +495,10 @@ impl Spectre {
             self.overview_pointer_moved();
             return;
         }
+        if self.window_menu.is_some() {
+            self.menu_pointer_moved();
+            return;
+        }
         let under = self.surface_under_pointer();
         if !self.is_resizing() {
             self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
@@ -476,6 +521,10 @@ impl Spectre {
 
         if self.overview.is_some() {
             self.overview_button(button, state);
+            return;
+        }
+        if self.window_menu.is_some() {
+            self.menu_button(state == ButtonState::Pressed);
             return;
         }
 
@@ -515,6 +564,12 @@ impl Spectre {
     ) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Top;
 
+        if button == BTN_RIGHT {
+            let pointer = self.pointer_position();
+            let at = Point::<i32, smithay::utils::Logical>::from((pointer.x.round() as i32, pointer.y.round() as i32));
+            self.open_window_menu(window, at);
+            return;
+        }
         if button != BTN_LEFT {
             return;
         }
@@ -564,7 +619,7 @@ impl Spectre {
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, event: B::PointerAxisEvent) {
-        if self.overview.is_some() {
+        if self.overview.is_some() || self.window_menu.is_some() {
             return;
         }
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());

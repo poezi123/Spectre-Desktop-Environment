@@ -117,6 +117,8 @@ pub struct Spectre {
     pub desktop_hidden: Vec<Window>,
     pub resize: Option<crate::grabs::ActiveResize>,
     pub edge_cursor: bool,
+    pub window_menu: Option<crate::window_menu::WindowMenu>,
+    pub pending_menu_key: Option<smithay::input::keyboard::Keysym>,
 }
 
 impl Spectre {
@@ -231,6 +233,8 @@ impl Spectre {
             desktop_hidden: Vec::new(),
             resize: None,
             edge_cursor: false,
+            window_menu: None,
+            pending_menu_key: None,
         })
     }
 

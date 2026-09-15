@@ -350,7 +350,7 @@ A usable desktop, in the sense that you can log into it and work.
 
 `spectre-compositor` runs as a real Wayland session on KMS/DRM. It maps
 windows with server-side title bars - caption, minimize, maximize and close,
-drag to move, drag an edge or corner to resize, double click to maximize - rounds their corners in a shader,
+drag to move, drag an edge or corner to resize, double click to maximize, right click for the window menu - rounds their corners in a shader,
 draws the topographic pattern across the title bar, routes keyboard and
 pointer input, draws the pointer itself, handles four workspaces, draws the
 wallpaper and survives VT switching. `spectre-panel` sits at the bottom with
