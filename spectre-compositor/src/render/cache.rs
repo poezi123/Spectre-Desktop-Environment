@@ -28,6 +28,7 @@ pub struct RenderCache {
     snapshot_size: Size<i32, Physical>,
     face_commit: CommitCounter,
     face_angle: f32,
+    cursor_elements: usize,
 }
 
 #[derive(Debug)]
@@ -46,6 +47,14 @@ struct ShaderSlot {
 }
 
 impl RenderCache {
+    pub fn cursor_elements(&self) -> usize {
+        self.cursor_elements
+    }
+
+    pub fn set_cursor_elements(&mut self, count: usize) {
+        self.cursor_elements = count;
+    }
+
     pub fn snapshots(&self) -> &[TextureBuffer<GlesTexture>] {
         &self.snapshots
     }

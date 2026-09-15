@@ -99,11 +99,9 @@ fn build_output_elements(
 
     let mut elements: Vec<SpectreElement> = Vec::new();
 
-    elements.extend(
-        cursor_elements(state, output, renderer, scale)
-            .into_iter()
-            .map(SpectreElement::Plain),
-    );
+    let cursor = cursor_elements(state, output, renderer, scale);
+    cache.set_cursor_elements(cursor.len());
+    elements.extend(cursor.into_iter().map(SpectreElement::Plain));
 
     elements.extend(
         layer_elements(output, renderer, scale, true)
@@ -193,11 +191,9 @@ fn overview_elements(
     scale: f64,
 ) -> Vec<SpectreElement> {
     let mut elements: Vec<SpectreElement> = Vec::new();
-    elements.extend(
-        cursor_elements(state, output, renderer, scale)
-            .into_iter()
-            .map(SpectreElement::Plain),
-    );
+    let cursor = cursor_elements(state, output, renderer, scale);
+    cache.set_cursor_elements(cursor.len());
+    elements.extend(cursor.into_iter().map(SpectreElement::Plain));
 
     let Some(area) = state.workspaces.output_geometry(output) else {
         return elements;

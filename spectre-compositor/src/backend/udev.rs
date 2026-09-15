@@ -46,6 +46,7 @@ struct Surface {
     frame_interval: Duration,
     last_scene: u64,
     last_cost: Duration,
+    stats: FrameStats,
 }
 
 struct Udev {
@@ -256,6 +257,7 @@ fn scan_connectors(state: &mut Spectre, shared: &Shared) -> anyhow::Result<()> {
                 frame_interval: Duration::from_secs_f64(1.0 / refresh as f64),
                 last_scene: 0,
                 last_cost: Duration::ZERO,
+                stats: FrameStats::new(),
             },
         );
         x += w as i32;
@@ -520,34 +522,58 @@ const SCANOUT: FrameFlags = FrameFlags::empty();
 
 const FLIP_TIMEOUT: Duration = Duration::from_millis(500);
 
-fn scene_hash(elements: &[SpectreElement]) -> u64 {
+fn scene_hash(elements: &[SpectreElement], skip: usize) -> u64 {
     use smithay::backend::renderer::element::Element;
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for element in elements {
+    for element in elements.iter().skip(skip) {
         element.id().hash(&mut hasher);
     }
     hasher.finish()
 }
 
-fn frame_counter(elements: usize) {
-    use std::cell::Cell;
-    thread_local! {
-        static COUNT: Cell<u32> = const { Cell::new(0) };
-        static SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
+const STATS_INTERVAL: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+struct FrameStats {
+    since: Instant,
+    frames: u32,
+    total: Duration,
+    slowest: Duration,
+    full_redraws: u32,
+}
+
+impl FrameStats {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            frames: 0,
+            total: Duration::ZERO,
+            slowest: Duration::ZERO,
+            full_redraws: 0,
+        }
     }
-    COUNT.with(|c| c.set(c.get() + 1));
-    SINCE.with(|s| {
-        let start = s.get().unwrap_or_else(Instant::now);
-        if s.get().is_none() {
-            s.set(Some(start));
+
+    fn record(&mut self, cost: Duration, full_redraw: bool) {
+        self.frames += 1;
+        self.total += cost;
+        self.slowest = self.slowest.max(cost);
+        if full_redraw {
+            self.full_redraws += 1;
         }
-        if start.elapsed() >= Duration::from_secs(1) {
-            let n = COUNT.with(|c| c.replace(0));
-            tracing::trace!(fps = n, elements, "frames drawn in the last second");
-            s.set(Some(Instant::now()));
+        if self.since.elapsed() < STATS_INTERVAL {
+            return;
         }
-    });
+        let average = self.total / self.frames.max(1);
+        tracing::info!(
+            frames = self.frames,
+            average_ms = average.as_millis() as u64,
+            slowest_ms = self.slowest.as_millis() as u64,
+            full_redraws = self.full_redraws,
+            "render stats"
+        );
+        *self = Self::new();
+    }
 }
 
 fn render_all(state: &mut Spectre, shared: &Shared) {
@@ -595,7 +621,8 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
                 tracing::warn!(?err, "could not reset the surface after a lost flip");
             }
         }
-        let pace = surface.frame_interval.max(surface.last_cost);
+        let slowest_pace = surface.frame_interval * 2;
+        let pace = surface.frame_interval.max(surface.last_cost.min(slowest_pace));
         if now.duration_since(surface.last_frame) < pace {
             return false;
         }
@@ -612,10 +639,12 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
 
     crate::render::dump_scene(&elements, output.current_scale().fractional_scale());
 
-    let scene = scene_hash(&elements);
+    let scene = scene_hash(&elements, cache.cursor_elements());
+    let mut full_redraw = false;
     if scene != surface.last_scene {
         surface.last_scene = scene;
         surface.compositor.reset_buffer_ages();
+        full_redraw = true;
     }
 
     match surface.compositor.render_frame(renderer, &elements, [0.0; 4], SCANOUT) {
@@ -632,7 +661,7 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
                     surface.awaiting_flip = true;
                     surface.last_frame = now;
                     surface.last_cost = started.elapsed();
-                    frame_counter(elements.len());
+                    surface.stats.record(surface.last_cost, full_redraw);
                     tracing::trace!(?crtc, elements = elements.len(), "frame queued");
                 }
                 Err(err) => tracing::warn!(?err, "could not queue a frame"),
