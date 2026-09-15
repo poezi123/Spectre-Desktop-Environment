@@ -16,6 +16,7 @@ use smithay::input::pointer::{CursorImageStatus, Focus};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
@@ -79,6 +80,7 @@ impl CompositorHandler for Spectre {
                 .or_else(|| self.window_for_surface(&root));
             if let Some(window) = window {
                 window.on_commit();
+                self.follow_resize(&window);
             }
         }
 
@@ -229,6 +231,24 @@ impl XdgShellHandler for Spectre {
             self.set_maximized(&window, false);
         }
     }
+
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, serial: Serial) {
+        if let Some(window) = self.window_for_toplevel(&surface) {
+            self.start_move(&window, serial);
+        }
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: WlSeat,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
+    ) {
+        if let Some(window) = self.window_for_toplevel(&surface) {
+            self.start_resize(&window, edges_from_xdg(edges), serial);
+        }
+    }
 }
 
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Spectre {
@@ -254,6 +274,35 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Spectre 
 
 delegate_xdg_shell!(Spectre);
 delegate_xdg_decoration!(Spectre);
+
+fn edges_from_xdg(edge: xdg_toplevel::ResizeEdge) -> crate::render::Edges {
+    use xdg_toplevel::ResizeEdge;
+    let mut edges = crate::render::Edges::default();
+    match edge {
+        ResizeEdge::Top => edges.top = true,
+        ResizeEdge::Bottom => edges.bottom = true,
+        ResizeEdge::Left => edges.left = true,
+        ResizeEdge::Right => edges.right = true,
+        ResizeEdge::TopLeft => {
+            edges.top = true;
+            edges.left = true;
+        }
+        ResizeEdge::TopRight => {
+            edges.top = true;
+            edges.right = true;
+        }
+        ResizeEdge::BottomLeft => {
+            edges.bottom = true;
+            edges.left = true;
+        }
+        ResizeEdge::BottomRight => {
+            edges.bottom = true;
+            edges.right = true;
+        }
+        _ => {}
+    }
+    edges
+}
 
 impl WlrLayerShellHandler for Spectre {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {

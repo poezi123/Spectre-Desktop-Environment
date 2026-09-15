@@ -87,6 +87,67 @@ pub fn caption_area(frame: &Frame, metrics: &Metrics) -> Rectangle<i32, Logical>
     Rectangle::new(Point::from((left, bar.loc.y)), Size::from((width, bar.size.h)))
 }
 
+pub const RESIZE_MARGIN: i32 = 6;
+
+pub const RESIZE_CORNER: i32 = 18;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+impl Edges {
+    pub fn is_empty(&self) -> bool {
+        !self.left && !self.right && !self.top && !self.bottom
+    }
+}
+
+pub fn edges_at(frame: &Frame, point: Point<f64, Logical>) -> Option<Edges> {
+    let p = Point::<i32, Logical>::from((point.x.floor() as i32, point.y.floor() as i32));
+    let outer = frame.outer;
+    let reach = Rectangle::new(
+        Point::from((outer.loc.x - RESIZE_MARGIN, outer.loc.y - RESIZE_MARGIN)),
+        Size::from((outer.size.w + RESIZE_MARGIN * 2, outer.size.h + RESIZE_MARGIN * 2)),
+    );
+    if !reach.contains(p) || frame.window.contains(p) || frame.titlebar.contains(p) {
+        return None;
+    }
+
+    let mut content_top = frame.window.loc.y;
+    if frame.is_decorated() {
+        content_top = frame.titlebar.loc.y;
+    }
+    let mut edges = Edges {
+        left: p.x < frame.window.loc.x,
+        right: p.x >= frame.window.loc.x + frame.window.size.w,
+        top: p.y < content_top,
+        bottom: p.y >= frame.window.loc.y + frame.window.size.h,
+    };
+    if edges.left || edges.right {
+        if p.y < outer.loc.y + RESIZE_CORNER {
+            edges.top = true;
+        }
+        if p.y >= outer.loc.y + outer.size.h - RESIZE_CORNER {
+            edges.bottom = true;
+        }
+    }
+    if edges.top || edges.bottom {
+        if p.x < outer.loc.x + RESIZE_CORNER {
+            edges.left = true;
+        }
+        if p.x >= outer.loc.x + outer.size.w - RESIZE_CORNER {
+            edges.right = true;
+        }
+    }
+    if edges.is_empty() {
+        return None;
+    }
+    Some(edges)
+}
+
 pub fn part_at(
     frame: &Frame,
     metrics: &Metrics,
@@ -346,5 +407,52 @@ mod tests {
         let [top, bottom, left, right] = ring_edges(rect(0, 0, 50, 40), 2);
         let area: i32 = [top, bottom, left, right].iter().map(|r| r.size.w * r.size.h).sum();
         assert_eq!(area, 50 * 40 - 46 * 36);
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    fn frame() -> Frame {
+        let window = Rectangle::new(Point::from((100, 130)), Size::from((400, 300)));
+        let titlebar = Rectangle::new(Point::from((100, 100)), Size::from((400, 30)));
+        let outer = Rectangle::new(Point::from((98, 98)), Size::from((404, 334)));
+        Frame { window, titlebar, outer, border: 2 }
+    }
+
+    fn at(x: f64, y: f64) -> Option<Edges> {
+        edges_at(&frame(), Point::from((x, y)))
+    }
+
+    #[test]
+    fn the_right_border_resizes_sideways() {
+        assert_eq!(at(503.0, 250.0), Some(Edges { right: true, ..Edges::default() }));
+    }
+
+    #[test]
+    fn a_few_pixels_outside_still_count() {
+        assert_eq!(at(94.0, 250.0), Some(Edges { left: true, ..Edges::default() }));
+        assert_eq!(at(300.0, 436.0), Some(Edges { bottom: true, ..Edges::default() }));
+    }
+
+    #[test]
+    fn corners_resize_both_ways() {
+        let bottom_right = Edges { right: true, bottom: true, ..Edges::default() };
+        let top_left = Edges { left: true, top: true, ..Edges::default() };
+        assert_eq!(at(500.5, 431.0), Some(bottom_right));
+        assert_eq!(at(95.0, 95.0), Some(top_left));
+    }
+
+    #[test]
+    fn the_title_bar_and_the_content_do_not_resize() {
+        assert_eq!(at(300.0, 115.0), None);
+        assert_eq!(at(300.0, 250.0), None);
+        assert_eq!(at(300.0, 60.0), None);
+    }
+
+    #[test]
+    fn the_top_border_above_the_title_bar_resizes() {
+        assert_eq!(at(300.0, 98.0), Some(Edges { top: true, ..Edges::default() }));
     }
 }

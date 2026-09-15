@@ -11,7 +11,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Point, SERIAL_COUNTER};
 use spectre_config::{Action, Keybind, Modifiers, Profile};
 
-use crate::grabs::{MoveGrab, BTN_LEFT};
+use crate::grabs::{resize_icon, MoveGrab, BTN_LEFT};
 use crate::overview::CORNER_DWELL;
 use crate::render::Part;
 use crate::state::Spectre;
@@ -382,6 +382,27 @@ impl Spectre {
         tracing::info!(component = what, "not implemented yet");
     }
 
+    fn show_edge_cursor(&mut self, over_nothing: bool) {
+        let mut edges = None;
+        if over_nothing {
+            if let Some((_, found)) = self.edges_under_pointer() {
+                edges = Some(found);
+            }
+        }
+        match edges {
+            Some(edges) => {
+                self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(resize_icon(edges));
+                self.edge_cursor = true;
+            }
+            None => {
+                if self.edge_cursor {
+                    self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+                    self.edge_cursor = false;
+                }
+            }
+        }
+    }
+
     fn on_pointer_motion<B: InputBackend>(&mut self, event: B::PointerMotionEvent) {
         let serial = SERIAL_COUNTER.next_serial();
         let delta = event.delta();
@@ -392,7 +413,10 @@ impl Spectre {
             return;
         }
         let under = self.surface_under_pointer();
-        self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
+        if !self.is_resizing() {
+            self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
+            self.show_edge_cursor(under.is_none());
+        }
 
         let pointer = self.pointer.clone();
         pointer.motion(
@@ -431,7 +455,10 @@ impl Spectre {
             return;
         }
         let under = self.surface_under_pointer();
-        self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
+        if !self.is_resizing() {
+            self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
+            self.show_edge_cursor(under.is_none());
+        }
 
         let pointer = self.pointer.clone();
         pointer.motion(self, under, &MotionEvent { location, serial, time: event.time_msec() });
@@ -454,6 +481,13 @@ impl Spectre {
 
         if state == ButtonState::Pressed {
             self.logo_armed = false;
+            if button == BTN_LEFT {
+                if let Some((window, edges)) = self.edges_under_pointer() {
+                    self.focus_window(Some(&window));
+                    self.start_resize(&window, edges, serial);
+                    return;
+                }
+            }
             if let Some((window, part)) = self.decoration_under_pointer() {
                 self.focus_window(Some(&window));
                 self.on_decoration_press(&window, part, button, serial, time);

@@ -271,7 +271,36 @@ impl XwmHandler for Spectre {
         }
     }
 
-    fn resize_request(&mut self, _xwm: XwmId, _window: X11Surface, _button: u32, _edge: ResizeEdge) {}
+    fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edge: ResizeEdge) {
+        let Some(found) = self.window_for_x11(&window) else {
+            return;
+        };
+        let mut edges = crate::render::Edges::default();
+        match edge {
+            ResizeEdge::Top => edges.top = true,
+            ResizeEdge::Bottom => edges.bottom = true,
+            ResizeEdge::Left => edges.left = true,
+            ResizeEdge::Right => edges.right = true,
+            ResizeEdge::TopLeft => {
+                edges.top = true;
+                edges.left = true;
+            }
+            ResizeEdge::TopRight => {
+                edges.top = true;
+                edges.right = true;
+            }
+            ResizeEdge::BottomLeft => {
+                edges.bottom = true;
+                edges.left = true;
+            }
+            ResizeEdge::BottomRight => {
+                edges.bottom = true;
+                edges.right = true;
+            }
+        }
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        self.start_resize(&found, edges, serial);
+    }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
         let Some(managed) = self.window_for_x11(&window) else {

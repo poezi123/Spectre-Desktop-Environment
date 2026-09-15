@@ -9,8 +9,8 @@ mod rounded;
 mod text;
 mod wallpaper;
 
-pub use cursor::CursorImage;
-pub use decorations::{Frame, Part};
+pub use cursor::{CursorImage, ResizeCursors};
+pub use decorations::{Edges, Frame, Part};
 pub use pattern::PatternShader;
 pub use banded::Banded;
 pub use cache::{RenderCache, Slot};
@@ -382,8 +382,8 @@ fn cursor_elements(
             .map(WorkspaceElement::Surface)
             .collect()
         }
-        CursorImageStatus::Named(_) => {
-            let Some(image) = state.cursor.as_ref() else {
+        CursorImageStatus::Named(icon) => {
+            let Some(image) = named_cursor(state, *icon) else {
                 return Vec::new();
             };
             let location: Point<i32, Physical> = local.to_physical_precise_round(scale);
@@ -402,6 +402,24 @@ fn cursor_elements(
             .into_iter()
             .collect()
         }
+    }
+}
+
+fn named_cursor(state: &Spectre, icon: smithay::input::pointer::CursorIcon) -> Option<&CursorImage> {
+    use smithay::input::pointer::CursorIcon;
+    let Some(resize) = state.resize_cursors.as_ref() else {
+        return state.cursor.as_ref();
+    };
+    match icon {
+        CursorIcon::EwResize | CursorIcon::EResize | CursorIcon::WResize | CursorIcon::ColResize => {
+            Some(&resize.horizontal)
+        }
+        CursorIcon::NsResize | CursorIcon::NResize | CursorIcon::SResize | CursorIcon::RowResize => {
+            Some(&resize.vertical)
+        }
+        CursorIcon::NwseResize | CursorIcon::NwResize | CursorIcon::SeResize => Some(&resize.falling),
+        CursorIcon::NeswResize | CursorIcon::NeResize | CursorIcon::SwResize => Some(&resize.rising),
+        _ => state.cursor.as_ref(),
     }
 }
 

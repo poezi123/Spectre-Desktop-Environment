@@ -92,6 +92,7 @@ pub struct Spectre {
     pub panel: Option<u32>,
     pub wallpaper: Option<crate::render::Wallpaper>,
     pub cursor: Option<crate::render::CursorImage>,
+    pub resize_cursors: Option<crate::render::ResizeCursors>,
     dirty: bool,
     display_dirty: bool,
     pub text: RefCell<crate::render::TextCache>,
@@ -114,6 +115,8 @@ pub struct Spectre {
     pub launcher_shown: bool,
     pub snapped: Vec<(Window, spectre_config::Direction, smithay::utils::Rectangle<i32, smithay::utils::Logical>)>,
     pub desktop_hidden: Vec<Window>,
+    pub resize: Option<crate::grabs::ActiveResize>,
+    pub edge_cursor: bool,
 }
 
 impl Spectre {
@@ -163,6 +166,7 @@ impl Spectre {
 
         let keybinds = Keybinds::default().merged_with(config.keybinds.clone());
         let cursor = Some(Self::build_cursor(&config));
+        let resize_cursors = Some(Self::build_resize_cursors(&config));
         let workspaces = Workspaces::new(config.general.workspaces);
 
         Ok(Self {
@@ -205,6 +209,7 @@ impl Spectre {
             panel: None,
             wallpaper: None,
             cursor,
+            resize_cursors,
             dirty: true,
             display_dirty: false,
             text: RefCell::new(crate::render::TextCache::new()),
@@ -224,6 +229,8 @@ impl Spectre {
             launcher_shown: false,
             snapped: Vec::new(),
             desktop_hidden: Vec::new(),
+            resize: None,
+            edge_cursor: false,
         })
     }
 
@@ -291,6 +298,11 @@ impl Spectre {
         crate::render::CursorImage::new(config.input.cursor.height(config.display.scale), fill, outline)
     }
 
+    fn build_resize_cursors(config: &Config) -> crate::render::ResizeCursors {
+        let (fill, outline) = config.input.cursor.colors(Color::hex(0x000000), Color::hex(0xffffff));
+        crate::render::ResizeCursors::new(config.input.cursor.height(config.display.scale), fill, outline)
+    }
+
     pub fn refresh_cursor(&mut self, previous: &Config) {
         let palette = |c: &Config| c.theme.palette.clone();
         let unchanged = previous.input.cursor == self.config.input.cursor
@@ -300,6 +312,7 @@ impl Spectre {
             return;
         }
         self.cursor = Some(Self::build_cursor(&self.config));
+        self.resize_cursors = Some(Self::build_resize_cursors(&self.config));
         self.mark_dirty();
     }
 

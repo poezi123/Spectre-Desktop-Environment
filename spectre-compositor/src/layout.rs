@@ -1,14 +1,18 @@
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::{layer_map_for_output, Window, WindowSurfaceType};
+use smithay::input::pointer::{CursorImageStatus, Focus, GrabStartData};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Point, Rectangle, Serial, Size};
+use smithay::wayland::compositor::with_states;
+use smithay::wayland::shell::xdg::SurfaceCachedState;
 use smithay::wayland::seat::WaylandFocus;
 use spectre_config::Direction;
 
 use crate::animation::{Closing, LauncherClosing, Pop, Slide};
-use crate::render::{decorations, Frame, Part, LAUNCHER_NAMESPACE};
+use crate::grabs::{resize_icon, ActiveResize, ResizeGrab, BTN_LEFT};
+use crate::render::{decorations, Edges, Frame, Part, LAUNCHER_NAMESPACE};
 use crate::state::Spectre;
 
 const CASCADE_STEP: i32 = 28;
@@ -471,6 +475,128 @@ impl Spectre {
         }
     }
 
+    pub fn edges_under_pointer(&self) -> Option<(Window, Edges)> {
+        let pointer = self.pointer_position();
+        let metrics = self.config.theme.metrics;
+        let space = self.workspaces.active();
+
+        for window in space.elements().rev() {
+            let Some(geometry) = space.element_geometry(window) else {
+                continue;
+            };
+            let decorated = self.is_decorated(window);
+            let frame = Frame::new(geometry, &metrics, decorated);
+            let resizable = decorated
+                && !self.has_state(window, xdg_toplevel::State::Maximized)
+                && !self.has_state(window, xdg_toplevel::State::Fullscreen);
+            if resizable {
+                if let Some(edges) = decorations::edges_at(&frame, pointer) {
+                    return Some((window.clone(), edges));
+                }
+            }
+            if frame.outer.to_f64().contains(pointer) {
+                return None;
+            }
+        }
+        None
+    }
+
+    pub fn is_resizing(&self) -> bool {
+        match self.resize.as_ref() {
+            Some(resize) => !resize.released,
+            None => false,
+        }
+    }
+
+    pub fn start_resize(&mut self, window: &Window, edges: Edges, serial: Serial) {
+        if edges.is_empty() {
+            return;
+        }
+        let Some(location) = self.workspaces.active().element_location(window) else {
+            return;
+        };
+        let initial = Rectangle::new(location, window.geometry().size);
+        self.snapped.retain(|(snapped, _, _)| snapped != window);
+        self.resize = Some(ActiveResize { window: window.clone(), edges, initial, released: false });
+        self.cursor_status = CursorImageStatus::Named(resize_icon(edges));
+        self.edge_cursor = true;
+
+        let start_data = GrabStartData {
+            focus: None,
+            button: BTN_LEFT,
+            location: self.pointer_position(),
+        };
+        let grab = ResizeGrab::new(start_data, window.clone(), edges, initial);
+        let pointer = self.pointer.clone();
+        pointer.set_grab(self, grab, serial, Focus::Clear);
+    }
+
+    pub fn resize_window_to(&mut self, window: &Window, size: Size<i32, Logical>) {
+        let Some(resize) = self.resize.clone() else {
+            return;
+        };
+        if &resize.window != window {
+            return;
+        }
+        let size = self.respect_minimum_size(window, size);
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Resizing);
+                state.size = Some(size);
+            });
+            toplevel.send_pending_configure();
+        }
+        if let Some(x11) = window.x11_surface() {
+            let location = resize.location_for(size);
+            self.workspaces.active_mut().map_element(window.clone(), location, false);
+            let _ = x11.configure(Rectangle::new(location, size));
+        }
+        self.mark_dirty();
+    }
+
+    fn respect_minimum_size(&self, window: &Window, size: Size<i32, Logical>) -> Size<i32, Logical> {
+        let Some(toplevel) = window.toplevel() else {
+            return size;
+        };
+        let minimum = with_states(toplevel.wl_surface(), |states| {
+            states.cached_state.get::<SurfaceCachedState>().current().min_size
+        });
+        Size::from((size.w.max(minimum.w), size.h.max(minimum.h)))
+    }
+
+    pub fn follow_resize(&mut self, window: &Window) {
+        let Some(resize) = self.resize.clone() else {
+            return;
+        };
+        if &resize.window != window {
+            return;
+        }
+        let location = resize.location_for(window.geometry().size);
+        self.workspaces.active_mut().map_element(window.clone(), location, false);
+        if resize.released {
+            self.resize = None;
+        }
+        self.mark_dirty();
+    }
+
+    pub fn finish_resize(&mut self, window: &Window) {
+        match window.toplevel() {
+            Some(toplevel) => {
+                toplevel.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Resizing);
+                });
+                toplevel.send_pending_configure();
+                if let Some(resize) = self.resize.as_mut() {
+                    resize.released = true;
+                }
+            }
+            None => self.resize = None,
+        }
+        self.cursor_status = CursorImageStatus::default_named();
+        self.edge_cursor = false;
+        self.mark_dirty();
+    }
+
     pub fn move_direction(&mut self, direction: Direction) {
         let Some(window) = self.focus.clone() else {
             return;
@@ -763,8 +889,12 @@ impl Spectre {
             if let Some((surface, point)) = window.surface_under(local, WindowSurfaceType::ALL) {
                 return Some((surface, (point + render_location).to_f64()));
             }
-            let frame = Frame::new(geometry, &metrics, self.is_decorated(window));
+            let decorated = self.is_decorated(window);
+            let frame = Frame::new(geometry, &metrics, decorated);
             if frame.outer.to_f64().contains(pos) {
+                return None;
+            }
+            if decorated && decorations::edges_at(&frame, pos).is_some() {
                 return None;
             }
         }

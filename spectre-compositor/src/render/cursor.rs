@@ -15,6 +15,21 @@ const ARROW: [(f32, f32); 7] = [
 
 const ART_HEIGHT: f32 = 19.0;
 
+const DOUBLE_ARROW: [(f32, f32); 10] = [
+    (-9.0, 0.0),
+    (-4.5, -4.5),
+    (-4.5, -1.6),
+    (4.5, -1.6),
+    (4.5, -4.5),
+    (9.0, 0.0),
+    (4.5, 4.5),
+    (4.5, 1.6),
+    (-4.5, 1.6),
+    (-4.5, 4.5),
+];
+
+const DOUBLE_ARROW_LENGTH: f32 = 18.0;
+
 const OUTLINE_RATIO: f32 = 1.0 / 14.0;
 
 pub struct CursorImage {
@@ -32,6 +47,16 @@ impl std::fmt::Debug for CursorImage {
 impl CursorImage {
     pub fn new(height: i32, fill: Color, outline: Color) -> Self {
         let art = Art::new(height);
+        Self::from_art(&art, fill, outline, (art.pad, art.pad))
+    }
+
+    pub fn double_arrow(height: i32, degrees: f32, fill: Color, outline: Color) -> Self {
+        let shape = rotated(&DOUBLE_ARROW, degrees);
+        let art = Art::from_shape(height, &shape, DOUBLE_ARROW_LENGTH);
+        Self::from_art(&art, fill, outline, art.origin)
+    }
+
+    fn from_art(art: &Art, fill: Color, outline: Color, hotspot: (i32, i32)) -> Self {
         let pixels = art.rasterise(fill, outline);
         let buffer = MemoryRenderBuffer::from_slice(
             &pixels,
@@ -41,34 +66,77 @@ impl CursorImage {
             Transform::Normal,
             None,
         );
-        Self { buffer, hotspot: (art.pad, art.pad), size: (art.width, art.height) }
+        Self { buffer, hotspot, size: (art.width, art.height) }
     }
 }
 
+#[derive(Debug)]
+pub struct ResizeCursors {
+    pub horizontal: CursorImage,
+    pub vertical: CursorImage,
+    pub falling: CursorImage,
+    pub rising: CursorImage,
+}
+
+impl ResizeCursors {
+    pub fn new(height: i32, fill: Color, outline: Color) -> Self {
+        Self {
+            horizontal: CursorImage::double_arrow(height, 0.0, fill, outline),
+            vertical: CursorImage::double_arrow(height, 90.0, fill, outline),
+            falling: CursorImage::double_arrow(height, 45.0, fill, outline),
+            rising: CursorImage::double_arrow(height, -45.0, fill, outline),
+        }
+    }
+}
+
+fn rotated(shape: &[(f32, f32)], degrees: f32) -> Vec<(f32, f32)> {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let mut points = Vec::new();
+    for (x, y) in shape {
+        points.push((x * cos - y * sin, x * sin + y * cos));
+    }
+    points
+}
+
 struct Art {
-    points: [(f32, f32); ARROW.len()],
+    points: Vec<(f32, f32)>,
     outline: f32,
     pad: i32,
     width: i32,
     height: i32,
+    origin: (i32, i32),
 }
 
 impl Art {
     fn new(height: i32) -> Self {
+        Self::from_shape(height, &ARROW, ART_HEIGHT)
+    }
+
+    fn from_shape(height: i32, shape: &[(f32, f32)], shape_height: f32) -> Self {
         let height = height.max(6);
-        let scale = height as f32 / ART_HEIGHT;
+        let scale = height as f32 / shape_height;
         let outline = (height as f32 * OUTLINE_RATIO).max(1.0);
         let pad = (outline / 2.0 + 1.0).ceil() as i32;
 
-        let mut points = ARROW;
+        let mut left = f32::MAX;
+        let mut top = f32::MAX;
+        for point in shape {
+            left = left.min(point.0);
+            top = top.min(point.1);
+        }
+
+        let mut points = Vec::new();
         let mut widest = 0.0f32;
         let mut lowest = 0.0f32;
-        for point in &mut points {
-            point.0 = point.0 * scale + pad as f32;
-            point.1 = point.1 * scale + pad as f32;
-            widest = widest.max(point.0);
-            lowest = lowest.max(point.1);
+        for point in shape {
+            let x = (point.0 - left) * scale + pad as f32;
+            let y = (point.1 - top) * scale + pad as f32;
+            widest = widest.max(x);
+            lowest = lowest.max(y);
+            points.push((x, y));
         }
+        let origin_x = (-left * scale + pad as f32).round() as i32;
+        let origin_y = (-top * scale + pad as f32).round() as i32;
 
         Self {
             outline,
@@ -76,6 +144,7 @@ impl Art {
             width: widest.ceil() as i32 + pad,
             height: lowest.ceil() as i32 + pad,
             points,
+            origin: (origin_x, origin_y),
         }
     }
 
@@ -250,6 +319,22 @@ mod tests {
     fn the_distance_to_a_degenerate_edge_is_finite() {
         let p = (1.0, 1.0);
         assert!(distance_squared(p, (0.0, 0.0), (0.0, 0.0)).is_finite());
+    }
+
+    #[test]
+    fn a_resize_cursor_is_held_at_its_middle() {
+        let image = CursorImage::double_arrow(24, 0.0, WHITE, BLACK);
+        let (x, y) = image.hotspot;
+        assert!((x - image.size.0 / 2).abs() <= 2, "hotspot x {x} of width {}", image.size.0);
+        assert!((y - image.size.1 / 2).abs() <= 2, "hotspot y {y} of height {}", image.size.1);
+    }
+
+    #[test]
+    fn the_sideways_arrow_is_wide_and_the_upright_one_tall() {
+        let sideways = CursorImage::double_arrow(24, 0.0, WHITE, BLACK);
+        let upright = CursorImage::double_arrow(24, 90.0, WHITE, BLACK);
+        assert!(sideways.size.0 > sideways.size.1);
+        assert!(upright.size.1 > upright.size.0);
     }
 
     #[test]
