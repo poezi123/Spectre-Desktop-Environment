@@ -9,6 +9,22 @@
 
 ---
 
+## Screenshots
+
+![Spectre desktop with a terminal](assets/screenshots/desktop.png)
+*The Spectre Pattern on the desktop and in the title bar, with the taskbar at the bottom.*
+
+![Application launcher](assets/screenshots/launcher.png)
+*The launcher, opened with the Super key or the logo in the taskbar.*
+
+![Spectre Settings](assets/screenshots/settings.png)
+*Spectre Settings — every change is applied to the running session.*
+
+![Workspace cube](assets/screenshots/cube.png)
+*The workspace cube: hold the pointer in the top right corner, drag to turn, click to switch.*
+
+---
+
 ## Overview
 
 **Spectre DE** is a planned desktop environment for Linux inspired by the flexibility of KDE Plasma and the low resource usage of XFCE.
