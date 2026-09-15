@@ -232,6 +232,14 @@ impl Spectre {
             Action::ToggleFloating => {
                 tracing::debug!("toggle-floating is not implemented yet");
             }
+            Action::Minimize => {
+                if let Some(window) = self.focus.clone() {
+                    self.minimize(&window);
+                }
+            }
+            Action::SnapLeft => self.snap_focused(spectre_config::Direction::Left),
+            Action::SnapRight => self.snap_focused(spectre_config::Direction::Right),
+            Action::ShowDesktop => self.toggle_show_desktop(),
             Action::Workspace { index } => {
                 self.switch_workspace(index.saturating_sub(1) as usize);
             }

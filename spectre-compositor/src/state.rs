@@ -112,6 +112,8 @@ pub struct Spectre {
     pub launcher_opening: Option<crate::animation::Slide>,
     pub launcher_closing: Option<crate::animation::LauncherClosing>,
     pub launcher_shown: bool,
+    pub snapped: Vec<(Window, spectre_config::Direction, smithay::utils::Rectangle<i32, smithay::utils::Logical>)>,
+    pub desktop_hidden: Vec<Window>,
 }
 
 impl Spectre {
@@ -220,6 +222,8 @@ impl Spectre {
             launcher_opening: None,
             launcher_closing: None,
             launcher_shown: false,
+            snapped: Vec::new(),
+            desktop_hidden: Vec::new(),
         })
     }
 

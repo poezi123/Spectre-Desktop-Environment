@@ -357,8 +357,8 @@ wallpaper and survives VT switching. `spectre-panel` sits at the bottom with
 the Spectre mark, the workspace indicator, running applications, a CPU and
 memory readout and the clock. Clients report it as `WM: spectre-compositor (Wayland)`.
 
-`spectre-launcher` is the application menu: tap the logo key on its own, press
-`Mod+D`, or click the Spectre mark. It rises out of the corner the mark sits
+`spectre-launcher` is the application menu: tap the logo key on its own
+or click the Spectre mark. It rises out of the corner the mark sits
 in, above the panel. It lists everything installed under the
 freedesktop categories, and typing searches across all of them.
 
@@ -398,7 +398,6 @@ set `[panel] enabled = false` to run a different panel.
 ```text
 Mod+Return        Terminal
 Mod               Application menu (tap the logo key on its own)
-Mod+D             Application menu
 Mod+,             Settings
 Mod+Q             Close window
 Mod+F             Fullscreen
@@ -406,7 +405,14 @@ Mod+M             Maximize
 Mod+Tab           Next window (minimized ones included)
 Mod+1..9          Switch workspace
 Mod+Shift+1..9    Move window to workspace
-Mod+arrows        Focus in a direction
+Mod+Left/Right    Snap to the left or right half (again to restore)
+Mod+Up            Maximize
+Mod+Down          Minimize
+Mod+D             Show the desktop (again to bring the windows back)
+Mod+H/J/K         Focus in a direction
+Alt+Tab           Next window
+Alt+F4            Close window
+Ctrl+Alt+T        Terminal
 Mod+Shift+arrows  Move the window
 Mod+Shift+A       Animation kill switch
 Mod+Shift+P       Cycle performance profile

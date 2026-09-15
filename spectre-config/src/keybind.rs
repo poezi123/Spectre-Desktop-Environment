@@ -124,6 +124,10 @@ pub enum Action {
     ToggleMaximize,
     ToggleFullscreen,
     ToggleFloating,
+    Minimize,
+    SnapLeft,
+    SnapRight,
+    ShowDesktop,
     Workspace { index: u8 },
     MoveToWorkspace { index: u8 },
     NextWorkspace,
@@ -176,7 +180,7 @@ impl Default for Keybinds {
         };
 
         bind(logo, "return", Action::Spawn { command: "konsole".into() });
-        bind(logo, "d", Action::ToggleLauncher);
+        bind(logo, "d", Action::ShowDesktop);
         bind(logo, "comma", Action::Spawn { command: "spectre-settings".into() });
         bind(logo, "q", Action::CloseWindow);
         bind(logo, "f", Action::ToggleFullscreen);
@@ -189,6 +193,18 @@ impl Default for Keybinds {
         bind(logo_shift, "a", Action::ToggleAnimations);
         bind(logo_shift, "p", Action::CycleProfile);
         bind(Modifiers::NONE, "print", Action::Screenshot);
+
+        let alt = Modifiers { alt: true, ..Modifiers::NONE };
+        let alt_shift = Modifiers { shift: true, ..alt };
+        let ctrl_alt = Modifiers { ctrl: true, ..alt };
+        bind(alt, "f4", Action::CloseWindow);
+        bind(alt, "tab", Action::FocusNext);
+        bind(alt_shift, "tab", Action::FocusPrev);
+        bind(ctrl_alt, "t", Action::Spawn { command: "konsole".into() });
+        bind(logo, "left", Action::SnapLeft);
+        bind(logo, "right", Action::SnapRight);
+        bind(logo, "up", Action::ToggleMaximize);
+        bind(logo, "down", Action::Minimize);
 
         let logo_ctrl = Modifiers { ctrl: true, ..logo };
         bind(logo_ctrl, "left", Action::PrevWorkspace);
@@ -207,7 +223,8 @@ impl Default for Keybinds {
             ("k", Direction::Up),
             ("j", Direction::Down),
         ] {
-            if key != "l" {
+            let arrow = matches!(key, "left" | "right" | "up" | "down");
+            if key != "l" && !arrow {
                 bind(logo, key, Action::FocusDirection { direction: dir });
             }
             bind(logo_shift, key, Action::MoveDirection { direction: dir });
@@ -298,5 +315,28 @@ mod tests {
         let w = W { binds: Keybinds::default() };
         let back: W = toml::from_str(&toml::to_string(&w).unwrap()).unwrap();
         assert_eq!(w, back);
+    }
+
+    #[test]
+    fn kde_shortcuts_work_out_of_the_box() {
+        let k = Keybinds::default();
+        assert_eq!(k.get(&parse("Alt+F4")), Some(&Action::CloseWindow));
+        assert_eq!(k.get(&parse("Alt+Tab")), Some(&Action::FocusNext));
+        assert_eq!(k.get(&parse("Alt+Shift+Tab")), Some(&Action::FocusPrev));
+        assert_eq!(k.get(&parse("Ctrl+Alt+T")), Some(&Action::Spawn { command: "konsole".into() }));
+        assert_eq!(k.get(&parse("Mod+Left")), Some(&Action::SnapLeft));
+        assert_eq!(k.get(&parse("Mod+Right")), Some(&Action::SnapRight));
+        assert_eq!(k.get(&parse("Mod+Up")), Some(&Action::ToggleMaximize));
+        assert_eq!(k.get(&parse("Mod+Down")), Some(&Action::Minimize));
+        assert_eq!(k.get(&parse("Mod+D")), Some(&Action::ShowDesktop));
+    }
+
+    #[test]
+    fn vim_keys_still_move_focus() {
+        let k = Keybinds::default();
+        let left = Action::FocusDirection { direction: Direction::Left };
+        let up = Action::FocusDirection { direction: Direction::Up };
+        assert_eq!(k.get(&parse("Mod+h")), Some(&left));
+        assert_eq!(k.get(&parse("Mod+k")), Some(&up));
     }
 }

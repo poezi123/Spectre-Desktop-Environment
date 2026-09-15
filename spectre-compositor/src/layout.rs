@@ -236,6 +236,8 @@ impl Spectre {
     pub fn unmap_window(&mut self, window: &Window) {
         self.start_closing(window);
         self.opening.retain(|(opening, _)| opening != window);
+        self.snapped.retain(|(snapped, _, _)| snapped != window);
+        self.desktop_hidden.retain(|hidden| hidden != window);
         for space in self.workspaces.iter_mut() {
             space.unmap_elem(window);
         }
@@ -387,6 +389,86 @@ impl Spectre {
 
     pub fn is_minimized(&self, window: &Window) -> bool {
         self.minimized.iter().any(|(w, _)| w == window)
+    }
+
+    pub fn snap_focused(&mut self, side: Direction) {
+        let Some(window) = self.focus.clone() else {
+            return;
+        };
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let Some(location) = self.workspaces.active().element_location(&window) else {
+            return;
+        };
+
+        let mut restore = Rectangle::new(location, window.geometry().size);
+        let mut already_there = false;
+        for (snapped, snapped_side, before) in &self.snapped {
+            if snapped == &window {
+                restore = *before;
+                already_there = *snapped_side == side;
+            }
+        }
+        self.snapped.retain(|(snapped, _, _)| snapped != &window);
+
+        if already_there {
+            self.place_exactly(&window, restore);
+            return;
+        }
+
+        if self.has_state(&window, xdg_toplevel::State::Maximized) {
+            self.set_maximized(&window, false);
+        }
+
+        let area = self.working_area(&output);
+        let top = self.top_inset(&window);
+        let mut border = 0;
+        if self.is_decorated(&window) {
+            border = self.config.theme.metrics.border_width as i32;
+        }
+        let half = area.size.w / 2;
+        let mut left = area.loc.x;
+        if side == Direction::Right {
+            left = area.loc.x + half;
+        }
+        let snapped_location = Point::from((left + border, area.loc.y + top));
+        let snapped_size = Size::from(((half - border * 2).max(1), (area.size.h - top - border).max(1)));
+        self.place_exactly(&window, Rectangle::new(snapped_location, snapped_size));
+        self.snapped.push((window, side, restore));
+    }
+
+    fn place_exactly(&mut self, window: &Window, rect: Rectangle<i32, Logical>) {
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.unset(xdg_toplevel::State::Maximized);
+                state.size = Some(rect.size);
+            });
+            toplevel.send_pending_configure();
+        }
+        self.workspaces.active_mut().map_element(window.clone(), rect.loc, true);
+        if let Some(x11) = window.x11_surface() {
+            let _ = x11.configure(rect);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn toggle_show_desktop(&mut self) {
+        let windows: Vec<Window> = self.workspaces.active().elements().cloned().collect();
+        if windows.is_empty() {
+            let hidden = std::mem::take(&mut self.desktop_hidden);
+            for window in hidden {
+                if self.is_minimized(&window) {
+                    self.restore(&window);
+                }
+            }
+            return;
+        }
+        self.desktop_hidden.clear();
+        for window in windows {
+            self.minimize(&window);
+            self.desktop_hidden.push(window);
+        }
     }
 
     pub fn move_direction(&mut self, direction: Direction) {

@@ -102,6 +102,7 @@ kind = "none"
 # focus-direction / move-direction (with `direction`), toggle-maximize,
 # toggle-fullscreen, workspace / move-to-workspace (with `index`),
 # next-workspace, prev-workspace, toggle-animations, cycle-profile,
-# toggle-launcher, lock-session, screenshot.
+# toggle-launcher, lock-session, screenshot, minimize, snap-left, snap-right,
+# show-desktop.
 [keybinds]
 "Mod+Return" = { action = "spawn", command = "konsole" }
