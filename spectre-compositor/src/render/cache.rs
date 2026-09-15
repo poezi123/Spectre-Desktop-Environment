@@ -31,6 +31,7 @@ pub struct RenderCache {
     cursor_elements: usize,
     remembered: Remembered,
     closing: HashMap<u32, TextureBuffer<GlesTexture>>,
+    launcher_geometry: Option<Rectangle<i32, Logical>>,
 }
 
 #[derive(Default)]
@@ -58,7 +59,7 @@ struct ShaderSlot {
 }
 
 impl RenderCache {
-    pub fn remember_window(&mut self, key: u32, elements: Vec<WorkspaceElement>) {
+    pub fn remember(&mut self, key: u32, elements: Vec<WorkspaceElement>) {
         self.remembered.0.insert(key, elements);
     }
 
@@ -68,6 +69,14 @@ impl RenderCache {
 
     pub fn forget_remembered(&mut self) {
         self.remembered.0.clear();
+    }
+
+    pub fn launcher_geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        self.launcher_geometry
+    }
+
+    pub fn set_launcher_geometry(&mut self, geometry: Rectangle<i32, Logical>) {
+        self.launcher_geometry = Some(geometry);
     }
 
     pub fn closing_snapshot(&self, key: u32) -> Option<&TextureBuffer<GlesTexture>> {

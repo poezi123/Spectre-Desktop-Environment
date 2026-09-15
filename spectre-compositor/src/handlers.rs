@@ -83,6 +83,7 @@ impl CompositorHandler for Spectre {
 
         self.popups.commit(surface);
         self.ensure_initial_configure(surface);
+        self.start_launcher_slide(surface);
         self.map_new_window(surface);
 
         self.update_layer_focus();
@@ -283,22 +284,30 @@ impl WlrLayerShellHandler for Spectre {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        let found = self.outputs().into_iter().find(|output| {
-            let mut map = layer_map_for_output(output);
-            let layer = map.layers().find(|l| l.layer_surface() == &surface).cloned();
-            match layer {
-                Some(layer) => {
-                    map.unmap_layer(&layer);
-                    true
-                }
-                None => false,
+        let mut found = None;
+        let mut is_launcher = false;
+        for output in self.outputs() {
+            let mut map = layer_map_for_output(&output);
+            let Some(layer) = map.layers().find(|l| l.layer_surface() == &surface).cloned() else {
+                continue;
+            };
+            if layer.namespace() == crate::render::LAUNCHER_NAMESPACE {
+                is_launcher = true;
             }
-        });
-
-        if let Some(output) = found {
-            self.reflow_output(&output);
-            self.update_layer_focus();
+            map.unmap_layer(&layer);
+            drop(map);
+            found = Some(output);
+            break;
         }
+
+        let Some(output) = found else {
+            return;
+        };
+        if is_launcher {
+            self.start_launcher_close(output.clone());
+        }
+        self.reflow_output(&output);
+        self.update_layer_focus();
     }
 }
 

@@ -109,6 +109,9 @@ pub struct Spectre {
     pub pending_overview_key: Option<smithay::input::keyboard::Keysym>,
     pub opening: Vec<(Window, crate::animation::Pop)>,
     pub closing: Vec<crate::animation::Closing>,
+    pub launcher_opening: Option<crate::animation::Slide>,
+    pub launcher_closing: Option<crate::animation::LauncherClosing>,
+    pub launcher_shown: bool,
 }
 
 impl Spectre {
@@ -214,6 +217,9 @@ impl Spectre {
             pending_overview_key: None,
             opening: Vec::new(),
             closing: Vec::new(),
+            launcher_opening: None,
+            launcher_closing: None,
+            launcher_shown: false,
         })
     }
 
@@ -375,7 +381,9 @@ impl Spectre {
         if self.transition.is_some() {
             return Some(TRANSITION_INTERVAL);
         }
-        if !self.opening.is_empty() || !self.closing.is_empty() {
+        let windows_moving = !self.opening.is_empty() || !self.closing.is_empty();
+        let launcher_moving = self.launcher_opening.is_some() || self.launcher_closing.is_some();
+        if windows_moving || launcher_moving {
             return Some(TRANSITION_INTERVAL);
         }
         if let Some(overview) = self.overview.as_ref() {

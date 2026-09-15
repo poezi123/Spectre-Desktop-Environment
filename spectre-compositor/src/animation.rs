@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use smithay::output::Output;
 use smithay::utils::{Logical, Rectangle};
 
 const OPEN_DURATION: Duration = Duration::from_millis(220);
@@ -7,6 +8,12 @@ const OPEN_DURATION: Duration = Duration::from_millis(220);
 const CLOSE_DURATION: Duration = Duration::from_millis(170);
 
 const SMALLEST: f64 = 0.85;
+
+const SLIDE_IN_DURATION: Duration = Duration::from_millis(200);
+
+const SLIDE_OUT_DURATION: Duration = Duration::from_millis(150);
+
+const SLIDE_DISTANCE: f64 = 40.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pop {
@@ -25,12 +32,7 @@ impl Pop {
     }
 
     fn progress(&self, now: Instant) -> f32 {
-        let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
-        let total = self.duration.as_secs_f32();
-        if total <= 0.0 {
-            return 1.0;
-        }
-        (elapsed / total).clamp(0.0, 1.0)
+        progress(self.started, self.duration, now)
     }
 
     pub fn is_done(&self, now: Instant) -> bool {
@@ -57,11 +59,66 @@ impl Pop {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slide {
+    started: Instant,
+    duration: Duration,
+    opening: bool,
+}
+
+impl Slide {
+    pub fn opening(now: Instant, speed: f32) -> Self {
+        Self { started: now, duration: scaled(SLIDE_IN_DURATION, speed), opening: true }
+    }
+
+    pub fn closing(now: Instant, speed: f32) -> Self {
+        Self { started: now, duration: scaled(SLIDE_OUT_DURATION, speed), opening: false }
+    }
+
+    pub fn is_done(&self, now: Instant) -> bool {
+        progress(self.started, self.duration, now) >= 1.0
+    }
+
+    pub fn offset(&self, now: Instant) -> f64 {
+        let t = progress(self.started, self.duration, now) as f64;
+        if self.opening {
+            let rest = 1.0 - t;
+            SLIDE_DISTANCE * rest * rest * rest
+        } else {
+            SLIDE_DISTANCE * t * t
+        }
+    }
+
+    pub fn alpha(&self, now: Instant) -> f32 {
+        let t = progress(self.started, self.duration, now);
+        if self.opening {
+            1.0 - (1.0 - t) * (1.0 - t)
+        } else {
+            1.0 - t
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LauncherClosing {
+    pub output: Output,
+    pub slide: Slide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Closing {
     pub key: u32,
     pub workspace: usize,
     pub outer: Rectangle<i32, Logical>,
     pub pop: Pop,
+}
+
+fn progress(started: Instant, duration: Duration, now: Instant) -> f32 {
+    let elapsed = now.saturating_duration_since(started).as_secs_f32();
+    let total = duration.as_secs_f32();
+    if total <= 0.0 {
+        return 1.0;
+    }
+    (elapsed / total).clamp(0.0, 1.0)
 }
 
 fn scaled(duration: Duration, speed: f32) -> Duration {
@@ -138,5 +195,35 @@ mod tests {
             let pop = Pop::opening(now, speed);
             assert!(pop.is_done(at(now, 2000)), "speed {speed}");
         }
+    }
+
+    #[test]
+    fn the_launcher_starts_below_its_place_and_invisible() {
+        let now = Instant::now();
+        let slide = Slide::opening(now, 1.0);
+        assert!((slide.offset(now) - SLIDE_DISTANCE).abs() < 1e-6);
+        assert!(slide.alpha(now) < 1e-6);
+    }
+
+    #[test]
+    fn the_launcher_ends_in_its_place() {
+        let now = Instant::now();
+        let slide = Slide::opening(now, 1.0);
+        let end = at(now, 400);
+        assert!(slide.is_done(end));
+        assert!(slide.offset(end).abs() < 1e-6);
+        assert!((slide.alpha(end) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_closing_launcher_sinks_and_fades_out() {
+        let now = Instant::now();
+        let slide = Slide::closing(now, 1.0);
+        assert!(slide.offset(now).abs() < 1e-6);
+        assert!((slide.alpha(now) - 1.0).abs() < 1e-6);
+        let end = at(now, 400);
+        assert!(slide.is_done(end));
+        assert!((slide.offset(end) - SLIDE_DISTANCE).abs() < 1e-6);
+        assert!(slide.alpha(end) < 1e-6);
     }
 }

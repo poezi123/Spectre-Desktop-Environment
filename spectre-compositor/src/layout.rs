@@ -1,12 +1,14 @@
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::{layer_map_for_output, Window, WindowSurfaceType};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
 use spectre_config::Direction;
 
-use crate::animation::{Closing, Pop};
-use crate::render::{decorations, Frame, Part};
+use crate::animation::{Closing, LauncherClosing, Pop, Slide};
+use crate::render::{decorations, Frame, Part, LAUNCHER_NAMESPACE};
 use crate::state::Spectre;
 
 const CASCADE_STEP: i32 = 28;
@@ -175,9 +177,60 @@ impl Spectre {
         let before = self.opening.len() + self.closing.len();
         self.opening.retain(|(_, pop)| !pop.is_done(now));
         self.closing.retain(|closing| !closing.pop.is_done(now));
-        if self.opening.len() + self.closing.len() != before {
+        let mut changed = self.opening.len() + self.closing.len() != before;
+        if let Some(slide) = self.launcher_opening {
+            if slide.is_done(now) {
+                self.launcher_opening = None;
+                changed = true;
+            }
+        }
+        if let Some(closing) = self.launcher_closing.as_ref() {
+            if closing.slide.is_done(now) {
+                self.launcher_closing = None;
+                changed = true;
+            }
+        }
+        if changed {
             self.mark_dirty();
         }
+    }
+
+    pub fn start_launcher_slide(&mut self, surface: &WlSurface) {
+        if self.launcher_shown || !self.is_launcher(surface) {
+            return;
+        }
+        let has_buffer = with_renderer_surface_state(surface, |state| state.buffer().is_some());
+        if has_buffer != Some(true) {
+            return;
+        }
+        self.launcher_shown = true;
+        self.launcher_closing = None;
+        if self.config.effects.window_animations {
+            let slide = Slide::opening(std::time::Instant::now(), self.config.effects.animation_speed);
+            self.launcher_opening = Some(slide);
+        }
+        self.mark_dirty();
+    }
+
+    fn is_launcher(&self, surface: &WlSurface) -> bool {
+        for output in self.outputs() {
+            let map = layer_map_for_output(&output);
+            if let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL) {
+                return layer.namespace() == LAUNCHER_NAMESPACE;
+            }
+        }
+        false
+    }
+
+    pub fn start_launcher_close(&mut self, output: Output) {
+        self.launcher_shown = false;
+        self.launcher_opening = None;
+        if !self.config.effects.window_animations {
+            return;
+        }
+        let slide = Slide::closing(std::time::Instant::now(), self.config.effects.animation_speed);
+        self.launcher_closing = Some(LauncherClosing { output, slide });
+        self.mark_dirty();
     }
 
     pub fn unmap_window(&mut self, window: &Window) {

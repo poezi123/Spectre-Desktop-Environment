@@ -56,6 +56,10 @@ render_elements! {
 
 type MovedElement = RelocateRenderElement<RescaleRenderElement<WorkspaceElement>>;
 
+pub const LAUNCHER_NAMESPACE: &str = "spectre-launcher";
+
+const LAUNCHER_KEY: u32 = u32::MAX;
+
 render_elements! {
     pub SpectreElement<=GlesRenderer>;
     Plain = WorkspaceElement,
@@ -100,18 +104,15 @@ fn build_output_elements(
         cache.set_snapshots(Vec::new(), Size::from((0, 0)));
     }
 
+    capture_closing(state, output, renderer, cache, scale);
+
     let mut elements: Vec<SpectreElement> = Vec::new();
 
     let cursor = cursor_elements(state, output, renderer, scale);
     cache.set_cursor_elements(cursor.len());
     elements.extend(cursor.into_iter().map(SpectreElement::Plain));
 
-    elements.extend(
-        layer_elements(output, renderer, scale, true)
-            .into_iter()
-            .map(WorkspaceElement::Surface)
-            .map(SpectreElement::Plain),
-    );
+    elements.extend(layer_elements(state, output, renderer, cache, scale, true));
 
     match state.transition.as_ref() {
         Some(transition) => {
@@ -137,12 +138,7 @@ fn build_output_elements(
         }
     }
 
-    elements.extend(
-        layer_elements(output, renderer, scale, false)
-            .into_iter()
-            .map(WorkspaceElement::Surface)
-            .map(SpectreElement::Plain),
-    );
+    elements.extend(layer_elements(state, output, renderer, cache, scale, false));
 
     if let Some(area) = geometry {
         if let Some(element) = wallpaper_element(state, renderer, area, scale) {
@@ -448,14 +444,23 @@ fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gra
 }
 
 fn layer_elements(
+    state: &Spectre,
     output: &Output,
     renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
     scale: f64,
     upper: bool,
-) -> Vec<SurfaceElement> {
-    let map = layer_map_for_output(output);
+) -> Vec<SpectreElement> {
+    let now = std::time::Instant::now();
     let mut elements = Vec::new();
 
+    if upper {
+        if let Some(element) = launcher_closing_element(state, output, cache, scale, now) {
+            elements.push(element);
+        }
+    }
+
+    let map = layer_map_for_output(output);
     for layer in map.layers().rev() {
         let is_upper = matches!(layer.layer(), WlrLayer::Overlay | WlrLayer::Top);
         if is_upper != upper {
@@ -464,13 +469,48 @@ fn layer_elements(
         let Some(geometry) = map.layer_geometry(layer) else {
             continue;
         };
-        elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
+        let location = geometry.loc.to_physical_precise_round(scale);
+        let is_launcher = layer.namespace() == LAUNCHER_NAMESPACE;
+
+        let mut slide = None;
+        if is_launcher {
+            slide = state.launcher_opening;
+        }
+        let mut alpha = 1.0;
+        if let Some(slide) = slide {
+            alpha = slide.alpha(now);
+        }
+
+        let surfaces = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
             layer,
             renderer,
-            geometry.loc.to_physical_precise_round(scale),
+            location,
             Scale::from(scale),
-            1.0,
-        ));
+            alpha,
+        );
+        if is_launcher && state.config.effects.window_animations {
+            let copy = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
+                layer,
+                renderer,
+                location,
+                Scale::from(scale),
+                1.0,
+            );
+            let copy = copy.into_iter().map(WorkspaceElement::Surface).collect();
+            cache.remember(LAUNCHER_KEY, copy);
+            cache.set_launcher_geometry(geometry);
+        }
+
+        let Some(slide) = slide else {
+            for surface in surfaces {
+                elements.push(SpectreElement::Plain(WorkspaceElement::Surface(surface)));
+            }
+            continue;
+        };
+        let down = slide.offset(now) * scale;
+        for surface in surfaces {
+            elements.push(SpectreElement::Moved(shift(WorkspaceElement::Surface(surface), down)));
+        }
     }
     elements
 }
@@ -533,18 +573,19 @@ fn active_workspace_elements(
     };
     let now = std::time::Instant::now();
 
-    let mut closing_keys = Vec::new();
     for closing in &state.closing {
-        closing_keys.push(closing.key);
         if closing.workspace != index {
             continue;
         }
-        if let Some(element) = closing_element(renderer, cache, closing, region, scale, now) {
-            elements.push(element);
-        }
+        let local = Rectangle::new(closing.outer.loc - region.loc, closing.outer.size);
+        let alpha = closing.pop.alpha(now);
+        let Some(snapshot) = snapshot_element(cache, closing.key, local, scale, alpha) else {
+            continue;
+        };
+        let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+        let center = physical.loc + Point::from((physical.size.w / 2, physical.size.h / 2));
+        elements.push(SpectreElement::Moved(scale_about(snapshot, center, closing.pop.scale(now))));
     }
-    cache.keep_closing_snapshots(&closing_keys);
-    cache.forget_remembered();
 
     let remember = state.config.effects.window_animations;
     let metrics = state.config.theme.metrics;
@@ -562,7 +603,7 @@ fn active_workspace_elements(
             let copy = window_elements(
                 state, output, renderer, shader, cache, space, region, window, 1.0, &mut text,
             );
-            cache.remember_window(element_key(window), copy);
+            cache.remember(element_key(window), copy);
         }
 
         let Some(pop) = pop else {
@@ -583,41 +624,105 @@ fn active_workspace_elements(
     elements
 }
 
-fn closing_element(
+fn capture_closing(
+    state: &Spectre,
+    output: &Output,
     renderer: &mut GlesRenderer,
     cache: &mut RenderCache,
-    closing: &crate::animation::Closing,
-    region: Rectangle<i32, Logical>,
     scale: f64,
-    now: std::time::Instant,
-) -> Option<SpectreElement> {
-    let local = Rectangle::new(closing.outer.loc - region.loc, closing.outer.size);
-    let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
-
-    if cache.closing_snapshot(closing.key).is_none() {
-        let remembered = cache.take_remembered(closing.key)?;
-        let offset = Point::<i32, Physical>::from((-physical.loc.x, -physical.loc.y));
-        let mut moved = Vec::new();
-        for element in remembered {
-            moved.push(RelocateRenderElement::from_element(element, offset, Relocate::Relative));
-        }
-        let texture = cube::capture(renderer, physical.size, &moved, [0.0, 0.0, 0.0, 0.0])?;
-        let snapshot = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
-        cache.set_closing_snapshot(closing.key, snapshot);
+) {
+    let mut keys = Vec::new();
+    for closing in &state.closing {
+        keys.push(closing.key);
+        let Some(space) = state.workspaces.get(closing.workspace) else {
+            continue;
+        };
+        let Some(region) = space.output_geometry(output) else {
+            continue;
+        };
+        let local = Rectangle::new(closing.outer.loc - region.loc, closing.outer.size);
+        capture_once(renderer, cache, closing.key, local, scale);
     }
+    if let Some(closing) = state.launcher_closing.as_ref() {
+        keys.push(LAUNCHER_KEY);
+        if &closing.output == output {
+            if let Some(geometry) = cache.launcher_geometry() {
+                capture_once(renderer, cache, LAUNCHER_KEY, geometry, scale);
+            }
+        }
+    }
+    cache.keep_closing_snapshots(&keys);
+    cache.forget_remembered();
+}
 
-    let snapshot = cache.closing_snapshot(closing.key)?;
+fn capture_once(
+    renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
+    key: u32,
+    local: Rectangle<i32, Logical>,
+    scale: f64,
+) {
+    if cache.closing_snapshot(key).is_some() {
+        return;
+    }
+    let Some(remembered) = cache.take_remembered(key) else {
+        return;
+    };
+    let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+    let offset = Point::<i32, Physical>::from((-physical.loc.x, -physical.loc.y));
+    let mut moved = Vec::new();
+    for element in remembered {
+        moved.push(RelocateRenderElement::from_element(element, offset, Relocate::Relative));
+    }
+    let Some(texture) = cube::capture(renderer, physical.size, &moved, [0.0, 0.0, 0.0, 0.0]) else {
+        return;
+    };
+    let snapshot = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    cache.set_closing_snapshot(key, snapshot);
+}
+
+fn snapshot_element(
+    cache: &RenderCache,
+    key: u32,
+    local: Rectangle<i32, Logical>,
+    scale: f64,
+    alpha: f32,
+) -> Option<WorkspaceElement> {
+    let snapshot = cache.closing_snapshot(key)?;
+    let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
     let element = TextureRenderElement::from_texture_buffer(
         physical.loc.to_f64(),
         snapshot,
-        Some(closing.pop.alpha(now)),
+        Some(alpha),
         None,
         None,
         Kind::Unspecified,
     );
-    let center = physical.loc + Point::from((physical.size.w / 2, physical.size.h / 2));
-    let scaled = scale_about(WorkspaceElement::Snapshot(element), center, closing.pop.scale(now));
-    Some(SpectreElement::Moved(scaled))
+    Some(WorkspaceElement::Snapshot(element))
+}
+
+fn launcher_closing_element(
+    state: &Spectre,
+    output: &Output,
+    cache: &RenderCache,
+    scale: f64,
+    now: std::time::Instant,
+) -> Option<SpectreElement> {
+    let closing = state.launcher_closing.as_ref()?;
+    if &closing.output != output {
+        return None;
+    }
+    let geometry = cache.launcher_geometry()?;
+    let alpha = closing.slide.alpha(now);
+    let snapshot = snapshot_element(cache, LAUNCHER_KEY, geometry, scale, alpha)?;
+    let down = closing.slide.offset(now) * scale;
+    Some(SpectreElement::Moved(shift(snapshot, down)))
+}
+
+fn shift(element: WorkspaceElement, down: f64) -> MovedElement {
+    let kept = RescaleRenderElement::from_element(element, Point::<i32, Physical>::from((0, 0)), 1.0);
+    let offset = Point::<i32, Physical>::from((0, down.round() as i32));
+    RelocateRenderElement::from_element(kept, offset, Relocate::Relative)
 }
 
 fn scale_about(element: WorkspaceElement, center: Point<i32, Physical>, factor: f64) -> MovedElement {
