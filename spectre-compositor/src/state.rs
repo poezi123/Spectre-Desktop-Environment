@@ -76,6 +76,7 @@ pub struct Spectre {
     pub seat_name: String,
     pub pointer: PointerHandle<Self>,
     pub cursor_status: CursorImageStatus,
+    pub pointer_surface: Option<WlSurface>,
 
     pub workspaces: Workspaces,
     pub pending_windows: Vec<Window>,
@@ -182,6 +183,7 @@ impl Spectre {
             seat_name: seat_name.to_owned(),
             pointer,
             cursor_status: CursorImageStatus::default_named(),
+            pointer_surface: None,
             workspaces,
             pending_windows: Vec::new(),
             minimized: Vec::new(),

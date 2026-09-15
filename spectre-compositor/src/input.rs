@@ -4,8 +4,9 @@ use smithay::backend::input::{
 };
 use smithay::input::keyboard::{keysyms, FilterResult, Keysym, ModifiersState};
 use smithay::input::pointer::{
-    AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent,
+    AxisFrame, ButtonEvent, CursorImageStatus, Focus, GrabStartData, MotionEvent, RelativeMotionEvent,
 };
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Point, SERIAL_COUNTER};
 use spectre_config::{Action, Keybind, Modifiers, Profile};
@@ -122,6 +123,14 @@ impl Spectre {
             _ => {}
         }
         self.mark_dirty();
+    }
+
+    fn forget_cursor_of_old_surface(&mut self, surface: Option<&WlSurface>) {
+        if self.pointer_surface.as_ref() == surface {
+            return;
+        }
+        self.pointer_surface = surface.cloned();
+        self.cursor_status = CursorImageStatus::default_named();
     }
 
     fn pointer_in_hot_corner(&self) -> bool {
@@ -383,6 +392,7 @@ impl Spectre {
             return;
         }
         let under = self.surface_under_pointer();
+        self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
 
         let pointer = self.pointer.clone();
         pointer.motion(
@@ -421,6 +431,7 @@ impl Spectre {
             return;
         }
         let under = self.surface_under_pointer();
+        self.forget_cursor_of_old_surface(under.as_ref().map(|(surface, _)| surface));
 
         let pointer = self.pointer.clone();
         pointer.motion(self, under, &MotionEvent { location, serial, time: event.time_msec() });

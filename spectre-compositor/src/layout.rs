@@ -556,10 +556,24 @@ impl Spectre {
                 .map(|(s, p)| (s, (p + loc).to_f64()));
         }
 
-        if let Some((window, loc)) = self.workspaces.active().element_under(pos) {
-            return window
-                .surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
-                .map(|(s, p)| (s, (p + loc).to_f64()));
+        let space = self.workspaces.active();
+        let metrics = self.config.theme.metrics;
+        for window in space.elements().rev() {
+            let Some(geometry) = space.element_geometry(window) else {
+                continue;
+            };
+            let Some(location) = space.element_location(window) else {
+                continue;
+            };
+            let render_location = location - window.geometry().loc;
+            let local = pos - render_location.to_f64();
+            if let Some((surface, point)) = window.surface_under(local, WindowSurfaceType::ALL) {
+                return Some((surface, (point + render_location).to_f64()));
+            }
+            let frame = Frame::new(geometry, &metrics, self.is_decorated(window));
+            if frame.outer.to_f64().contains(pos) {
+                return None;
+            }
         }
 
         let below = layers
