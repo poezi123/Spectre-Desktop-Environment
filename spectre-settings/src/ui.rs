@@ -14,6 +14,8 @@ pub const LABEL_SIZE: f32 = 13.0;
 pub const HELP_SIZE: f32 = 10.5;
 pub const MARKER_WIDTH: i32 = 3;
 pub const CONTROL_WIDTH: i32 = 190;
+pub const OPTION_HEIGHT: i32 = 26;
+pub const MAX_OPTIONS: usize = 8;
 
 pub fn window_size(output_width: i32, output_height: i32) -> (i32, i32) {
     let width = (output_width * 3 / 5).clamp(560, 880).min(output_width.max(1));
@@ -56,6 +58,36 @@ pub fn control_rect(row: Rect) -> Rect {
     Rect::new(row.right() - PADDING - width, row.y + (row.h - 20) / 2, width, 20)
 }
 
+pub struct DropdownView<'a> {
+    pub row: usize,
+    pub options: &'a [String],
+    pub selected: usize,
+    pub highlighted: usize,
+    pub first: usize,
+}
+
+pub fn dropdown_rect(width: i32, height: i32, row: usize, count: usize) -> Rect {
+    let control = control_rect(row_rect(width, row));
+    let visible = count.min(MAX_OPTIONS) as i32;
+    let list_height = visible * OPTION_HEIGHT + 4;
+    let mut y = control.bottom() + 2;
+    if y + list_height > height {
+        y = (control.y - 2 - list_height).max(0);
+    }
+    Rect::new(control.x, y, control.w, list_height)
+}
+
+pub fn option_at(list: Rect, first: usize, count: usize, x: i32, y: i32) -> Option<usize> {
+    if !list.contains(x, y) {
+        return None;
+    }
+    let index = first + ((y - list.y - 2) / OPTION_HEIGHT).max(0) as usize;
+    if index >= count {
+        return None;
+    }
+    Some(index)
+}
+
 pub struct Frame<'a> {
     pub theme: &'a Theme,
     pub sections: &'a [Section],
@@ -66,6 +98,7 @@ pub struct Frame<'a> {
     pub status: &'a str,
     pub reset_armed: bool,
     pub wallpaper_thumbnail: Option<&'a Image>,
+    pub dropdown: Option<DropdownView<'a>>,
 }
 
 pub fn settings_pattern(theme: &Theme) -> Pattern {
@@ -125,6 +158,61 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
             }
         }
         draw_control(canvas, text, control, &row.control, selected, frame.reset_armed, palette);
+    }
+
+    if let Some(view) = frame.dropdown.as_ref() {
+        draw_dropdown(canvas, text, bounds, view, palette);
+    }
+}
+
+fn draw_dropdown(
+    canvas: &mut Canvas,
+    text: &mut TextRenderer,
+    bounds: Rect,
+    view: &DropdownView<'_>,
+    palette: &Palette,
+) {
+    let list = dropdown_rect(bounds.w, bounds.h, view.row, view.options.len());
+    canvas.fill_rect(list, palette.line);
+    canvas.fill_rect(list.inset(1), palette.elevated);
+
+    let visible = view.options.len().min(MAX_OPTIONS);
+    for slot in 0..visible {
+        let index = view.first + slot;
+        let Some(option) = view.options.get(index) else {
+            break;
+        };
+        let item = Rect::new(
+            list.x + 2,
+            list.y + 2 + slot as i32 * OPTION_HEIGHT,
+            list.w - 4,
+            OPTION_HEIGHT,
+        );
+        if index == view.highlighted {
+            canvas.fill_rect(item, palette.overlay);
+        }
+        if index == view.selected {
+            let marker = Rect::new(item.x, item.y + 5, MARKER_WIDTH, item.h - 10);
+            canvas.fill_rect(marker, palette.accent.sample(0.3));
+        }
+        let mut color = palette.text_dim;
+        if index == view.highlighted || index == view.selected {
+            color = palette.text;
+        }
+        let label = Label::new(option.as_str())
+            .size(LABEL_SIZE)
+            .color(color)
+            .max_width((item.w - 20).max(1) as u32)
+            .ellipsis(EllipsisSide::End);
+        let image = text.rasterise(&label);
+        let y = item.y + (item.h - image.height as i32) / 2;
+        canvas.draw_image(item.x + MARKER_WIDTH + 8, y, &image);
+    }
+}
+
+fn draw_chevron(canvas: &mut Canvas, x: i32, y: i32, color: spectre_theme::Color) {
+    for step in 0..4 {
+        canvas.fill_rect(Rect::new(x + step, y + step, 7 - step * 2, 1), color);
     }
 }
 
@@ -213,15 +301,11 @@ fn draw_control(
             let image = text.rasterise(&label);
             let y = rect.y + (rect.h - image.height as i32) / 2;
             canvas.draw_image(rect.right() - 14 - image.width as i32, y, &image);
+            let mut chevron = palette.text_muted;
             if selected {
-                let accent = palette.accent.sample(0.5);
-                let left =
-                    text.rasterise(&Label::new("\u{2039}").size(LABEL_SIZE).color(accent));
-                let right =
-                    text.rasterise(&Label::new("\u{203a}").size(LABEL_SIZE).color(accent));
-                canvas.draw_image(rect.x, y, &left);
-                canvas.draw_image(rect.right() - right.width as i32, y, &right);
+                chevron = palette.accent.sample(0.5);
             }
+            draw_chevron(canvas, rect.right() - 8, rect.y + rect.h / 2 - 2, chevron);
         }
         Control::Slider { value, label } => {
             let bar = Rect::new(rect.x + 40, rect.y + 7, (rect.w - 40).max(1), 4);
@@ -341,5 +425,40 @@ mod tests {
         assert_eq!(visible_rows(0), 0);
         assert_eq!(visible_rows(HEADER_HEIGHT), 0);
         assert_eq!(visible_rows(HEADER_HEIGHT + ROW_HEIGHT * 3), 3);
+    }
+}
+
+#[cfg(test)]
+mod dropdown_tests {
+    use super::*;
+
+    #[test]
+    fn the_list_opens_below_the_row_when_there_is_room() {
+        let control = control_rect(row_rect(800, 0));
+        let list = dropdown_rect(800, 600, 0, 5);
+        assert!(list.y > control.y);
+        assert_eq!(list.h, 5 * OPTION_HEIGHT + 4);
+    }
+
+    #[test]
+    fn the_list_opens_upwards_near_the_bottom() {
+        let row = visible_rows(600) - 1;
+        let control = control_rect(row_rect(800, row));
+        let list = dropdown_rect(800, 600, row, 8);
+        assert!(list.bottom() <= control.y);
+    }
+
+    #[test]
+    fn a_long_list_shows_only_a_few_entries() {
+        let list = dropdown_rect(800, 900, 0, 40);
+        assert_eq!(list.h, MAX_OPTIONS as i32 * OPTION_HEIGHT + 4);
+    }
+
+    #[test]
+    fn clicking_an_entry_picks_it_counting_the_scroll() {
+        let list = dropdown_rect(800, 900, 0, 40);
+        let y = list.y + 2 + OPTION_HEIGHT * 2 + OPTION_HEIGHT / 2;
+        assert_eq!(option_at(list, 10, 40, list.x + 10, y), Some(12));
+        assert_eq!(option_at(list, 10, 40, list.x - 5, y), None);
     }
 }

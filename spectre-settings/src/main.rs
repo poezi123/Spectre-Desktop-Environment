@@ -106,6 +106,7 @@ fn main() -> anyhow::Result<()> {
         section: 0,
         row: 0,
         dragging: None,
+        dropdown: None,
         armed_at: None,
         thumbnails: thumbnail::Cache::default(),
         status: String::new(),
@@ -171,11 +172,18 @@ struct App {
     section: usize,
     row: usize,
     dragging: Option<Field>,
+    dropdown: Option<Dropdown>,
     armed_at: Option<Instant>,
     thumbnails: thumbnail::Cache,
     status: String,
     ipc: Option<Client>,
     started: Instant,
+}
+
+struct Dropdown {
+    row: usize,
+    highlighted: usize,
+    first: usize,
 }
 
 impl App {
@@ -308,6 +316,18 @@ impl App {
             Some(path) => self.thumbnails.get(path, THUMBNAIL_SIZE),
             None => None,
         };
+        let mut dropdown = None;
+        if let Some(open) = self.dropdown.as_ref() {
+            if let Some((selected, options)) = choice_of(&sections, self.section, open.row) {
+                dropdown = Some(ui::DropdownView {
+                    row: open.row,
+                    options,
+                    selected,
+                    highlighted: open.highlighted,
+                    first: open.first,
+                });
+            }
+        }
         let frame = ui::Frame {
             theme: &self.settings.config.theme,
             sections: &sections,
@@ -318,6 +338,7 @@ impl App {
             status: &self.status,
             reset_armed,
             wallpaper_thumbnail,
+            dropdown,
         };
         ui::draw(&mut self.canvas, &mut self.text, &frame);
 
@@ -396,6 +417,11 @@ impl KeyboardHandler for App {
         _serial: u32,
         event: KeyEvent,
     ) {
+        if self.dropdown.is_some() {
+            self.dropdown_key(event.keysym);
+            self.redraw_if_needed();
+            return;
+        }
         match event.keysym {
             Keysym::Escape | Keysym::q => self.exit = true,
             Keysym::Down => self.move_row(1),
@@ -404,7 +430,7 @@ impl KeyboardHandler for App {
             Keysym::ISO_Left_Tab | Keysym::Page_Up => self.move_section(-1),
             Keysym::Right | Keysym::plus | Keysym::equal => self.edit(1),
             Keysym::Left | Keysym::minus => self.edit(-1),
-            Keysym::Return | Keysym::KP_Enter | Keysym::space => self.edit(1),
+            Keysym::Return | Keysym::KP_Enter | Keysym::space => self.activate_row(),
             _ => {}
         }
         self.redraw_if_needed();
@@ -460,6 +486,7 @@ impl PointerHandler for App {
                 (event.position.0 as i32 * self.scale, event.position.1 as i32 * self.scale);
             let (w, h) = (self.width * self.scale, self.height * self.scale);
             match event.kind {
+                PointerEventKind::Motion { .. } if self.dropdown.is_some() => self.hover_dropdown(x, y),
                 PointerEventKind::Motion { .. } => match self.dragging {
                     Some(field) => {
                         let rect = ui::control_rect(ui::row_rect(w, self.row));
@@ -482,6 +509,10 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                    if self.dropdown.is_some() {
+                        self.click_dropdown(x, y);
+                        continue;
+                    }
                     if let Some(section) = ui::section_at(self.sections().len(), x, y) {
                         if section != self.section {
                             self.section = section;
@@ -495,6 +526,9 @@ impl PointerHandler for App {
                         }
                     }
                 }
+                PointerEventKind::Axis { vertical, .. } if vertical.discrete != 0 && self.dropdown.is_some() => {
+                    self.scroll_dropdown(vertical.discrete as isize);
+                }
                 PointerEventKind::Axis { vertical, .. } if vertical.discrete != 0 => {
                     self.move_row(vertical.discrete as isize);
                 }
@@ -506,6 +540,139 @@ impl PointerHandler for App {
 }
 
 impl App {
+    fn current_choice(&self) -> Option<(Field, usize, usize)> {
+        let section = self.sections().into_iter().nth(self.section)?;
+        let row = section.rows.get(self.row)?;
+        match &row.control {
+            Control::Choice { index, options } => Some((row.field, *index, options.len())),
+            _ => None,
+        }
+    }
+
+    fn activate_row(&mut self) {
+        if self.current_choice().is_some() {
+            self.open_dropdown();
+            return;
+        }
+        self.edit(1);
+    }
+
+    fn open_dropdown(&mut self) {
+        let Some((_, index, _)) = self.current_choice() else {
+            return;
+        };
+        let mut first = 0;
+        if index >= ui::MAX_OPTIONS {
+            first = index + 1 - ui::MAX_OPTIONS;
+        }
+        self.dropdown = Some(Dropdown { row: self.row, highlighted: index, first });
+        self.dirty = true;
+    }
+
+    fn close_dropdown(&mut self) {
+        self.dropdown = None;
+        self.dirty = true;
+    }
+
+    fn dropdown_rect(&self) -> Option<(spectre_draw::Rect, usize)> {
+        let open = self.dropdown.as_ref()?;
+        let (_, _, count) = self.current_choice()?;
+        let (w, h) = (self.width * self.scale, self.height * self.scale);
+        Some((ui::dropdown_rect(w, h, open.row, count), count))
+    }
+
+    fn click_dropdown(&mut self, x: i32, y: i32) {
+        let Some((list, count)) = self.dropdown_rect() else {
+            self.close_dropdown();
+            return;
+        };
+        let Some(open) = self.dropdown.as_ref() else {
+            return;
+        };
+        match ui::option_at(list, open.first, count, x, y) {
+            Some(index) => self.pick(index),
+            None => self.close_dropdown(),
+        }
+    }
+
+    fn hover_dropdown(&mut self, x: i32, y: i32) {
+        let Some((list, count)) = self.dropdown_rect() else {
+            return;
+        };
+        let mut changed = false;
+        if let Some(open) = self.dropdown.as_mut() {
+            if let Some(index) = ui::option_at(list, open.first, count, x, y) {
+                if open.highlighted != index {
+                    open.highlighted = index;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.dirty = true;
+        }
+    }
+
+    fn scroll_dropdown(&mut self, delta: isize) {
+        let Some((_, _, count)) = self.current_choice() else {
+            return;
+        };
+        let Some(open) = self.dropdown.as_mut() else {
+            return;
+        };
+        let last_first = count.saturating_sub(ui::MAX_OPTIONS);
+        open.first = (open.first as isize + delta).clamp(0, last_first as isize) as usize;
+        self.dirty = true;
+    }
+
+    fn dropdown_key(&mut self, key: Keysym) {
+        let Some((_, _, count)) = self.current_choice() else {
+            self.close_dropdown();
+            return;
+        };
+        let Some(open) = self.dropdown.as_ref() else {
+            return;
+        };
+        let highlighted = open.highlighted;
+        match key {
+            Keysym::Escape => self.close_dropdown(),
+            Keysym::Return | Keysym::KP_Enter | Keysym::space => self.pick(highlighted),
+            Keysym::Down => self.highlight(highlighted + 1, count),
+            Keysym::Up if highlighted > 0 => self.highlight(highlighted - 1, count),
+            _ => {}
+        }
+    }
+
+    fn highlight(&mut self, index: usize, count: usize) {
+        if index >= count {
+            return;
+        }
+        let Some(open) = self.dropdown.as_mut() else {
+            return;
+        };
+        open.highlighted = index;
+        if index < open.first {
+            open.first = index;
+        }
+        if index >= open.first + ui::MAX_OPTIONS {
+            open.first = index + 1 - ui::MAX_OPTIONS;
+        }
+        self.dirty = true;
+    }
+
+    fn pick(&mut self, index: usize) {
+        let Some((field, current, _)) = self.current_choice() else {
+            self.close_dropdown();
+            return;
+        };
+        self.close_dropdown();
+        let delta = index as i32 - current as i32;
+        if delta != 0 && self.settings.step(field, delta) {
+            self.apply();
+        }
+        self.dirty = true;
+    }
+
     fn click_row(&mut self, x: i32, y: i32) {
         let rect = ui::row_rect(self.width * self.scale, self.row);
         let control = ui::control_rect(rect);
@@ -521,10 +688,7 @@ impl App {
                 self.dragging = Some(row.field);
                 self.set_slider(ui::slider_value_at(control, x));
             }
-            Control::Choice { .. } if control.contains(x, y) => {
-                let forward = x > control.x + control.w / 2;
-                self.edit(if forward { 1 } else { -1 })
-            }
+            Control::Choice { .. } if control.contains(x, y) => self.open_dropdown(),
             _ => self.edit(1),
         }
     }
@@ -664,3 +828,11 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+fn choice_of(sections: &[model::Section], section: usize, row: usize) -> Option<(usize, &[String])> {
+    let row = sections.get(section)?.rows.get(row)?;
+    match &row.control {
+        Control::Choice { index, options } => Some((*index, options.as_slice())),
+        _ => None,
+    }
+}
