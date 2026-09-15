@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::os::unix::io::OwnedFd;
 use std::time::Duration;
 
 use smithay::delegate_xwayland_shell;
@@ -8,6 +9,15 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, XwmId};
+use smithay::wayland::selection::data_device::{
+    clear_data_device_selection, current_data_device_selection_userdata,
+    request_data_device_client_selection, set_data_device_selection,
+};
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, current_primary_selection_userdata, request_primary_client_selection,
+    set_primary_selection,
+};
+use smithay::wayland::selection::SelectionTarget;
 use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 
 use crate::state::Spectre;
@@ -105,6 +115,54 @@ impl XwmHandler for Spectre {
     fn new_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
+
+    fn allow_selection_access(&mut self, _xwm: XwmId, _selection: SelectionTarget) -> bool {
+        let Some(window) = self.focus.as_ref() else {
+            return false;
+        };
+        window.x11_surface().is_some()
+    }
+
+    fn send_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_type: String, fd: OwnedFd) {
+        match selection {
+            SelectionTarget::Clipboard => {
+                if let Err(err) = request_data_device_client_selection(&self.seat, mime_type, fd) {
+                    tracing::warn!(?err, "could not hand the clipboard to an X11 program");
+                }
+            }
+            SelectionTarget::Primary => {
+                if let Err(err) = request_primary_client_selection(&self.seat, mime_type, fd) {
+                    tracing::warn!(?err, "could not hand the selection to an X11 program");
+                }
+            }
+        }
+    }
+
+    fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        match selection {
+            SelectionTarget::Clipboard => {
+                set_data_device_selection(&self.display_handle, &self.seat, mime_types, ());
+            }
+            SelectionTarget::Primary => {
+                set_primary_selection(&self.display_handle, &self.seat, mime_types, ());
+            }
+        }
+    }
+
+    fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
+        match selection {
+            SelectionTarget::Clipboard => {
+                if current_data_device_selection_userdata(&self.seat).is_some() {
+                    clear_data_device_selection(&self.display_handle, &self.seat);
+                }
+            }
+            SelectionTarget::Primary => {
+                if current_primary_selection_userdata(&self.seat).is_some() {
+                    clear_primary_selection(&self.display_handle, &self.seat);
+                }
+            }
+        }
+    }
 
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Err(err) = window.set_mapped(true) {

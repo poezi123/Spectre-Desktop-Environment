@@ -31,12 +31,13 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
-    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+    set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
 use smithay::wayland::selection::primary_selection::{
-    PrimarySelectionHandler, PrimarySelectionState,
+    set_primary_focus, PrimarySelectionHandler, PrimarySelectionState,
 };
-use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
+use std::os::unix::io::OwnedFd;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler,
@@ -322,7 +323,15 @@ impl SeatHandler for Spectre {
         &mut self.seat_state
     }
 
-    fn focus_changed(&mut self, _seat: &Seat<Self>, focused: Option<&WlSurface>) {
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        let dh = self.display_handle.clone();
+        let mut client = None;
+        if let Some(surface) = focused {
+            client = dh.get_client(smithay::reexports::wayland_server::Resource::id(surface)).ok();
+        }
+        set_data_device_focus(&dh, seat, client.clone());
+        set_primary_focus(&dh, seat, client);
+
         let Some(surface) = focused else {
             if self.focus.is_some() {
                 self.focus = None;
@@ -347,6 +356,36 @@ impl SeatHandler for Spectre {
 
 impl SelectionHandler for Spectre {
     type SelectionUserData = ();
+
+    fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, _seat: Seat<Self>) {
+        let Some(xwm) = self.xwm.as_mut() else {
+            return;
+        };
+        let mut mime_types = None;
+        if let Some(source) = source {
+            mime_types = Some(source.mime_types());
+        }
+        if let Err(err) = xwm.new_selection(ty, mime_types) {
+            tracing::warn!(?err, "could not offer the clipboard to X11 programs");
+        }
+    }
+
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+        _seat: Seat<Self>,
+        _user_data: &(),
+    ) {
+        let loop_handle = self.loop_handle.clone();
+        let Some(xwm) = self.xwm.as_mut() else {
+            return;
+        };
+        if let Err(err) = xwm.send_selection(ty, mime_type, fd, loop_handle) {
+            tracing::warn!(?err, "could not read the clipboard of an X11 program");
+        }
+    }
 }
 
 impl DataDeviceHandler for Spectre {
