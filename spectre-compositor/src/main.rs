@@ -11,6 +11,8 @@ mod state;
 mod workspace;
 mod xwayland;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::{bail, Context};
 use spectre_config::{Config, Profile};
 
@@ -19,6 +21,7 @@ use crate::backend::Backend;
 fn main() -> anyhow::Result<()> {
     init_tracing();
     reap_children();
+    stop_on_termination_signals();
 
     let args = Args::parse(std::env::args().skip(1))?;
     if args.help {
@@ -72,6 +75,25 @@ fn reap_children() {
     unsafe {
         libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
+}
+
+static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn request_termination(_signal: libc::c_int) {
+    TERMINATION_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+fn stop_on_termination_signals() {
+    let handler = request_termination as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    unsafe {
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGHUP, handler);
+    }
+}
+
+pub fn termination_requested() -> bool {
+    TERMINATION_REQUESTED.load(Ordering::SeqCst)
 }
 
 fn init_tracing() {

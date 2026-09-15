@@ -100,6 +100,10 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     render_all(&mut state, &shared);
 
     event_loop.run(Some(Duration::from_millis(16)), &mut state, |state| {
+        if crate::termination_requested() {
+            tracing::info!("asked to quit; ending the session cleanly");
+            state.running = false;
+        }
         if !state.running {
             state.loop_signal.stop();
             return;

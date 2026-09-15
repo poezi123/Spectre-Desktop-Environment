@@ -129,6 +129,10 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         .map_err(|err| anyhow::anyhow!("failed to install the frame timer: {err}"))?;
 
     event_loop.run(None, &mut state, |state| {
+        if crate::termination_requested() {
+            tracing::info!("asked to quit; ending the session cleanly");
+            state.running = false;
+        }
         if !state.running {
             state.loop_signal.stop();
         }
