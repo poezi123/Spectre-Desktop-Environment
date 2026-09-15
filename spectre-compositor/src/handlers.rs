@@ -323,9 +323,18 @@ impl SeatHandler for Spectre {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        let window = focused.and_then(|s| self.window_for_surface(s));
-        if self.focus.as_ref() != window.as_ref() {
-            self.focus = window;
+        let Some(surface) = focused else {
+            if self.focus.is_some() {
+                self.focus = None;
+                self.mark_dirty();
+            }
+            return;
+        };
+        let Some(window) = self.window_for_surface(surface) else {
+            return;
+        };
+        if self.focus.as_ref() != Some(&window) {
+            self.focus = Some(window);
             self.mark_dirty();
         }
     }
