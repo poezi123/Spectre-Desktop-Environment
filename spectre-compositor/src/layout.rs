@@ -5,6 +5,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
 use spectre_config::Direction;
 
+use crate::animation::{Closing, Pop};
 use crate::render::{decorations, Frame, Part};
 use crate::state::Spectre;
 
@@ -78,6 +79,7 @@ impl Spectre {
 
         self.workspaces.active_mut().map_element(window.clone(), loc, true);
         self.tell_x11_where(&window);
+        self.start_opening(&window);
         self.focus_window(Some(&window));
         self.mark_dirty();
     }
@@ -124,7 +126,63 @@ impl Spectre {
         let _ = x11.configure(Rectangle::new(location, Size::from((width, height))));
     }
 
+    fn start_opening(&mut self, window: &Window) {
+        if !self.config.effects.window_animations {
+            return;
+        }
+        let pop = Pop::opening(std::time::Instant::now(), self.config.effects.animation_speed);
+        self.opening.retain(|(opening, _)| opening != window);
+        self.opening.push((window.clone(), pop));
+    }
+
+    pub fn opening_pop(&self, window: &Window) -> Option<Pop> {
+        for (opening, pop) in &self.opening {
+            if opening == window {
+                return Some(*pop);
+            }
+        }
+        None
+    }
+
+    fn start_closing(&mut self, window: &Window) {
+        if !self.config.effects.window_animations {
+            return;
+        }
+        if let Some(x11) = window.x11_surface() {
+            if x11.is_override_redirect() {
+                return;
+            }
+        }
+        let metrics = self.config.theme.metrics;
+        let decorated = self.is_decorated(window);
+        for workspace in 0..self.workspaces.count() {
+            let Some(space) = self.workspaces.get(workspace) else {
+                continue;
+            };
+            let Some(geometry) = space.element_geometry(window) else {
+                continue;
+            };
+            let outer = Frame::new(geometry, &metrics, decorated).outer;
+            let pop = Pop::closing(std::time::Instant::now(), self.config.effects.animation_speed);
+            let key = crate::render::element_key(window);
+            self.closing.push(Closing { key, workspace, outer, pop });
+            return;
+        }
+    }
+
+    pub fn finish_window_animations(&mut self) {
+        let now = std::time::Instant::now();
+        let before = self.opening.len() + self.closing.len();
+        self.opening.retain(|(_, pop)| !pop.is_done(now));
+        self.closing.retain(|closing| !closing.pop.is_done(now));
+        if self.opening.len() + self.closing.len() != before {
+            self.mark_dirty();
+        }
+    }
+
     pub fn unmap_window(&mut self, window: &Window) {
+        self.start_closing(window);
+        self.opening.retain(|(opening, _)| opening != window);
         for space in self.workspaces.iter_mut() {
             space.unmap_elem(window);
         }

@@ -8,7 +8,7 @@ use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::element::texture::TextureBuffer;
 use smithay::utils::{Logical, Physical, Rectangle, Size};
 
-use super::ContourField;
+use super::{ContourField, WorkspaceElement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
@@ -29,6 +29,17 @@ pub struct RenderCache {
     face_commit: CommitCounter,
     face_angle: f32,
     cursor_elements: usize,
+    remembered: Remembered,
+    closing: HashMap<u32, TextureBuffer<GlesTexture>>,
+}
+
+#[derive(Default)]
+struct Remembered(HashMap<u32, Vec<WorkspaceElement>>);
+
+impl std::fmt::Debug for Remembered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Remembered({} windows)", self.0.len())
+    }
 }
 
 #[derive(Debug)]
@@ -47,6 +58,30 @@ struct ShaderSlot {
 }
 
 impl RenderCache {
+    pub fn remember_window(&mut self, key: u32, elements: Vec<WorkspaceElement>) {
+        self.remembered.0.insert(key, elements);
+    }
+
+    pub fn take_remembered(&mut self, key: u32) -> Option<Vec<WorkspaceElement>> {
+        self.remembered.0.remove(&key)
+    }
+
+    pub fn forget_remembered(&mut self) {
+        self.remembered.0.clear();
+    }
+
+    pub fn closing_snapshot(&self, key: u32) -> Option<&TextureBuffer<GlesTexture>> {
+        self.closing.get(&key)
+    }
+
+    pub fn set_closing_snapshot(&mut self, key: u32, snapshot: TextureBuffer<GlesTexture>) {
+        self.closing.insert(key, snapshot);
+    }
+
+    pub fn keep_closing_snapshots(&mut self, keys: &[u32]) {
+        self.closing.retain(|key, _| keys.contains(key));
+    }
+
     pub fn cursor_elements(&self) -> usize {
         self.cursor_elements
     }

@@ -16,7 +16,7 @@ const XWAYLAND_STARTUP_LIMIT: Duration = Duration::from_secs(10);
 
 impl Spectre {
     pub fn start_xwayland(&mut self) {
-        let spawned = with_default_child_signal(|| {
+        let spawned = crate::with_default_child_signal(|| {
             XWayland::spawn(
                 &self.display_handle,
                 None,
@@ -95,17 +95,6 @@ impl Spectre {
         }
         self.pending_windows.retain(|window| window.x11_surface() != Some(surface));
     }
-}
-
-fn with_default_child_signal<T>(spawn: impl FnOnce() -> T) -> T {
-    unsafe {
-        libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-    }
-    let result = spawn();
-    unsafe {
-        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
-    }
-    result
 }
 
 impl XwmHandler for Spectre {

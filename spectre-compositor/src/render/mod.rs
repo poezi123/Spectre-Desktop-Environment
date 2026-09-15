@@ -26,7 +26,9 @@ use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
+use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::element::AsRenderElements;
 use smithay::desktop::layer_map_for_output;
@@ -49,6 +51,7 @@ render_elements! {
     Pattern = Banded<PixelShaderElement>,
     Contour = Contoured<MemoryRenderBufferRenderElement<GlesRenderer>>,
     Face = cube::CubeFace,
+    Snapshot = TextureRenderElement<GlesTexture>,
 }
 
 type MovedElement = RelocateRenderElement<RescaleRenderElement<WorkspaceElement>>;
@@ -130,11 +133,7 @@ fn build_output_elements(
         }
         None => {
             let index = state.workspaces.active_index();
-            elements.extend(
-                workspace_elements(state, output, renderer, shader, cache, index, 1.0)
-                    .into_iter()
-                    .map(SpectreElement::Plain),
-            );
+            elements.extend(active_workspace_elements(state, output, renderer, shader, cache, index, scale));
         }
     }
 
@@ -276,7 +275,7 @@ fn capture_workspaces(
             shrunk.push(RescaleRenderElement::from_element(element, origin, cube::SNAPSHOT_SCALE));
         }
 
-        let Some(texture) = cube::capture(renderer, small, &shrunk) else {
+        let Some(texture) = cube::capture(renderer, small, &shrunk, [0.02, 0.02, 0.03, 1.0]) else {
             break;
         };
         let buffer = smithay::backend::renderer::element::texture::TextureBuffer::from_texture(
@@ -499,123 +498,246 @@ fn workspace_elements(
     index: usize,
     alpha: f32,
 ) -> Vec<WorkspaceElement> {
-    let scale = output.current_scale().fractional_scale();
-    let theme = &state.config.theme;
-    let metrics = theme.metrics;
-
+    let mut elements = Vec::new();
     let Some(space) = state.workspaces.get(index) else {
-        return Vec::new();
+        return elements;
     };
     let Some(region) = space.output_geometry(output) else {
-        return Vec::new();
+        return elements;
     };
-
-    let pointer = state.pointer_position();
-    let phase = state.pattern_phase();
-    let color_phase = state.color_phase();
     let mut text = state.text.borrow_mut();
-    let mut elements: Vec<WorkspaceElement> = Vec::new();
-
     for window in space.elements().rev() {
+        let built = window_elements(
+            state, output, renderer, shader, cache, space, region, window, alpha, &mut text,
+        );
+        elements.extend(built);
+    }
+    elements
+}
+
+fn active_workspace_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+    index: usize,
+    scale: f64,
+) -> Vec<SpectreElement> {
+    let mut elements = Vec::new();
+    let Some(space) = state.workspaces.get(index) else {
+        return elements;
+    };
+    let Some(region) = space.output_geometry(output) else {
+        return elements;
+    };
+    let now = std::time::Instant::now();
+
+    let mut closing_keys = Vec::new();
+    for closing in &state.closing {
+        closing_keys.push(closing.key);
+        if closing.workspace != index {
+            continue;
+        }
+        if let Some(element) = closing_element(renderer, cache, closing, region, scale, now) {
+            elements.push(element);
+        }
+    }
+    cache.keep_closing_snapshots(&closing_keys);
+    cache.forget_remembered();
+
+    let remember = state.config.effects.window_animations;
+    let metrics = state.config.theme.metrics;
+    let mut text = state.text.borrow_mut();
+    for window in space.elements().rev() {
+        let pop = state.opening_pop(window);
+        let mut alpha = 1.0;
+        if let Some(pop) = pop {
+            alpha = pop.alpha(now);
+        }
+        let built = window_elements(
+            state, output, renderer, shader, cache, space, region, window, alpha, &mut text,
+        );
+        if remember {
+            let copy = window_elements(
+                state, output, renderer, shader, cache, space, region, window, 1.0, &mut text,
+            );
+            cache.remember_window(element_key(window), copy);
+        }
+
+        let Some(pop) = pop else {
+            elements.extend(built.into_iter().map(SpectreElement::Plain));
+            continue;
+        };
         let Some(geometry) = space.element_geometry(window) else {
             continue;
         };
-        let Some(location) = space.element_location(window) else {
-            continue;
-        };
-        let focused = state.focus.as_ref() == Some(window);
-        let decorated = state.is_decorated(window);
-        let key = element_key(window);
-
-        let local = Rectangle::new(geometry.loc - region.loc, geometry.size);
-        let frame = Frame::new(local, &metrics, decorated);
-        let hovered = decorations::part_at(
-            &Frame::new(geometry, &metrics, decorated),
-            &metrics,
-            pointer,
-        );
-
-        if decorated {
-            elements.extend(
-                decoration_text(
-                    state, &frame, window, focused, hovered, &mut text, renderer, scale, alpha,
-                )
-                .into_iter()
-                .map(WorkspaceElement::Text),
-            );
-            elements.extend(
-                decorations::button_plates(
-                    cache, key, &frame, &metrics, &theme.palette, hovered, alpha, scale,
-                )
-                .into_iter()
-                .map(WorkspaceElement::Solid),
-            );
-        }
-
-        let radius = (metrics.corner_radius as f64 * scale) as f32;
-        let corners = if decorated {
-            Corners::bottom(radius)
-        } else {
-            Corners::uniform(radius)
-        };
-        let window_physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
-        let render_location = location - window.geometry().loc - region.loc;
-
-        let surfaces = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
-            window,
-            renderer,
-            render_location.to_physical_precise_round(scale),
-            Scale::from(scale),
-            alpha,
-        );
-        for surface in surfaces {
-            match RoundedElement::new(
-                surface,
-                shader.and_then(PatternShader::rounded_program),
-                window_physical,
-                corners,
-                scale,
-            ) {
-                Ok(rounded) => elements.push(WorkspaceElement::Rounded(rounded)),
-                Err(plain) => elements.push(WorkspaceElement::Surface(plain)),
-            }
-        }
-
-        if !decorated {
-            continue;
-        }
-
-        let titlebar_height = frame.titlebar.size.h + frame.border;
-        let drawn = shader.and_then(|shader| {
-            shader.frame_element(
-                cache,
-                Slot::Frame(key),
-                frame.outer,
-                titlebar_height,
-                &metrics,
-                &theme.palette,
-                &theme.window_pattern,
-                &accent_for(theme, focused),
-                focused,
-                if focused { phase } else { 0.0 },
-                color_phase,
-                alpha,
-                scale,
-            )
-        });
-        match drawn {
-            Some(element) => elements.push(WorkspaceElement::Pattern(element)),
-            None => elements.extend(
-                decorations::fallback_frame(
-                    cache, key, &frame, &theme.palette, focused, alpha, scale,
-                )
-                .into_iter()
-                .map(WorkspaceElement::Solid),
-            ),
+        let outer = Frame::new(geometry, &metrics, state.is_decorated(window)).outer;
+        let local = Rectangle::new(outer.loc - region.loc, outer.size);
+        let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+        let center = physical.loc + Point::from((physical.size.w / 2, physical.size.h / 2));
+        for element in built {
+            elements.push(SpectreElement::Moved(scale_about(element, center, pop.scale(now))));
         }
     }
-    drop(text);
+    elements
+}
 
+fn closing_element(
+    renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
+    closing: &crate::animation::Closing,
+    region: Rectangle<i32, Logical>,
+    scale: f64,
+    now: std::time::Instant,
+) -> Option<SpectreElement> {
+    let local = Rectangle::new(closing.outer.loc - region.loc, closing.outer.size);
+    let physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+
+    if cache.closing_snapshot(closing.key).is_none() {
+        let remembered = cache.take_remembered(closing.key)?;
+        let offset = Point::<i32, Physical>::from((-physical.loc.x, -physical.loc.y));
+        let mut moved = Vec::new();
+        for element in remembered {
+            moved.push(RelocateRenderElement::from_element(element, offset, Relocate::Relative));
+        }
+        let texture = cube::capture(renderer, physical.size, &moved, [0.0, 0.0, 0.0, 0.0])?;
+        let snapshot = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+        cache.set_closing_snapshot(closing.key, snapshot);
+    }
+
+    let snapshot = cache.closing_snapshot(closing.key)?;
+    let element = TextureRenderElement::from_texture_buffer(
+        physical.loc.to_f64(),
+        snapshot,
+        Some(closing.pop.alpha(now)),
+        None,
+        None,
+        Kind::Unspecified,
+    );
+    let center = physical.loc + Point::from((physical.size.w / 2, physical.size.h / 2));
+    let scaled = scale_about(WorkspaceElement::Snapshot(element), center, closing.pop.scale(now));
+    Some(SpectreElement::Moved(scaled))
+}
+
+fn scale_about(element: WorkspaceElement, center: Point<i32, Physical>, factor: f64) -> MovedElement {
+    let scaled = RescaleRenderElement::from_element(element, center, factor);
+    RelocateRenderElement::from_element(scaled, Point::<i32, Physical>::from((0, 0)), Relocate::Relative)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn window_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+    space: &smithay::desktop::Space<smithay::desktop::Window>,
+    region: Rectangle<i32, Logical>,
+    window: &smithay::desktop::Window,
+    alpha: f32,
+    text: &mut TextCache,
+) -> Vec<WorkspaceElement> {
+    let scale = output.current_scale().fractional_scale();
+    let theme = &state.config.theme;
+    let metrics = theme.metrics;
+    let pointer = state.pointer_position();
+    let phase = state.pattern_phase();
+    let color_phase = state.color_phase();
+    let mut elements: Vec<WorkspaceElement> = Vec::new();
+
+    let Some(geometry) = space.element_geometry(window) else {
+        return elements;
+    };
+    let Some(location) = space.element_location(window) else {
+        return elements;
+    };
+    let focused = state.focus.as_ref() == Some(window);
+    let decorated = state.is_decorated(window);
+    let key = element_key(window);
+
+    let local = Rectangle::new(geometry.loc - region.loc, geometry.size);
+    let frame = Frame::new(local, &metrics, decorated);
+    let hovered = decorations::part_at(
+        &Frame::new(geometry, &metrics, decorated),
+        &metrics,
+        pointer,
+    );
+
+    if decorated {
+        elements.extend(
+            decoration_text(state, &frame, window, focused, hovered, text, renderer, scale, alpha)
+                .into_iter()
+                .map(WorkspaceElement::Text),
+        );
+        elements.extend(
+            decorations::button_plates(
+                cache, key, &frame, &metrics, &theme.palette, hovered, alpha, scale,
+            )
+            .into_iter()
+            .map(WorkspaceElement::Solid),
+        );
+    }
+
+    let radius = (metrics.corner_radius as f64 * scale) as f32;
+    let corners = if decorated {
+        Corners::bottom(radius)
+    } else {
+        Corners::uniform(radius)
+    };
+    let window_physical: Rectangle<i32, Physical> = local.to_physical_precise_round(scale);
+    let render_location = location - window.geometry().loc - region.loc;
+
+    let surfaces = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
+        window,
+        renderer,
+        render_location.to_physical_precise_round(scale),
+        Scale::from(scale),
+        alpha,
+    );
+    for surface in surfaces {
+        match RoundedElement::new(
+            surface,
+            shader.and_then(PatternShader::rounded_program),
+            window_physical,
+            corners,
+            scale,
+        ) {
+            Ok(rounded) => elements.push(WorkspaceElement::Rounded(rounded)),
+            Err(plain) => elements.push(WorkspaceElement::Surface(plain)),
+        }
+    }
+
+    if !decorated {
+        return elements;
+    }
+
+    let titlebar_height = frame.titlebar.size.h + frame.border;
+    let drawn = shader.and_then(|shader| {
+        shader.frame_element(
+            cache,
+            Slot::Frame(key),
+            frame.outer,
+            titlebar_height,
+            &metrics,
+            &theme.palette,
+            &theme.window_pattern,
+            &accent_for(theme, focused),
+            focused,
+            if focused { phase } else { 0.0 },
+            color_phase,
+            alpha,
+            scale,
+        )
+    });
+    match drawn {
+        Some(element) => elements.push(WorkspaceElement::Pattern(element)),
+        None => elements.extend(
+            decorations::fallback_frame(cache, key, &frame, &theme.palette, focused, alpha, scale)
+                .into_iter()
+                .map(WorkspaceElement::Solid),
+        ),
+    }
     elements
 }
 
@@ -642,7 +764,7 @@ fn decoration_text(
         let title = state.window_title(window);
         let label = Label::new(&title)
             .size(CAPTION_SIZE)
-            .color(theme.palette.titlebar_text(focused).alpha(alpha))
+            .color(theme.palette.titlebar_text(focused))
             .bold(focused)
             .max_width(area.size.w as u32);
         let size = cache.measure(&label);
@@ -650,7 +772,7 @@ fn decoration_text(
             area.loc.x + (area.size.w - size.w).max(0) / 2,
             area.loc.y + (area.size.h - size.h).max(0) / 2,
         ));
-        out.extend(cache.element(renderer, &label, location, scale));
+        out.extend(cache.element(renderer, &label, location, scale, alpha));
     }
 
     let maximized = state.is_maximized(window);
@@ -668,19 +790,19 @@ fn decoration_text(
             (false, _) if focused => theme.palette.text_dim,
             (false, _) => theme.palette.text_muted,
         };
-        let label = Label::new(glyph).size(CAPTION_SIZE).color(color.alpha(alpha));
+        let label = Label::new(glyph).size(CAPTION_SIZE).color(color);
         let size = cache.measure(&label);
         let location = Point::from((
             rect.loc.x + (rect.size.w - size.w).max(0) / 2,
             rect.loc.y + (rect.size.h - size.h).max(0) / 2,
         ));
-        out.extend(cache.element(renderer, &label, location, scale));
+        out.extend(cache.element(renderer, &label, location, scale, alpha));
     }
 
     out
 }
 
-fn element_key(window: &smithay::desktop::Window) -> u32 {
+pub fn element_key(window: &smithay::desktop::Window) -> u32 {
     use smithay::reexports::wayland_server::Resource;
     if let Some(toplevel) = window.toplevel() {
         return toplevel.wl_surface().id().protocol_id();

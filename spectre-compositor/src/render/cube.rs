@@ -19,6 +19,7 @@ pub fn capture<E>(
     renderer: &mut GlesRenderer,
     size: Size<i32, Physical>,
     elements: &[E],
+    clear: [f32; 4],
 ) -> Option<GlesTexture>
 where
     E: RenderElement<GlesRenderer>,
@@ -43,7 +44,7 @@ where
         }
     };
     let mut tracker = OutputDamageTracker::new(size, 1.0, Transform::Normal);
-    if let Err(err) = tracker.render_output(renderer, &mut framebuffer, 0, elements, [0.02, 0.02, 0.03, 1.0]) {
+    if let Err(err) = tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
         tracing::warn!(?err, "could not render a workspace snapshot");
         return None;
     }

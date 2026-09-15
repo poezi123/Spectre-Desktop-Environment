@@ -76,6 +76,7 @@ impl TextCache {
         label: &Label<'_>,
         location: Point<i32, Logical>,
         scale: f64,
+        alpha: f32,
     ) -> Option<MemoryRenderBufferRenderElement<GlesRenderer>> {
         let (buffer, size) = self.entry(label)?;
 
@@ -92,7 +93,7 @@ impl TextCache {
             renderer,
             physical,
             &buffer,
-            None,
+            Some(alpha),
             Some(src),
             Some(size),
             Kind::Unspecified,

@@ -1,3 +1,4 @@
+mod animation;
 mod backend;
 mod grabs;
 mod handlers;
@@ -75,6 +76,17 @@ fn reap_children() {
     unsafe {
         libc::signal(libc::SIGCHLD, libc::SIG_IGN);
     }
+}
+
+pub fn with_default_child_signal<T>(spawn: impl FnOnce() -> T) -> T {
+    unsafe {
+        libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+    }
+    let result = spawn();
+    unsafe {
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+    }
+    result
 }
 
 static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);

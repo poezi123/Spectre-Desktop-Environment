@@ -318,15 +318,7 @@ impl Spectre {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-                Ok(())
-            });
-        }
-
-        match cmd.spawn() {
+        match crate::with_default_child_signal(|| cmd.spawn()) {
             Ok(child) => {
                 let pid = child.id();
                 drop(child);
