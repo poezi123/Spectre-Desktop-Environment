@@ -36,7 +36,9 @@ use wayland_client::{Connection, QueueHandle};
 use crate::model::{Control, Field, Settings};
 
 const BTN_LEFT: u32 = 0x110;
-const ANIMATION_INTERVAL: Duration = Duration::from_millis(33);
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+
+const MIN_REDRAW: Duration = Duration::from_millis(16);
 
 const RESET_CONFIRM_WINDOW: Duration = Duration::from_secs(4);
 
@@ -107,20 +109,17 @@ fn main() -> anyhow::Result<()> {
         row: 0,
         dragging: None,
         dropdown: None,
+        last_draw: Instant::now(),
         armed_at: None,
         thumbnails: thumbnail::Cache::default(),
         status: String::new(),
         ipc,
-        started: Instant::now(),
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
     event_loop
         .handle()
         .insert_source(Timer::from_duration(ANIMATION_INTERVAL), |_, _, app: &mut App| {
-            if app.settings.config.theme.window_pattern.needs_continuous_redraw() {
-                app.dirty = true;
-            }
             if app.armed_at.is_some() && !app.reset_armed() {
                 app.armed_at = None;
                 app.dirty = true;
@@ -173,11 +172,11 @@ struct App {
     row: usize,
     dragging: Option<Field>,
     dropdown: Option<Dropdown>,
+    last_draw: Instant,
     armed_at: Option<Instant>,
     thumbnails: thumbnail::Cache,
     status: String,
     ipc: Option<Client>,
-    started: Instant,
 }
 
 struct Dropdown {
@@ -296,9 +295,14 @@ impl App {
     }
 
     fn redraw_if_needed(&mut self) {
-        if self.dirty && self.configured && self.width > 0 {
-            self.draw();
+        if !self.dirty || !self.configured || self.width <= 0 {
+            return;
         }
+        if self.last_draw.elapsed() < MIN_REDRAW {
+            return;
+        }
+        self.last_draw = Instant::now();
+        self.draw();
     }
 
     fn draw(&mut self) {
@@ -306,9 +310,8 @@ impl App {
         let (width, height) = (self.width * self.scale, self.height * self.scale);
         self.canvas.resize(width, height);
 
-        let elapsed = self.started.elapsed().as_secs_f64();
-        let pattern = ui::settings_pattern(&self.settings.config.theme);
-        self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), self.scale as f32);
+        let pattern = ui::settings_pattern(&self.settings.config.theme).without_animation();
+        self.mask.prepare(width, height, &pattern, 0.0, self.scale as f32);
 
         let sections = self.settings.sections();
         let reset_armed = self.reset_armed();
@@ -334,7 +337,7 @@ impl App {
             section: self.section,
             row: self.row,
             mask: &self.mask,
-            color_phase: pattern.color_phase(elapsed),
+            color_phase: 0.0,
             status: &self.status,
             reset_armed,
             wallpaper_thumbnail,
