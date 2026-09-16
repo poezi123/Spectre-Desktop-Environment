@@ -430,6 +430,7 @@ impl Panel {
             mask: &self.mask,
             color_phase: pattern.color_phase(elapsed),
             position: self.config.panel.position,
+            opacity: self.config.panel.opacity,
         };
         draw::draw(&mut self.canvas, &mut self.text, &items, &frame);
         self.items = items;

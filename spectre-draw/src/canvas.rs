@@ -102,6 +102,16 @@ impl Canvas {
         }
     }
 
+    pub fn fade(&mut self, alpha: f32) {
+        if !(0.0..1.0).contains(&alpha) {
+            return;
+        }
+        let strength = (alpha * 255.0).round() as u32;
+        for byte in self.pixels.iter_mut() {
+            *byte = ((*byte as u32 * strength) / 255) as u8;
+        }
+    }
+
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
         if color.a <= 0.0 {
             return;
@@ -208,6 +218,17 @@ fn to_argb(color: Color) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fading_makes_the_picture_see_through_but_keeps_full_opacity_alone() {
+        let mut canvas = Canvas::new(2, 2);
+        canvas.clear(Color::rgba(1.0, 1.0, 1.0, 1.0));
+        canvas.fade(1.0);
+        assert_eq!(canvas.as_bytes()[3], 255, "full opacity must not change a pixel");
+        canvas.fade(0.5);
+        assert_eq!(canvas.as_bytes()[3], 128);
+        assert_eq!(canvas.as_bytes()[0], 128, "the colour is premultiplied, so it fades too");
+    }
     use spectre_theme::palette;
 
     fn pixel(canvas: &Canvas, x: i32, y: i32) -> [u8; 4] {

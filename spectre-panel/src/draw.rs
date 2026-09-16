@@ -22,6 +22,7 @@ pub struct Frame<'a> {
     pub mask: &'a PatternMask,
     pub color_phase: f32,
     pub position: PanelPosition,
+    pub opacity: f32,
 }
 
 impl Frame<'_> {
@@ -43,6 +44,7 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, items: &[Placed], fram
         PanelPosition::Right => Rect::new(0, 0, 1, bounds.h),
     };
     canvas.fill_rect(hairline, palette.line);
+    canvas.fade(frame.opacity);
 
     for placed in items {
         let hovered = frame
@@ -291,6 +293,7 @@ mod tests {
             mask,
             color_phase: 0.0,
             position: PanelPosition::Bottom,
+            opacity: 1.0,
         }
     }
 
