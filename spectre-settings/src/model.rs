@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use spectre_config::terminal::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use spectre_config::{Config, PanelPosition, Profile, WallpaperMode, WorkspaceTransition};
 use spectre_theme::PatternKind;
 
@@ -32,6 +33,9 @@ pub enum Field {
     PanelPosition,
     PanelFloating,
     PanelOpacity,
+
+    TerminalFontSize,
+    TerminalScrollback,
 
     Reset,
 }
@@ -92,6 +96,8 @@ impl Settings {
 
             Field::PanelOpacity => Some((0.0, 1.0)),
 
+            Field::TerminalFontSize => Some((MIN_FONT_SIZE, MAX_FONT_SIZE)),
+
             _ => None,
         }
     }
@@ -121,6 +127,8 @@ impl Settings {
                 self.config.effects.animation_speed = scaled.max(0.1);
             }
             Field::PanelOpacity => self.config.panel.opacity = scaled.max(0.1),
+
+            Field::TerminalFontSize => self.config.terminal.font_size = scaled.round(),
 
             _ => return false,
         }
@@ -186,6 +194,13 @@ impl Settings {
                     self.row(Field::PanelPosition, "Position", "Screen edge it sits on"),
                     self.row(Field::PanelFloating, "Floating", "Leave a margin around it"),
                     self.row(Field::PanelOpacity, "Opacity", "Background transparency"),
+                ],
+            },
+            Section {
+                title: "Terminal",
+                rows: vec![
+                    self.row(Field::TerminalFontSize, "Text size", "Font size in the Spectre terminal"),
+                    self.row(Field::TerminalScrollback, "History", "Lines kept to scroll back through"),
                 ],
             },
             Section {
@@ -255,6 +270,18 @@ impl Settings {
             Field::PanelFloating => Control::Toggle(cfg.panel.floating),
             Field::PanelOpacity => percent(cfg.panel.opacity),
 
+            Field::TerminalFontSize => {
+                let size = cfg.terminal.font_size();
+                Control::Slider {
+                    value: (size - MIN_FONT_SIZE) / (MAX_FONT_SIZE - MIN_FONT_SIZE),
+                    label: format!("{} px", size.round() as i32),
+                }
+            }
+            Field::TerminalScrollback => choice(
+                SCROLLBACKS.iter().map(|(_, name)| (*name).to_owned()).collect(),
+                self.scrollback_index(),
+            ),
+
             Field::Reset => Control::Button { label: String::from("Reset") },
         }
     }
@@ -264,6 +291,18 @@ impl Settings {
             .iter()
             .position(|r| r.eq_ignore_ascii_case(&self.config.display.resolution))
             .unwrap_or(0)
+    }
+
+    fn scrollback_index(&self) -> usize {
+        let lines = self.config.terminal.scrollback;
+        let mut best = 0;
+        for (index, (value, _)) in SCROLLBACKS.iter().enumerate() {
+            let closer = value.abs_diff(lines) < SCROLLBACKS[best].0.abs_diff(lines);
+            if closer {
+                best = index;
+            }
+        }
+        best
     }
 
     fn wallpaper_index(&self) -> usize {
@@ -375,6 +414,15 @@ impl Settings {
                 self.config.panel.opacity = step_unit(self.config.panel.opacity, delta).max(0.1)
             }
 
+            Field::TerminalFontSize => {
+                let size = self.config.terminal.font_size() + delta as f32;
+                self.config.terminal.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+            }
+            Field::TerminalScrollback => {
+                let index = cycle(&SCROLLBACKS, self.scrollback_index(), delta);
+                self.config.terminal.scrollback = SCROLLBACKS[index].0;
+            }
+
             Field::Reset => {}
         }
         before != self.config
@@ -443,6 +491,14 @@ const TRANSITIONS: [(WorkspaceTransition, &str); 6] = [
     (WorkspaceTransition::Depth, "Depth"),
     (WorkspaceTransition::Cube, "Cube"),
     (WorkspaceTransition::Coverflow, "Coverflow"),
+];
+
+const SCROLLBACKS: [(u32, &str); 5] = [
+    (1_000, "1000 lines"),
+    (5_000, "5000 lines"),
+    (10_000, "10000 lines"),
+    (50_000, "50000 lines"),
+    (200_000, "200000 lines"),
 ];
 
 const POSITIONS: [(PanelPosition, &str); 4] = [
