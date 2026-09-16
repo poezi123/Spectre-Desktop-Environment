@@ -100,7 +100,9 @@ fn build_output_elements(
     if let Some(overview) = state.overview.as_ref() {
         return overview_elements(state, overview, output, renderer, shader, cache, scale);
     }
-    if cache.snapshot_size().w != 0 {
+    let turning = state.transition.is_some()
+        && state.config.effects.workspace_transition == spectre_config::WorkspaceTransition::Cube;
+    if !turning && cache.snapshot_size().w != 0 {
         cache.set_snapshots(Vec::new(), Size::from((0, 0)));
     }
 
@@ -118,6 +120,14 @@ fn build_output_elements(
     elements.extend(layer_elements(state, output, renderer, cache, scale, true));
 
     match state.transition.as_ref() {
+        Some(transition) if turning => {
+            if let Some(cube) =
+                cube_switch_elements(state, transition, output, renderer, shader, cache, scale)
+            {
+                elements.extend(cube);
+                return elements;
+            }
+        }
         Some(transition) => {
             let (from, to) = transition.placements(std::time::Instant::now(), width);
             tracing::trace!(?from, ?to, width, "transition frame");
@@ -222,6 +232,7 @@ fn overview_elements(
             faces: overview.faces(),
             aspect,
             flip: false,
+            zoom: cube::FACE_SIZE,
         };
         let face = cube::CubeFace::new(buffer, texture_size, program, area.size, view, commit);
         elements.push(SpectreElement::Plain(WorkspaceElement::Face(face)));
@@ -230,6 +241,55 @@ fn overview_elements(
     let ground = cache.solid(Slot::Backdrop, physical, [0.02, 0.02, 0.03, 1.0], Kind::Unspecified);
     elements.push(SpectreElement::Plain(WorkspaceElement::Solid(ground)));
     elements
+}
+
+fn cube_switch_elements(
+    state: &Spectre,
+    transition: &crate::transition::Transition,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shader: Option<&PatternShader>,
+    cache: &mut RenderCache,
+    scale: f64,
+) -> Option<Vec<SpectreElement>> {
+    let program = shader.and_then(PatternShader::cube_program)?;
+    let area = state.workspaces.output_geometry(output)?;
+    let faces = state.workspaces.count();
+    if faces < 2 {
+        return None;
+    }
+
+    if cache.snapshot_size().w == 0 {
+        let (snapshots, size) =
+            capture_workspaces(state, output, renderer, shader, cache, faces, scale);
+        cache.set_snapshots(snapshots, size);
+    }
+
+    let now = std::time::Instant::now();
+    let position = transition.cube_position(faces, now);
+    let zoom = transition.cube_zoom(now);
+    let commit = cache.face_commit(position);
+    let texture_size = cache.snapshot_size();
+    let aspect = area.size.h as f32 / area.size.w.max(1) as f32;
+
+    let mut elements = Vec::new();
+    for index in [transition.from, transition.to] {
+        let Some(buffer) = cache.snapshots().get(index) else {
+            continue;
+        };
+        let angle = (index as f32 - position) * std::f32::consts::TAU / faces as f32;
+        if angle.cos() <= 0.001 {
+            continue;
+        }
+        let view = cube::FaceView { angle, faces, aspect, flip: false, zoom };
+        let face = cube::CubeFace::new(buffer, texture_size, program, area.size, view, commit);
+        elements.push(SpectreElement::Plain(WorkspaceElement::Face(face)));
+    }
+
+    let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(Scale::from(scale));
+    let ground = cache.solid(Slot::Backdrop, physical, [0.02, 0.02, 0.03, 1.0], Kind::Unspecified);
+    elements.push(SpectreElement::Plain(WorkspaceElement::Solid(ground)));
+    Some(elements)
 }
 
 fn capture_workspaces(

@@ -59,6 +59,26 @@ impl Transition {
         ease_out_cubic(self.linear_progress(now))
     }
 
+    pub fn cube_position(&self, faces: usize, now: Instant) -> f32 {
+        let from = self.from as f32;
+        let mut target = self.to as f32;
+        if faces > 1 {
+            let half = faces as f32 / 2.0;
+            if target - from > half {
+                target -= faces as f32;
+            }
+            if from - target > half {
+                target += faces as f32;
+            }
+        }
+        from + (target - from) * self.progress(now)
+    }
+
+    pub fn cube_zoom(&self, now: Instant) -> f32 {
+        let t = self.linear_progress(now);
+        1.0 - 0.2 * (std::f32::consts::PI * t).sin()
+    }
+
     pub fn is_done(&self, now: Instant) -> bool {
         self.linear_progress(now) >= 1.0
     }
@@ -121,6 +141,34 @@ fn ease_out_cubic(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cube_fills_the_screen_at_both_ends_and_leans_back_in_between() {
+        let now = Instant::now();
+        let switch = Transition::start(0, 1, WorkspaceTransition::Cube, 200, now).unwrap();
+        assert_eq!(switch.cube_zoom(now), 1.0);
+        assert_eq!(switch.cube_zoom(now + Duration::from_millis(400)), 1.0);
+        let middle = switch.cube_zoom(now + Duration::from_millis(100));
+        assert!(middle < 0.95, "the edge has to become visible: {middle}");
+        assert!(middle > 0.6, "but the cube must not shrink to a stamp: {middle}");
+    }
+
+    #[test]
+    fn the_cube_starts_on_the_face_it_came_from() {
+        let now = Instant::now();
+        let switch = Transition::start(1, 2, WorkspaceTransition::Cube, 200, now).unwrap();
+        assert_eq!(switch.cube_position(4, now), 1.0);
+    }
+
+    #[test]
+    fn the_cube_turns_the_short_way_round() {
+        let now = Instant::now();
+        let over = now + Duration::from_millis(400);
+        let forwards = Transition::start(3, 0, WorkspaceTransition::Cube, 200, now).unwrap();
+        assert_eq!(forwards.cube_position(4, over), 4.0, "three to zero keeps turning forwards");
+        let backwards = Transition::start(0, 3, WorkspaceTransition::Cube, 200, now).unwrap();
+        assert_eq!(backwards.cube_position(4, over), -1.0, "zero to three turns back");
+    }
 
     const WIDTH: i32 = 1920;
 

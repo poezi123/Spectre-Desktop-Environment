@@ -65,6 +65,7 @@ pub struct FaceView {
     pub faces: usize,
     pub aspect: f32,
     pub flip: bool,
+    pub zoom: f32,
 }
 
 #[derive(Debug)]
@@ -103,7 +104,7 @@ impl CubeFace {
             Uniform::new("spectre_angle", view.angle),
             Uniform::new("spectre_apothem", apothem),
             Uniform::new("spectre_camera", apothem + 1.8),
-            Uniform::new("spectre_scale", FACE_SIZE),
+            Uniform::new("spectre_scale", view.zoom),
             Uniform::new("spectre_aspect", view.aspect),
             Uniform::new("spectre_flip", flip),
         ];
