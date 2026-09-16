@@ -91,6 +91,8 @@ impl Pattern {
 
     const COLOR_STEPS: f64 = 120.0;
 
+    const SUBSTEPS: f64 = 4.0;
+
     const FASTEST_REDRAW: Duration = Duration::from_millis(16);
     const SLOWEST_REDRAW: Duration = Duration::from_millis(500);
 
@@ -114,7 +116,7 @@ impl Pattern {
         if !per_second.is_finite() || per_second <= 0.0 {
             return Some(Self::SLOWEST_REDRAW);
         }
-        let seconds = (1.0 / per_second).clamp(
+        let seconds = (1.0 / (per_second * Self::SUBSTEPS)).clamp(
             Self::FASTEST_REDRAW.as_secs_f64(),
             Self::SLOWEST_REDRAW.as_secs_f64(),
         );
@@ -335,13 +337,13 @@ mod tests {
     }
 
     #[test]
-    fn the_default_pattern_is_redrawn_far_slower_than_a_display_refreshes() {
+    fn the_default_pattern_moves_in_steps_small_enough_to_read_as_motion() {
         let interval = Pattern::default().redraw_interval(1.0).expect("it moves");
         assert!(
-            interval > Duration::from_millis(66),
-            "sixty frames a second buys nothing that can be seen: {interval:?}"
+            interval <= Duration::from_millis(40),
+            "a step every {interval:?} reads as a jump rather than as movement"
         );
-        assert!(interval <= Pattern::SLOWEST_REDRAW);
+        assert!(interval >= Pattern::FASTEST_REDRAW, "never faster than a display: {interval:?}");
     }
 
     #[test]
