@@ -3,6 +3,9 @@ use std::os::fd::AsRawFd;
 
 use alacritty_terminal::event::{OnResize, VoidListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Processor;
@@ -94,6 +97,32 @@ impl Session {
 
     pub fn scroll_to_bottom(&mut self) {
         self.term.scroll_display(Scroll::Bottom);
+    }
+
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    pub fn start_selection(&mut self, point: Point, side: Side) {
+        self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Side) {
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side);
+        }
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let text = self.term.selection_to_string()?;
+        if text.is_empty() {
+            return None;
+        }
+        Some(text)
+    }
+
+    pub fn wraps_a_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {

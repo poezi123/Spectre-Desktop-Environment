@@ -47,6 +47,7 @@ pub fn draw(
 
     let content = session.term.renderable_content();
     let offset = content.display_offset as i32;
+    let selection = content.selection;
     let cursor = content.cursor.point;
     let mut under_cursor = ' ';
     let mut run = Run::new();
@@ -57,10 +58,19 @@ pub fn draw(
         if point == cursor {
             under_cursor = cell.c;
         }
+        let mut foreground = resolve(cell.fg, palette, palette.text);
+        let mut background = resolve(cell.bg, palette, palette.base);
+        let picked = match selection {
+            Some(range) => range.contains(point),
+            None => false,
+        };
+        if picked {
+            std::mem::swap(&mut foreground, &mut background);
+        }
         let style = Style {
             line: point.line.0 + offset,
-            foreground: resolve(cell.fg, palette, palette.text),
-            background: resolve(cell.bg, palette, palette.base),
+            foreground,
+            background,
             bold: cell.flags.contains(Flags::BOLD),
         };
         if !run.accepts(&style, point.column.0) {

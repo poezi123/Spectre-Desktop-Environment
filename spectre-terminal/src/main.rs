@@ -4,7 +4,12 @@ mod view;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
+use smithay_client_toolkit::data_device_manager::data_source::{CopyPasteSource, DataSourceHandler};
+use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::channel::{channel, Event as ChannelEvent};
 use smithay_client_toolkit::reexports::calloop::EventLoop;
@@ -29,6 +34,9 @@ use spectre_draw::Canvas;
 use spectre_text::TextRenderer;
 use spectre_theme::Theme;
 use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::wl_data_device::WlDataDevice;
+use wayland_client::protocol::wl_data_device_manager::DndAction;
+use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
@@ -37,6 +45,8 @@ use crate::view::Metrics;
 
 const MIN_REDRAW: Duration = Duration::from_millis(16);
 const WHEEL_LINES: i32 = 3;
+const BTN_LEFT: u32 = 0x110;
+const TEXT_MIME: &str = "text/plain;charset=utf-8";
 const START_COLUMNS: usize = 92;
 const START_LINES: usize = 26;
 
@@ -72,8 +82,12 @@ fn main() -> anyhow::Result<()> {
     let pool = SlotPool::new((width * height * 4) as usize, &shm)
         .context("could not allocate the terminal's shared memory")?;
 
+    let data_manager =
+        DataDeviceManagerState::bind(&globals, &qh).context("the clipboard is missing")?;
+
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
     let (sender, receiver) = channel::<Vec<u8>>();
+    let (paste_sender, paste_receiver) = channel::<String>();
     let cell = (metrics.cell_width as u16, metrics.cell_height as u16);
     let history = config.terminal.scrollback();
     let session = Session::start(Size::new(START_COLUMNS, START_LINES), cell, history, sender)
@@ -104,6 +118,13 @@ fn main() -> anyhow::Result<()> {
         alt: false,
         shift: false,
         font_px,
+        data_manager,
+        data_device: None,
+        copy_source: None,
+        clipboard: String::new(),
+        paste_sender,
+        serial: 0,
+        selecting: false,
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
@@ -118,6 +139,15 @@ fn main() -> anyhow::Result<()> {
             ChannelEvent::Closed => app.exit = true,
         })
         .map_err(|err| anyhow::anyhow!("could not listen to the shell: {err}"))?;
+
+    event_loop
+        .handle()
+        .insert_source(paste_receiver, |event, _, app: &mut App| {
+            if let ChannelEvent::Msg(text) = event {
+                app.insert_text(&text);
+            }
+        })
+        .map_err(|err| anyhow::anyhow!("could not listen to the clipboard: {err}"))?;
 
     let signal = event_loop.get_signal();
     event_loop.run(Duration::from_millis(16), &mut app, move |app| {
@@ -159,6 +189,13 @@ struct App {
     metrics: Metrics,
     theme: Theme,
     session: Session,
+    data_manager: DataDeviceManagerState,
+    data_device: Option<DataDevice>,
+    copy_source: Option<CopyPasteSource>,
+    clipboard: String,
+    paste_sender: smithay_client_toolkit::reexports::calloop::channel::Sender<String>,
+    serial: u32,
+    selecting: bool,
     control: bool,
     alt: bool,
     shift: bool,
@@ -175,6 +212,77 @@ impl App {
         }
         self.last_draw = Instant::now();
         self.draw();
+    }
+
+    fn cell_at(&self, x: f64, y: f64) -> (Point, Side) {
+        let cell_width = self.metrics.cell_width.max(1);
+        let cell_height = self.metrics.cell_height.max(1);
+        let inside_x = (x * self.scale as f64) as i32 - view::PADDING;
+        let inside_y = (y * self.scale as f64) as i32 - view::PADDING;
+        let column = (inside_x.max(0) / cell_width) as usize;
+        let row = inside_y.max(0) / cell_height;
+        let column = column.min(self.session.size.columns.saturating_sub(1));
+        let row = row.min(self.session.size.lines.saturating_sub(1) as i32);
+        let line = Line(row - self.session.display_offset() as i32);
+        let side = match inside_x.rem_euclid(cell_width) > cell_width / 2 {
+            true => Side::Right,
+            false => Side::Left,
+        };
+        (Point::new(line, Column(column)), side)
+    }
+
+    fn copy(&mut self, qh: &QueueHandle<Self>) {
+        let Some(text) = self.session.selected_text() else {
+            return;
+        };
+        let Some(device) = self.data_device.as_ref() else {
+            return;
+        };
+        let source = self
+            .data_manager
+            .create_copy_paste_source(qh, [TEXT_MIME, "text/plain", "UTF8_STRING"]);
+        source.set_selection(device, self.serial);
+        self.clipboard = text;
+        self.copy_source = Some(source);
+    }
+
+    fn paste(&mut self) {
+        let Some(device) = self.data_device.as_ref() else {
+            return;
+        };
+        let Some(offer) = device.data().selection_offer() else {
+            return;
+        };
+        let pipe = match offer.receive(String::from(TEXT_MIME)) {
+            Ok(pipe) => pipe,
+            Err(err) => {
+                tracing::warn!(?err, "could not read the clipboard");
+                return;
+            }
+        };
+        let sender = self.paste_sender.clone();
+        std::thread::spawn(move || {
+            if let Some(text) = read_until_end(pipe) {
+                let _ = sender.send(text);
+            }
+        });
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let lines = text.replace("\r\n", "\r").replace('\n', "\r");
+        self.session.scroll_to_bottom();
+        if self.session.wraps_a_paste() {
+            self.session.write(b"\x1b[200~");
+            self.session.write(lines.as_bytes());
+            self.session.write(b"\x1b[201~");
+        } else {
+            self.session.write(lines.as_bytes());
+        }
+        self.dirty = true;
+        self.redraw_if_needed();
     }
 
     fn change_font(&mut self, steps: f32) {
@@ -278,11 +386,22 @@ impl KeyboardHandler for App {
     fn press_key(
         &mut self,
         _c: &Connection,
-        _q: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _k: &wl_keyboard::WlKeyboard,
-        _serial: u32,
+        serial: u32,
         event: KeyEvent,
     ) {
+        self.serial = serial;
+        if self.control && self.shift {
+            if event.keysym == Keysym::C || event.keysym == Keysym::c {
+                self.copy(qh);
+                return;
+            }
+            if event.keysym == Keysym::V || event.keysym == Keysym::v {
+                self.paste();
+                return;
+            }
+        }
         if self.shift {
             let paged = match event.keysym {
                 Keysym::Page_Up => Some(true),
@@ -441,6 +560,9 @@ impl SeatHandler for App {
                 Err(err) => tracing::warn!(?err, "no keyboard for the terminal"),
             }
         }
+        if self.data_device.is_none() {
+            self.data_device = Some(self.data_manager.get_data_device(qh, &seat));
+        }
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seat_state.get_pointer(qh, &seat) {
                 Ok(pointer) => self.pointer = Some(pointer),
@@ -483,20 +605,127 @@ impl PointerHandler for App {
             if event.surface != *self.window.wl_surface() {
                 continue;
             }
-            let PointerEventKind::Axis { vertical, .. } = &event.kind else {
-                continue;
-            };
-            let mut lines = wheel_steps(vertical) * WHEEL_LINES;
-            if lines == 0 {
-                lines = (vertical.absolute / self.metrics.cell_height as f64).round() as i32;
+            match &event.kind {
+                PointerEventKind::Press { button, .. } if *button == BTN_LEFT => {
+                    let (point, side) = self.cell_at(event.position.0, event.position.1);
+                    self.session.start_selection(point, side);
+                    self.selecting = true;
+                    self.dirty = true;
+                }
+                PointerEventKind::Motion { .. } if self.selecting => {
+                    let (point, side) = self.cell_at(event.position.0, event.position.1);
+                    self.session.update_selection(point, side);
+                    self.dirty = true;
+                }
+                PointerEventKind::Release { button, .. } if *button == BTN_LEFT => {
+                    self.selecting = false;
+                }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let mut lines = wheel_steps(vertical) * WHEEL_LINES;
+                    if lines == 0 {
+                        lines =
+                            (vertical.absolute / self.metrics.cell_height as f64).round() as i32;
+                    }
+                    if lines != 0 {
+                        self.session.scroll(-lines);
+                        self.dirty = true;
+                    }
+                }
+                _ => {}
             }
-            if lines == 0 {
-                continue;
-            }
-            self.session.scroll(-lines);
-            self.dirty = true;
         }
         self.redraw_if_needed();
+    }
+}
+
+impl DataDeviceHandler for App {
+    fn enter(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+        _surface: &wl_surface::WlSurface,
+    ) {
+    }
+
+    fn leave(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _device: &WlDataDevice) {}
+
+    fn motion(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+    ) {
+    }
+
+    fn selection(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _device: &WlDataDevice) {}
+
+    fn drop_performed(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _device: &WlDataDevice) {}
+}
+
+impl DataOfferHandler for App {
+    fn source_actions(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        _actions: DndAction,
+    ) {
+    }
+
+    fn selected_action(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        _actions: DndAction,
+    ) {
+    }
+}
+
+impl DataSourceHandler for App {
+    fn accept_mime(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: Option<String>,
+    ) {
+    }
+
+    fn send_request(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: String,
+        fd: WritePipe,
+    ) {
+        let mut pipe = fd;
+        if let Err(err) = std::io::Write::write_all(&mut pipe, self.clipboard.as_bytes()) {
+            tracing::warn!(?err, "could not hand over the copied text");
+        }
+    }
+
+    fn cancelled(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _source: &WlDataSource) {
+        self.copy_source = None;
+    }
+
+    fn dnd_dropped(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _source: &WlDataSource) {}
+
+    fn dnd_finished(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _source: &WlDataSource) {}
+
+    fn action(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _action: DndAction,
+    ) {
     }
 }
 
@@ -516,6 +745,30 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+fn read_until_end(pipe: smithay_client_toolkit::data_device_manager::ReadPipe) -> Option<String> {
+    use std::io::Read;
+
+    let mut pipe = pipe;
+    let mut collected = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        match pipe.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => collected.extend_from_slice(&buffer[..count]),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                tracing::warn!(?err, "the clipboard stopped sending");
+                break;
+            }
+        }
+    }
+    String::from_utf8(collected).ok()
+}
 
 fn wheel_steps(axis: &smithay_client_toolkit::seat::pointer::AxisScroll) -> i32 {
     if axis.value120 != 0 {
