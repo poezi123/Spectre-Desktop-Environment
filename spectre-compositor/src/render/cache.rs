@@ -36,6 +36,8 @@ pub struct RenderCache {
     launcher_geometry: Option<Rectangle<i32, Logical>>,
     wallpaper: Option<TextureBuffer<GlesTexture>>,
     wallpaper_key: Option<String>,
+    blur: Option<TextureBuffer<GlesTexture>>,
+    blur_size: (i32, i32),
 }
 
 #[derive(Default)]
@@ -84,9 +86,24 @@ impl RenderCache {
         self.wallpaper_key.as_deref()
     }
 
+    pub fn blur(&self) -> Option<&TextureBuffer<GlesTexture>> {
+        self.blur.as_ref()
+    }
+
+    pub fn blur_size(&self) -> (i32, i32) {
+        self.blur_size
+    }
+
+    pub fn set_blur(&mut self, buffer: TextureBuffer<GlesTexture>, size: (i32, i32)) {
+        self.blur = Some(buffer);
+        self.blur_size = size;
+    }
+
     pub fn set_wallpaper(&mut self, buffer: TextureBuffer<GlesTexture>, key: String) {
         self.wallpaper = Some(buffer);
         self.wallpaper_key = Some(key);
+        self.blur = None;
+        self.blur_size = (0, 0);
     }
 
     pub fn launcher_geometry(&self) -> Option<Rectangle<i32, Logical>> {

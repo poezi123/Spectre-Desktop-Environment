@@ -106,6 +106,7 @@ fn build_output_elements(
         cache.set_snapshots(Vec::new(), Size::from((0, 0)));
     }
 
+    upload_wallpaper(state, renderer, cache);
     capture_closing(state, output, renderer, cache, scale);
 
     let mut elements: Vec<SpectreElement> = Vec::new();
@@ -154,7 +155,7 @@ fn build_output_elements(
     elements.extend(layer_elements(state, output, renderer, cache, scale, false));
 
     if let Some(area) = geometry {
-        if let Some(element) = wallpaper_element(state, renderer, cache, area, scale) {
+        if let Some(element) = wallpaper_element(state, cache, area, scale) {
             elements.push(SpectreElement::Plain(WorkspaceElement::Snapshot(element)));
             return elements;
         }
@@ -316,7 +317,7 @@ fn capture_workspaces(
     let mut textures = Vec::new();
     for index in 0..faces {
         let mut scene = workspace_elements(state, output, renderer, shader, cache, index, 1.0);
-        match wallpaper_element(state, renderer, cache, area, scale) {
+        match wallpaper_element(state, cache, area, scale) {
             Some(wallpaper) => scene.push(WorkspaceElement::Snapshot(wallpaper)),
             None => {
                 if let Some(backdrop) = contour_element(state, renderer, cache, shader, area, scale) {
@@ -555,31 +556,50 @@ fn cursor_hotspot(surface: &smithay::reexports::wayland_server::protocol::wl_sur
     })
 }
 
+fn upload_wallpaper(state: &Spectre, renderer: &mut GlesRenderer, cache: &mut RenderCache) {
+    use smithay::backend::renderer::ImportMem;
+
+    let Some(wallpaper) = state.wallpaper.as_ref() else {
+        return;
+    };
+    let key = wallpaper.key();
+    if cache.wallpaper_key() == Some(key.as_str()) {
+        return;
+    }
+    let Some(pixels) = wallpaper.pixels() else {
+        return;
+    };
+    let format = smithay::backend::allocator::Fourcc::Argb8888;
+    let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from(wallpaper.size);
+    let texture = match renderer.import_memory(&pixels, format, size, false) {
+        Ok(texture) => texture,
+        Err(err) => {
+            tracing::warn!(?err, "could not upload the wallpaper");
+            return;
+        }
+    };
+    let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    cache.set_wallpaper(buffer, key);
+
+    let Some((soft, soft_size)) = wallpaper::blurred(&pixels, wallpaper.size) else {
+        return;
+    };
+    let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from(soft_size);
+    let Ok(texture) = renderer.import_memory(&soft, format, size, false) else {
+        tracing::warn!("could not upload the blurred wallpaper");
+        return;
+    };
+    let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    cache.set_blur(buffer, soft_size);
+}
+
 fn wallpaper_element(
     state: &Spectre,
-    renderer: &mut GlesRenderer,
-    cache: &mut RenderCache,
+    cache: &RenderCache,
     area: Rectangle<i32, Logical>,
     scale: f64,
 ) -> Option<TextureRenderElement<GlesTexture>> {
-    use smithay::backend::renderer::ImportMem;
-
-    let wallpaper = state.wallpaper.as_ref()?;
-    let key = wallpaper.key();
-    if cache.wallpaper_key() != Some(key.as_str()) {
-        let pixels = wallpaper.pixels()?;
-        let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from(wallpaper.size);
-        let format = smithay::backend::allocator::Fourcc::Argb8888;
-        let texture = match renderer.import_memory(&pixels, format, size, false) {
-            Ok(texture) => texture,
-            Err(err) => {
-                tracing::warn!(?err, "could not upload the wallpaper");
-                return None;
-            }
-        };
-        let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
-        cache.set_wallpaper(buffer, key);
-    }
+    state.wallpaper.as_ref()?;
     let buffer = cache.wallpaper()?;
     let location: Point<i32, Physical> = area.loc.to_physical_precise_round(scale);
     Some(TextureRenderElement::from_texture_buffer(
@@ -590,6 +610,45 @@ fn wallpaper_element(
         None,
         Kind::Unspecified,
     ))
+}
+
+fn blur_element(
+    state: &Spectre,
+    cache: &RenderCache,
+    area: Rectangle<i32, Logical>,
+    behind: Rectangle<i32, Logical>,
+    scale: f64,
+) -> Option<WorkspaceElement> {
+    if !state.config.effects.blur {
+        return None;
+    }
+    state.wallpaper.as_ref()?;
+    let buffer = cache.blur()?;
+    let (soft_width, soft_height) = cache.blur_size();
+    if area.size.w <= 0 || area.size.h <= 0 {
+        return None;
+    }
+    let across = soft_width as f64 / area.size.w as f64;
+    let down = soft_height as f64 / area.size.h as f64;
+    let left = (behind.loc.x - area.loc.x) as f64 * across;
+    let top = (behind.loc.y - area.loc.y) as f64 * down;
+    let src = Rectangle::new(
+        Point::<f64, Logical>::from((left, top)),
+        smithay::utils::Size::<f64, Logical>::from((
+            behind.size.w as f64 * across,
+            behind.size.h as f64 * down,
+        )),
+    );
+    let location: Point<i32, Physical> = behind.loc.to_physical_precise_round(scale);
+    let element = TextureRenderElement::from_texture_buffer(
+        location.to_f64(),
+        buffer,
+        None,
+        Some(src),
+        Some(behind.size),
+        Kind::Unspecified,
+    );
+    Some(WorkspaceElement::Snapshot(element))
 }
 
 fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gradient {
@@ -638,6 +697,11 @@ fn layer_elements(
             alpha = slide.alpha(now);
         }
 
+        let mut frosted = None;
+        if let Some(area) = state.workspaces.output_geometry(output) {
+            frosted = blur_element(state, cache, area, geometry, scale);
+        }
+
         let surfaces = AsRenderElements::<GlesRenderer>::render_elements::<SurfaceElement>(
             layer,
             renderer,
@@ -662,11 +726,17 @@ fn layer_elements(
             for surface in surfaces {
                 elements.push(SpectreElement::Plain(WorkspaceElement::Surface(surface)));
             }
+            if let Some(element) = frosted {
+                elements.push(SpectreElement::Plain(element));
+            }
             continue;
         };
         let down = slide.offset(now) * scale;
         for surface in surfaces {
             elements.push(SpectreElement::Moved(shift(WorkspaceElement::Surface(surface), down)));
+        }
+        if let Some(element) = frosted {
+            elements.push(SpectreElement::Moved(shift(element, down)));
         }
     }
     elements

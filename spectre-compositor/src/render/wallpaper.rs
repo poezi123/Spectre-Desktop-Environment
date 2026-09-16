@@ -52,6 +52,90 @@ impl Wallpaper {
     }
 }
 
+pub const BLUR_SHRINK: i32 = 4;
+
+const BLUR_RADIUS: i32 = 3;
+
+pub fn blurred(pixels: &[u8], size: (i32, i32)) -> Option<(Vec<u8>, (i32, i32))> {
+    if size.0 <= 0 || size.1 <= 0 {
+        return None;
+    }
+    if pixels.len() < (size.0 as usize * size.1 as usize * 4) {
+        return None;
+    }
+    let width = (size.0 / BLUR_SHRINK).max(1);
+    let height = (size.1 / BLUR_SHRINK).max(1);
+    let mut small = shrink(pixels, size, width, height);
+    soften(&mut small, width, height);
+    soften(&mut small, width, height);
+    Some((small, (width, height)))
+}
+
+fn shrink(pixels: &[u8], size: (i32, i32), width: i32, height: i32) -> Vec<u8> {
+    let mut out = vec![0u8; width as usize * height as usize * 4];
+    let count = (BLUR_SHRINK * BLUR_SHRINK) as u32;
+    for y in 0..height {
+        for x in 0..width {
+            let mut sums = [0u32; 4];
+            for step_y in 0..BLUR_SHRINK {
+                for step_x in 0..BLUR_SHRINK {
+                    let source_x = (x * BLUR_SHRINK + step_x).min(size.0 - 1);
+                    let source_y = (y * BLUR_SHRINK + step_y).min(size.1 - 1);
+                    let at = (source_y as usize * size.0 as usize + source_x as usize) * 4;
+                    for channel in 0..4 {
+                        sums[channel] += pixels[at + channel] as u32;
+                    }
+                }
+            }
+            let at = (y as usize * width as usize + x as usize) * 4;
+            for channel in 0..4 {
+                out[at + channel] = (sums[channel] / count) as u8;
+            }
+        }
+    }
+    out
+}
+
+fn soften(pixels: &mut [u8], width: i32, height: i32) {
+    let count = (BLUR_RADIUS * 2 + 1) as u32;
+
+    let source = pixels.to_vec();
+    for y in 0..height {
+        for x in 0..width {
+            let mut sums = [0u32; 4];
+            for step in -BLUR_RADIUS..=BLUR_RADIUS {
+                let near = (x + step).clamp(0, width - 1);
+                let at = (y as usize * width as usize + near as usize) * 4;
+                for channel in 0..4 {
+                    sums[channel] += source[at + channel] as u32;
+                }
+            }
+            let at = (y as usize * width as usize + x as usize) * 4;
+            for channel in 0..4 {
+                pixels[at + channel] = (sums[channel] / count) as u8;
+            }
+        }
+    }
+
+    let source = pixels.to_vec();
+    for y in 0..height {
+        for x in 0..width {
+            let mut sums = [0u32; 4];
+            for step in -BLUR_RADIUS..=BLUR_RADIUS {
+                let near = (y + step).clamp(0, height - 1);
+                let at = (near as usize * width as usize + x as usize) * 4;
+                for channel in 0..4 {
+                    sums[channel] += source[at + channel] as u32;
+                }
+            }
+            let at = (y as usize * width as usize + x as usize) * 4;
+            for channel in 0..4 {
+                pixels[at + channel] = (sums[channel] / count) as u8;
+            }
+        }
+    }
+}
+
 fn load_pixels(path: &Path, mode: WallpaperMode, width: i32, height: i32) -> Option<Vec<u8>> {
     if width <= 0 || height <= 0 {
         return None;
@@ -175,6 +259,27 @@ mod tests {
     #[test]
     fn an_output_with_no_area_is_refused_rather_than_divided_by() {
         assert!(Wallpaper::load(Path::new("/nowhere.png"), WallpaperMode::Fill, 0, 0).is_none());
+    }
+
+    #[test]
+    fn the_blurred_copy_is_smaller_and_evens_the_picture_out() {
+        let sharp = fit(source(64, 64), WallpaperMode::Stretch, 64, 64);
+        let (soft, size) = blurred(&sharp, (64, 64)).expect("a blurred copy");
+        assert_eq!(size, (16, 16));
+        assert_eq!(soft.len(), 16 * 16 * 4);
+
+        let spread = |pixels: &[u8]| {
+            let reds: Vec<u8> = pixels.iter().skip(2).step_by(4).copied().collect();
+            let high = reds.iter().copied().max().unwrap_or(0) as i32;
+            let low = reds.iter().copied().min().unwrap_or(0) as i32;
+            high - low
+        };
+        assert!(spread(&soft) < spread(&sharp), "blurring must flatten the picture");
+    }
+
+    #[test]
+    fn a_picture_with_no_area_has_no_blurred_copy() {
+        assert!(blurred(&[], (0, 0)).is_none());
     }
 
     #[test]
