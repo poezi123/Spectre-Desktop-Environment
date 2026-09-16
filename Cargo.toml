@@ -8,6 +8,7 @@ members = [
     "spectre-notify",
     "spectre-panel",
     "spectre-settings",
+    "spectre-terminal",
     "spectre-text",
     "spectre-theme",
     "spectre-compositor",
