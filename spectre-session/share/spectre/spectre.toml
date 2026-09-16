@@ -11,6 +11,10 @@
 #   spectre      everything on, including animated patterns - modern hardware
 #   custom       the [effects] section below is used verbatim
 profile = "balanced"
+
+# Start XWayland so programs written for X11 can run. Turn it off to save a
+# little memory when you only use Wayland programs.
+xwayland = true
 workspaces = 4
 # spectre-panel is started automatically unless [panel] enabled = false;
 # anything listed here runs after it.

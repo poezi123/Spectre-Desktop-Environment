@@ -89,7 +89,9 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     init_session_events(&mut state, session_notifier, &shared)?;
 
     state.start_ipc();
-    state.start_xwayland();
+    if state.config.general.xwayland {
+        state.start_xwayland();
+    }
     tracing::info!(socket = %state.socket_name, seat = %seat_name, "Spectre is up (native)");
     state.set_panel_running(state.config.panel.enabled);
     let startup = state.config.general.startup_commands(false);

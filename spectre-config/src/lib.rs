@@ -27,11 +27,12 @@ pub struct General {
     pub profile: Profile,
     pub workspaces: u8,
     pub autostart: Vec<String>,
+    pub xwayland: bool,
 }
 
 impl Default for General {
     fn default() -> Self {
-        Self { profile: Profile::default(), workspaces: 4, autostart: Vec::new() }
+        Self { profile: Profile::default(), workspaces: 4, autostart: Vec::new(), xwayland: true }
     }
 }
 
