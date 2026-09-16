@@ -344,8 +344,9 @@ impl Spectre {
             return None;
         };
         let (program, args) = argv.split_first()?;
+        let program = sibling_program(program);
 
-        let mut cmd = std::process::Command::new(program);
+        let mut cmd = std::process::Command::new(&program);
         if let Some(socket) = self.ipc_socket_path() {
             cmd.env(spectre_ipc::SOCKET_ENV, socket);
         }
@@ -370,7 +371,7 @@ impl Spectre {
                 Some(pid)
             }
             Err(err) => {
-                tracing::warn!(?err, %program, "failed to spawn");
+                tracing::warn!(?err, ?program, "failed to spawn");
                 None
             }
         }
@@ -744,5 +745,55 @@ mod tests {
     #[test]
     fn an_empty_command_yields_no_arguments() {
         assert_eq!(shell_split("   ").unwrap(), Vec::<String>::new());
+    }
+}
+
+fn sibling_program(program: &str) -> std::path::PathBuf {
+    let plain = std::path::PathBuf::from(program);
+    if program.contains('/') || !program.starts_with("spectre") {
+        return plain;
+    }
+    let Ok(compositor) = std::env::current_exe() else {
+        return plain;
+    };
+    let Some(directory) = compositor.parent() else {
+        return plain;
+    };
+    let sibling = directory.join(program);
+    if sibling.is_file() {
+        return sibling;
+    }
+    plain
+}
+
+#[cfg(test)]
+mod sibling_tests {
+    use super::sibling_program;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_program_of_someone_else_stays_a_plain_name() {
+        assert_eq!(sibling_program("konsole"), PathBuf::from("konsole"));
+    }
+
+    #[test]
+    fn a_path_is_left_alone() {
+        let given = "/usr/local/bin/spectre-settings";
+        assert_eq!(sibling_program(given), PathBuf::from(given));
+    }
+
+    #[test]
+    fn a_spectre_program_next_to_the_compositor_wins() {
+        let compositor = std::env::current_exe().unwrap();
+        let directory = compositor.parent().unwrap();
+        let sibling = directory.join("spectre-sibling-test");
+        std::fs::write(&sibling, b"#!/bin/sh\n").unwrap();
+        assert_eq!(sibling_program("spectre-sibling-test"), sibling);
+        std::fs::remove_file(&sibling).unwrap();
+    }
+
+    #[test]
+    fn without_a_sibling_the_search_path_still_decides() {
+        assert_eq!(sibling_program("spectre-not-installed"), PathBuf::from("spectre-not-installed"));
     }
 }
