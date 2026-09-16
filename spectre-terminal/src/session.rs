@@ -2,7 +2,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 
 use alacritty_terminal::event::{OnResize, VoidListener, WindowSize};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Processor;
@@ -43,7 +43,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(size: Size, cell: (u16, u16), output: Sender<Vec<u8>>) -> anyhow::Result<Self> {
+    pub fn start(
+        size: Size,
+        cell: (u16, u16),
+        scrollback: usize,
+        output: Sender<Vec<u8>>,
+    ) -> anyhow::Result<Self> {
         let mut options = tty::Options::default();
         options.env.insert(String::from("TERM"), String::from("xterm-256color"));
 
@@ -71,8 +76,24 @@ impl Session {
             }
         });
 
-        let term = Term::new(Config::default(), &size, VoidListener);
+        let config = Config { scrolling_history: scrollback, ..Config::default() };
+        let term = Term::new(config, &size, VoidListener);
         Ok(Self { term, size, processor: Processor::new(), pty, writer })
+    }
+
+    pub fn scroll(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    pub fn scroll_page(&mut self, up: bool) {
+        match up {
+            true => self.term.scroll_display(Scroll::PageUp),
+            false => self.term.scroll_display(Scroll::PageDown),
+        }
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {

@@ -14,6 +14,7 @@ use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
 };
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::xdg::window::{
     Window, WindowConfigure, WindowDecorations, WindowHandler,
@@ -28,14 +29,14 @@ use spectre_draw::Canvas;
 use spectre_text::TextRenderer;
 use spectre_theme::Theme;
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface};
+use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
 use crate::session::{Session, Size};
 use crate::view::Metrics;
 
 const MIN_REDRAW: Duration = Duration::from_millis(16);
-const FONT_PX: f32 = 14.0;
+const WHEEL_LINES: i32 = 3;
 const START_COLUMNS: usize = 92;
 const START_LINES: usize = 26;
 
@@ -47,8 +48,9 @@ fn main() -> anyhow::Result<()> {
         tracing::warn!(?err, "using the built-in settings");
     }
 
+    let font_px = config.terminal.font_size();
     let mut text = TextRenderer::new();
-    let metrics = Metrics::measure(&mut text, FONT_PX);
+    let metrics = Metrics::measure(&mut text, font_px);
     let width = metrics.cell_width * START_COLUMNS as i32 + view::PADDING * 2;
     let height = metrics.cell_height * START_LINES as i32 + view::PADDING * 2;
 
@@ -73,7 +75,8 @@ fn main() -> anyhow::Result<()> {
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
     let (sender, receiver) = channel::<Vec<u8>>();
     let cell = (metrics.cell_width as u16, metrics.cell_height as u16);
-    let session = Session::start(Size::new(START_COLUMNS, START_LINES), cell, sender)
+    let history = config.terminal.scrollback();
+    let session = Session::start(Size::new(START_COLUMNS, START_LINES), cell, history, sender)
         .context("could not start the shell")?;
 
     let mut app = App {
@@ -84,6 +87,7 @@ fn main() -> anyhow::Result<()> {
         pool,
         window,
         keyboard: None,
+        pointer: None,
         width,
         height,
         scale: 1,
@@ -98,6 +102,8 @@ fn main() -> anyhow::Result<()> {
         session,
         control: false,
         alt: false,
+        shift: false,
+        font_px,
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
@@ -139,6 +145,7 @@ struct App {
     pool: SlotPool,
     window: Window,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
     width: i32,
     height: i32,
     scale: i32,
@@ -154,6 +161,8 @@ struct App {
     session: Session,
     control: bool,
     alt: bool,
+    shift: bool,
+    font_px: f32,
 }
 
 impl App {
@@ -166,6 +175,21 @@ impl App {
         }
         self.last_draw = Instant::now();
         self.draw();
+    }
+
+    fn change_font(&mut self, steps: f32) {
+        let wanted = (self.font_px + steps).clamp(
+            spectre_config::terminal::MIN_FONT_SIZE,
+            spectre_config::terminal::MAX_FONT_SIZE,
+        );
+        if wanted == self.font_px {
+            return;
+        }
+        self.font_px = wanted;
+        self.metrics = Metrics::measure(&mut self.text, self.font_px);
+        self.fit_the_grid();
+        self.dirty = true;
+        self.redraw_if_needed();
     }
 
     fn fit_the_grid(&mut self) {
@@ -259,8 +283,34 @@ impl KeyboardHandler for App {
         _serial: u32,
         event: KeyEvent,
     ) {
+        if self.shift {
+            let paged = match event.keysym {
+                Keysym::Page_Up => Some(true),
+                Keysym::Page_Down => Some(false),
+                _ => None,
+            };
+            if let Some(up) = paged {
+                self.session.scroll_page(up);
+                self.dirty = true;
+                self.redraw_if_needed();
+                return;
+            }
+        }
+        if self.control {
+            let steps = match event.keysym {
+                Keysym::plus | Keysym::equal | Keysym::KP_Add => Some(1.0),
+                Keysym::minus | Keysym::KP_Subtract => Some(-1.0),
+                _ => None,
+            };
+            if let Some(steps) = steps {
+                self.change_font(steps);
+                return;
+            }
+        }
         if let Some(bytes) = keys_to_bytes(&event, self.control, self.alt) {
+            self.session.scroll_to_bottom();
             self.session.write(&bytes);
+            self.dirty = true;
         }
     }
 
@@ -297,6 +347,7 @@ impl KeyboardHandler for App {
     ) {
         self.control = modifiers.ctrl;
         self.alt = modifiers.alt;
+        self.shift = modifiers.shift;
     }
 }
 
@@ -384,12 +435,17 @@ impl SeatHandler for App {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability != Capability::Keyboard || self.keyboard.is_some() {
-            return;
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            match self.seat_state.get_keyboard(qh, &seat, None) {
+                Ok(keyboard) => self.keyboard = Some(keyboard),
+                Err(err) => tracing::warn!(?err, "no keyboard for the terminal"),
+            }
         }
-        match self.seat_state.get_keyboard(qh, &seat, None) {
-            Ok(keyboard) => self.keyboard = Some(keyboard),
-            Err(err) => tracing::warn!(?err, "no keyboard for the terminal"),
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            match self.seat_state.get_pointer(qh, &seat) {
+                Ok(pointer) => self.pointer = Some(pointer),
+                Err(err) => tracing::warn!(?err, "no mouse for the terminal"),
+            }
         }
     }
 
@@ -405,9 +461,43 @@ impl SeatHandler for App {
                 keyboard.release();
             }
         }
+        if capability == Capability::Pointer {
+            if let Some(pointer) = self.pointer.take() {
+                pointer.release();
+            }
+        }
     }
 
     fn remove_seat(&mut self, _c: &Connection, _q: &QueueHandle<Self>, _s: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _c: &Connection,
+        _q: &QueueHandle<Self>,
+        _p: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            if event.surface != *self.window.wl_surface() {
+                continue;
+            }
+            let PointerEventKind::Axis { vertical, .. } = &event.kind else {
+                continue;
+            };
+            let mut lines = wheel_steps(vertical) * WHEEL_LINES;
+            if lines == 0 {
+                lines = (vertical.absolute / self.metrics.cell_height as f64).round() as i32;
+            }
+            if lines == 0 {
+                continue;
+            }
+            self.session.scroll(-lines);
+            self.dirty = true;
+        }
+        self.redraw_if_needed();
+    }
 }
 
 impl ShmHandler for App {
@@ -426,6 +516,13 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+fn wheel_steps(axis: &smithay_client_toolkit::seat::pointer::AxisScroll) -> i32 {
+    if axis.value120 != 0 {
+        return axis.value120 / 120;
+    }
+    axis.discrete
+}
 
 fn keys_to_bytes(event: &KeyEvent, control: bool, alt: bool) -> Option<Vec<u8>> {
     let plain = match event.keysym {
@@ -490,6 +587,25 @@ mod tests {
             keysym,
             utf8: typed.map(|t| t.to_owned()),
         }
+    }
+
+    fn axis(value120: i32, discrete: i32) -> smithay_client_toolkit::seat::pointer::AxisScroll {
+        smithay_client_toolkit::seat::pointer::AxisScroll {
+            value120,
+            discrete,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_wheel_notch_counts_as_one_step() {
+        assert_eq!(wheel_steps(&axis(-120, 0)), -1);
+        assert_eq!(wheel_steps(&axis(240, 0)), 2);
+    }
+
+    #[test]
+    fn an_older_compositor_is_still_understood() {
+        assert_eq!(wheel_steps(&axis(0, -1)), -1);
     }
 
     #[test]

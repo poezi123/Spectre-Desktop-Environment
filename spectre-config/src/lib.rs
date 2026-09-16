@@ -4,11 +4,13 @@ pub mod effects;
 pub mod input;
 pub mod keybind;
 pub mod profile;
+pub mod terminal;
 
 pub use desktop::{Desktop, WallpaperMode};
 pub use display::Display;
 pub use effects::{Effects, WorkspaceTransition};
 pub use input::{Cursor, Input, Keyboard, Pointer};
+pub use terminal::Terminal;
 pub use keybind::{Action, Direction, Keybind, Keybinds, Modifiers};
 pub use profile::Profile;
 
@@ -104,6 +106,7 @@ pub struct Config {
     pub effects: Effects,
     pub input: Input,
     pub panel: Panel,
+    pub terminal: Terminal,
     pub theme: Theme,
     pub keybinds: Keybinds,
 }

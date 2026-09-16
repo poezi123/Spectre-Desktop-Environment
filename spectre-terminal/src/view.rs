@@ -46,6 +46,7 @@ pub fn draw(
     canvas.clear(palette.base);
 
     let content = session.term.renderable_content();
+    let offset = content.display_offset as i32;
     let cursor = content.cursor.point;
     let mut under_cursor = ' ';
     let mut run = Run::new();
@@ -57,7 +58,7 @@ pub fn draw(
             under_cursor = cell.c;
         }
         let style = Style {
-            line: point.line.0,
+            line: point.line.0 + offset,
             foreground: resolve(cell.fg, palette, palette.text),
             background: resolve(cell.bg, palette, palette.base),
             bold: cell.flags.contains(Flags::BOLD),
@@ -69,22 +70,24 @@ pub fn draw(
         run.push(cell.c);
     }
     run.flush(canvas, text, metrics);
-    draw_cursor(canvas, text, cursor, under_cursor, palette, metrics);
+    draw_cursor(canvas, text, cursor, offset, under_cursor, palette, metrics);
 }
 
 fn draw_cursor(
     canvas: &mut Canvas,
     text: &mut TextRenderer,
     cursor: Point,
+    offset: i32,
     glyph: char,
     palette: &Palette,
     metrics: &Metrics,
 ) {
-    if cursor.line.0 < 0 {
+    let row = cursor.line.0 + offset;
+    if row < 0 {
         return;
     }
     let x = PADDING + cursor.column.0 as i32 * metrics.cell_width;
-    let y = PADDING + cursor.line.0 * metrics.cell_height;
+    let y = PADDING + row * metrics.cell_height;
     let block = Rect::new(x, y, metrics.cell_width, metrics.cell_height);
     canvas.fill_rect(block, palette.accent.sample(0.5));
 

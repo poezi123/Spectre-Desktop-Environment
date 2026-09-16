@@ -108,5 +108,11 @@ kind = "none"
 # next-workspace, prev-workspace, toggle-animations, cycle-profile,
 # toggle-launcher, lock-session, screenshot, minimize, snap-left, snap-right,
 # show-desktop.
+[terminal]
+# The Spectre terminal: text size in pixels and how many lines of history it
+# keeps. Ctrl with plus or minus changes the size while it runs.
+font-size = 14.0
+scrollback = 10000
+
 [keybinds]
 "Mod+Return" = { action = "spawn", command = "konsole" }
