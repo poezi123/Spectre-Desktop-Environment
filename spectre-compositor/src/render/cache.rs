@@ -17,6 +17,7 @@ pub enum Slot {
     Frame(u32),
     Decoration(u32, u8),
     Menu(u8),
+    Shadow(u32),
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +60,7 @@ struct ShaderSlot {
     element: PixelShaderElement,
     uniforms: Vec<Uniform<'static>>,
     area: Rectangle<i32, Logical>,
+    alpha: f32,
 }
 
 impl RenderCache {
@@ -184,6 +186,13 @@ impl RenderCache {
         kind: Kind,
     ) -> (PixelShaderElement, bool) {
         self.live.push(slot);
+        let faded = match self.shaders.get(&slot) {
+            Some(entry) => entry.alpha != alpha,
+            None => false,
+        };
+        if faded {
+            self.shaders.remove(&slot);
+        }
         match self.shaders.get_mut(&slot) {
             Some(entry) => {
                 let moved = entry.area != area;
@@ -204,7 +213,7 @@ impl RenderCache {
                     uniforms.clone(),
                     kind,
                 );
-                let slot_entry = ShaderSlot { element: element.clone(), uniforms, area };
+                let slot_entry = ShaderSlot { element: element.clone(), uniforms, area, alpha };
                 self.shaders.insert(slot, slot_entry);
                 (element, true)
             }

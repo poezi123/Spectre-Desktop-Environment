@@ -13,6 +13,7 @@ const FRAME_SRC: &str = include_str!("frame.glsl");
 const ROUNDED_SRC: &str = include_str!("rounded.glsl");
 const CONTOUR_SRC: &str = include_str!("contour.glsl");
 const CUBE_SRC: &str = include_str!("cube.glsl");
+const SHADOW_SRC: &str = include_str!("shadow.glsl");
 
 const FRAME_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_radius", UniformType::_1f),
@@ -41,6 +42,19 @@ const CONTOUR_UNIFORMS: &[(&str, UniformType)] = &[
     ("spectre_bg", UniformType::_4f),
     ("spectre_uv_origin", UniformType::_1f),
     ("spectre_uv_span", UniformType::_1f),
+];
+
+pub const SHADOW_SPREAD: i32 = 18;
+
+pub const SHADOW_DROP: i32 = 6;
+
+const SHADOW_STRENGTH: f32 = 0.6;
+
+const SHADOW_UNIFORMS: &[(&str, UniformType)] = &[
+    ("spectre_radius", UniformType::_1f),
+    ("spectre_spread", UniformType::_1f),
+    ("spectre_strength", UniformType::_1f),
+    ("spectre_drop", UniformType::_1f),
 ];
 
 const CUBE_UNIFORMS: &[(&str, UniformType)] = &[
@@ -92,6 +106,7 @@ pub struct PatternShader {
     rounded: Option<GlesTexProgram>,
     contour: Option<GlesTexProgram>,
     cube: Option<GlesTexProgram>,
+    shadow: Option<GlesPixelProgram>,
 }
 
 impl PatternShader {
@@ -140,7 +155,40 @@ impl PatternShader {
             .inspect_err(|err| tracing::warn!(?err, "the workspace cube shader did not compile"))
             .ok();
 
-        Some(Self { program, frame, rounded, contour, cube })
+        let shadow = renderer
+            .compile_custom_pixel_shader(SHADOW_SRC, &names(SHADOW_UNIFORMS))
+            .inspect_err(|err| tracing::warn!(?err, "the window shadow shader did not compile"))
+            .ok();
+
+        Some(Self { program, frame, rounded, contour, cube, shadow })
+    }
+
+    pub fn shadow_element(
+        &self,
+        cache: &mut RenderCache,
+        slot: Slot,
+        outer: Rectangle<i32, Logical>,
+        metrics: &Metrics,
+        alpha: f32,
+        scale: f64,
+    ) -> Option<PixelShaderElement> {
+        let program = self.shadow.as_ref()?;
+        if outer.size.w <= 0 || outer.size.h <= 0 {
+            return None;
+        }
+        let area = Rectangle::new(
+            Point::from((outer.loc.x - SHADOW_SPREAD, outer.loc.y - SHADOW_SPREAD)),
+            Size::from((outer.size.w + SHADOW_SPREAD * 2, outer.size.h + SHADOW_SPREAD * 2)),
+        );
+        let uniforms = vec![
+            Uniform::new("spectre_radius", (metrics.corner_radius as f64 * scale) as f32),
+            Uniform::new("spectre_spread", (SHADOW_SPREAD as f64 * scale) as f32),
+            Uniform::new("spectre_strength", SHADOW_STRENGTH),
+            Uniform::new("spectre_drop", (SHADOW_DROP as f64 * scale) as f32),
+        ];
+        let (element, _) =
+            cache.shader(slot, program, area, None, alpha, uniforms, Kind::Unspecified);
+        Some(element)
     }
 
     pub fn rounded_program(&self) -> Option<&GlesTexProgram> {

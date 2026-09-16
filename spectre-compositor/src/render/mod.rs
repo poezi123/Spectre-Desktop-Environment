@@ -1000,6 +1000,16 @@ fn window_elements(
                 .map(WorkspaceElement::Solid),
         ),
     }
+
+    if state.config.effects.shadows {
+        if let Some(shader) = shader {
+            let shadow =
+                shader.shadow_element(cache, Slot::Shadow(key), frame.outer, &metrics, alpha, scale);
+            if let Some(element) = shadow {
+                elements.push(WorkspaceElement::Pattern(Banded::whole(element)));
+            }
+        }
+    }
     elements
 }
 
