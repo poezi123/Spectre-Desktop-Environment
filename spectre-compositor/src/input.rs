@@ -547,6 +547,14 @@ impl Spectre {
                 if self.focus.as_ref() != Some(&window) {
                     self.focus_window(Some(&window));
                 }
+            } else if button == BTN_RIGHT && self.surface_under_pointer().is_none() {
+                let pointer = self.pointer_position();
+                let at = Point::<i32, smithay::utils::Logical>::from((
+                    pointer.x.round() as i32,
+                    pointer.y.round() as i32,
+                ));
+                self.open_desktop_menu(at);
+                return;
             }
         }
 

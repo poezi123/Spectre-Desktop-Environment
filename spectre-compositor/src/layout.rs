@@ -12,7 +12,7 @@ use spectre_config::Direction;
 
 use crate::animation::{Closing, LauncherClosing, Pop, Slide};
 use crate::grabs::{resize_icon, ActiveResize, ResizeGrab, BTN_LEFT};
-use crate::window_menu::{MenuItem, WindowMenu};
+use crate::window_menu::{MenuFor, MenuItem, WindowMenu};
 use crate::render::{decorations, Edges, Frame, Part, LAUNCHER_NAMESPACE};
 use crate::state::Spectre;
 
@@ -243,7 +243,10 @@ impl Spectre {
         self.opening.retain(|(opening, _)| opening != window);
         self.snapped.retain(|(snapped, _, _)| snapped != window);
         self.desktop_hidden.retain(|hidden| hidden != window);
-        let menu_window = self.window_menu.as_ref().map(|menu| menu.window.clone());
+        let menu_window = match self.window_menu.as_ref().map(|menu| &menu.target) {
+            Some(MenuFor::Window(open)) => Some(open.clone()),
+            _ => None,
+        };
         if menu_window.as_ref() == Some(window) {
             self.window_menu = None;
         }
@@ -592,7 +595,20 @@ impl Spectre {
             return;
         };
         let maximized = self.has_state(window, xdg_toplevel::State::Maximized);
-        self.window_menu = Some(WindowMenu::new(window.clone(), at, maximized, area));
+        self.window_menu = Some(WindowMenu::for_window(window.clone(), at, maximized, area));
+        self.cursor_status = CursorImageStatus::default_named();
+        self.edge_cursor = false;
+        self.mark_dirty();
+    }
+
+    pub fn open_desktop_menu(&mut self, at: Point<i32, Logical>) {
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let Some(area) = self.workspaces.output_geometry(&output) else {
+            return;
+        };
+        self.window_menu = Some(WindowMenu::for_desktop(at, area));
         self.cursor_status = CursorImageStatus::default_named();
         self.edge_cursor = false;
         self.mark_dirty();
@@ -637,7 +653,13 @@ impl Spectre {
         let Some(item) = menu.items.get(index).copied() else {
             return;
         };
-        let window = menu.window;
+        let window = match menu.target {
+            MenuFor::Window(window) => window,
+            MenuFor::Desktop => {
+                self.activate_desktop_item(item);
+                return;
+            }
+        };
         match item {
             MenuItem::Minimize => self.minimize(&window),
             MenuItem::Maximize => self.set_maximized(&window, true),
@@ -663,6 +685,21 @@ impl Spectre {
                 self.run_action(spectre_config::Action::MoveToNextWorkspace);
             }
             MenuItem::Close => self.close_window(&window),
+            MenuItem::Terminal
+            | MenuItem::Settings
+            | MenuItem::Wallpaper
+            | MenuItem::ShowDesktop
+            | MenuItem::Overview => self.activate_desktop_item(item),
+        }
+    }
+
+    fn activate_desktop_item(&mut self, item: MenuItem) {
+        match item {
+            MenuItem::Terminal => self.spawn("konsole"),
+            MenuItem::Settings | MenuItem::Wallpaper => self.spawn("spectre-settings"),
+            MenuItem::ShowDesktop => self.toggle_show_desktop(),
+            MenuItem::Overview => self.open_overview(),
+            _ => {}
         }
     }
 

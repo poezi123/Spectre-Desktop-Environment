@@ -7,6 +7,12 @@ pub const ITEM_HEIGHT: i32 = 28;
 
 pub const PADDING: i32 = 4;
 
+#[derive(Debug, Clone)]
+pub enum MenuFor {
+    Window(Window),
+    Desktop,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
     Minimize,
@@ -18,6 +24,11 @@ pub enum MenuItem {
     PreviousWorkspace,
     NextWorkspace,
     Close,
+    Terminal,
+    Settings,
+    Wallpaper,
+    ShowDesktop,
+    Overview,
 }
 
 impl MenuItem {
@@ -32,28 +43,45 @@ impl MenuItem {
             MenuItem::PreviousWorkspace => "Move to Previous Workspace",
             MenuItem::NextWorkspace => "Move to Next Workspace",
             MenuItem::Close => "Close",
+            MenuItem::Terminal => "Open Terminal",
+            MenuItem::Settings => "Settings",
+            MenuItem::Wallpaper => "Change Wallpaper",
+            MenuItem::ShowDesktop => "Show the Desktop",
+            MenuItem::Overview => "Workspace Overview",
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct WindowMenu {
-    pub window: Window,
+    pub target: MenuFor,
     pub items: Vec<MenuItem>,
     pub hovered: Option<usize>,
     origin: Point<i32, Logical>,
 }
 
 impl WindowMenu {
-    pub fn new(
+    pub fn for_window(
         window: Window,
         at: Point<i32, Logical>,
         maximized: bool,
         area: Rectangle<i32, Logical>,
     ) -> Self {
-        let items = menu_items(maximized);
+        Self::new(MenuFor::Window(window), window_items(maximized), at, area)
+    }
+
+    pub fn for_desktop(at: Point<i32, Logical>, area: Rectangle<i32, Logical>) -> Self {
+        Self::new(MenuFor::Desktop, desktop_items(), at, area)
+    }
+
+    fn new(
+        target: MenuFor,
+        items: Vec<MenuItem>,
+        at: Point<i32, Logical>,
+        area: Rectangle<i32, Logical>,
+    ) -> Self {
         let origin = keep_inside(at, menu_size(items.len()), area);
-        Self { window, items, hovered: None, origin }
+        Self { target, items, hovered: None, origin }
     }
 
     pub fn rect(&self) -> Rectangle<i32, Logical> {
@@ -73,7 +101,17 @@ impl WindowMenu {
     }
 }
 
-fn menu_items(maximized: bool) -> Vec<MenuItem> {
+fn desktop_items() -> Vec<MenuItem> {
+    vec![
+        MenuItem::Terminal,
+        MenuItem::Settings,
+        MenuItem::Wallpaper,
+        MenuItem::ShowDesktop,
+        MenuItem::Overview,
+    ]
+}
+
+fn window_items(maximized: bool) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::Minimize];
     if maximized {
         items.push(MenuItem::Restore);
@@ -142,9 +180,17 @@ mod tests {
 
     #[test]
     fn a_maximized_window_offers_restore_instead_of_maximize() {
-        assert!(menu_items(true).contains(&MenuItem::Restore));
-        assert!(!menu_items(true).contains(&MenuItem::Maximize));
-        assert!(menu_items(false).contains(&MenuItem::Maximize));
+        assert!(window_items(true).contains(&MenuItem::Restore));
+        assert!(!window_items(true).contains(&MenuItem::Maximize));
+        assert!(window_items(false).contains(&MenuItem::Maximize));
+    }
+
+    #[test]
+    fn the_desktop_menu_opens_things_rather_than_closing_a_window() {
+        let items = desktop_items();
+        assert!(items.contains(&MenuItem::Terminal));
+        assert!(items.contains(&MenuItem::Settings));
+        assert!(!items.contains(&MenuItem::Close));
     }
 
     #[test]
