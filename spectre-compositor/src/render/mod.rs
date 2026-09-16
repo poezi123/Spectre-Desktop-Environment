@@ -144,8 +144,8 @@ fn build_output_elements(
     elements.extend(layer_elements(state, output, renderer, cache, scale, false));
 
     if let Some(area) = geometry {
-        if let Some(element) = wallpaper_element(state, renderer, area, scale) {
-            elements.push(SpectreElement::Plain(WorkspaceElement::Text(element)));
+        if let Some(element) = wallpaper_element(state, renderer, cache, area, scale) {
+            elements.push(SpectreElement::Plain(WorkspaceElement::Snapshot(element)));
             return elements;
         }
         let backdrop = contour_element(state, renderer, cache, shader, area, scale);
@@ -256,8 +256,8 @@ fn capture_workspaces(
     let mut textures = Vec::new();
     for index in 0..faces {
         let mut scene = workspace_elements(state, output, renderer, shader, cache, index, 1.0);
-        match wallpaper_element(state, renderer, area, scale) {
-            Some(wallpaper) => scene.push(WorkspaceElement::Text(wallpaper)),
+        match wallpaper_element(state, renderer, cache, area, scale) {
+            Some(wallpaper) => scene.push(WorkspaceElement::Snapshot(wallpaper)),
             None => {
                 if let Some(backdrop) = contour_element(state, renderer, cache, shader, area, scale) {
                     scene.push(backdrop);
@@ -498,20 +498,38 @@ fn cursor_hotspot(surface: &smithay::reexports::wayland_server::protocol::wl_sur
 fn wallpaper_element(
     state: &Spectre,
     renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
     area: Rectangle<i32, Logical>,
     scale: f64,
-) -> Option<MemoryRenderBufferRenderElement<GlesRenderer>> {
+) -> Option<TextureRenderElement<GlesTexture>> {
+    use smithay::backend::renderer::ImportMem;
+
     let wallpaper = state.wallpaper.as_ref()?;
-    MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        area.loc.to_physical_precise_round(scale),
-        &wallpaper.buffer,
+    let key = wallpaper.key();
+    if cache.wallpaper_key() != Some(key.as_str()) {
+        let pixels = wallpaper.pixels()?;
+        let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from(wallpaper.size);
+        let format = smithay::backend::allocator::Fourcc::Argb8888;
+        let texture = match renderer.import_memory(&pixels, format, size, false) {
+            Ok(texture) => texture,
+            Err(err) => {
+                tracing::warn!(?err, "could not upload the wallpaper");
+                return None;
+            }
+        };
+        let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+        cache.set_wallpaper(buffer, key);
+    }
+    let buffer = cache.wallpaper()?;
+    let location: Point<i32, Physical> = area.loc.to_physical_precise_round(scale);
+    Some(TextureRenderElement::from_texture_buffer(
+        location.to_f64(),
+        buffer,
         None,
         None,
         None,
         Kind::Unspecified,
-    )
-    .ok()
+    ))
 }
 
 fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gradient {

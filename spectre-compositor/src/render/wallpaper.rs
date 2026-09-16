@@ -1,14 +1,14 @@
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+
 use image::imageops::FilterType;
 use image::GenericImageView;
-use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::utils::{Size, Transform};
 use spectre_config::WallpaperMode;
 
 pub struct Wallpaper {
-    pub buffer: MemoryRenderBuffer,
+    pixels: RefCell<Option<Vec<u8>>>,
     pub size: (i32, i32),
-    pub source: (std::path::PathBuf, WallpaperMode),
+    pub source: (PathBuf, WallpaperMode),
 }
 
 impl std::fmt::Debug for Wallpaper {
@@ -18,48 +18,52 @@ impl std::fmt::Debug for Wallpaper {
 }
 
 impl Wallpaper {
-    pub fn load(
-        path: &std::path::Path,
-        mode: WallpaperMode,
-        width: i32,
-        height: i32,
-    ) -> Option<Self> {
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-        let image = match image::open(path) {
-            Ok(image) => image,
-            Err(err) => {
-                tracing::warn!(?err, path = %path.display(), "could not read the wallpaper");
-                return None;
-            }
-        };
-
-        let pixels = fit(image, mode, width as u32, height as u32);
-        let buffer = MemoryRenderBuffer::from_slice(
-            &pixels,
-            Fourcc::Argb8888,
-            Size::from((width, height)),
-            1,
-            Transform::Normal,
-            None,
-        );
+    pub fn load(path: &Path, mode: WallpaperMode, width: i32, height: i32) -> Option<Self> {
+        let pixels = load_pixels(path, mode, width, height)?;
         Some(Self {
-            buffer,
+            pixels: RefCell::new(Some(pixels)),
             size: (width, height),
             source: (path.to_owned(), mode),
         })
     }
 
+    pub fn key(&self) -> String {
+        let (path, mode) = &self.source;
+        format!("{}|{:?}|{}x{}", path.display(), mode, self.size.0, self.size.1)
+    }
+
+    pub fn pixels(&self) -> Option<Vec<u8>> {
+        let taken = self.pixels.borrow_mut().take();
+        if taken.is_some() {
+            return taken;
+        }
+        let (path, mode) = &self.source;
+        load_pixels(path, *mode, self.size.0, self.size.1)
+    }
+
     pub fn matches(
         &self,
-        path: &std::path::Path,
+        path: &Path,
         mode: WallpaperMode,
         width: i32,
         height: i32,
     ) -> bool {
         self.size == (width, height) && self.source.0 == path && self.source.1 == mode
     }
+}
+
+fn load_pixels(path: &Path, mode: WallpaperMode, width: i32, height: i32) -> Option<Vec<u8>> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let image = match image::open(path) {
+        Ok(image) => image,
+        Err(err) => {
+            tracing::warn!(?err, path = %path.display(), "could not read the wallpaper");
+            return None;
+        }
+    };
+    Some(fit(image, mode, width as u32, height as u32))
 }
 
 fn fit(image: image::DynamicImage, mode: WallpaperMode, width: u32, height: u32) -> Vec<u8> {
@@ -170,7 +174,21 @@ mod tests {
 
     #[test]
     fn an_output_with_no_area_is_refused_rather_than_divided_by() {
-        assert!(Wallpaper::load(std::path::Path::new("/nowhere.png"), WallpaperMode::Fill, 0, 0)
-            .is_none());
+        assert!(Wallpaper::load(Path::new("/nowhere.png"), WallpaperMode::Fill, 0, 0).is_none());
+    }
+
+    #[test]
+    fn the_pixels_are_handed_out_once_and_read_again_after_that() {
+        let directory = std::env::temp_dir().join("spectre-wallpaper-test");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("wallpaper.png");
+        source(8, 8).save(&path).unwrap();
+
+        let wallpaper = Wallpaper::load(&path, WallpaperMode::Fill, 20, 10).unwrap();
+        let first = wallpaper.pixels().expect("the pixels it was loaded with");
+        let again = wallpaper.pixels().expect("read from disk a second time");
+        assert_eq!(first.len(), 20 * 10 * 4);
+        assert_eq!(first, again, "the picture must not change when it is read again");
+        std::fs::remove_file(&path).unwrap();
     }
 }

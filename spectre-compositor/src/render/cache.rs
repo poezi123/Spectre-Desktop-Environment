@@ -33,6 +33,8 @@ pub struct RenderCache {
     remembered: Remembered,
     closing: HashMap<u32, TextureBuffer<GlesTexture>>,
     launcher_geometry: Option<Rectangle<i32, Logical>>,
+    wallpaper: Option<TextureBuffer<GlesTexture>>,
+    wallpaper_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -70,6 +72,19 @@ impl RenderCache {
 
     pub fn forget_remembered(&mut self) {
         self.remembered.0.clear();
+    }
+
+    pub fn wallpaper(&self) -> Option<&TextureBuffer<GlesTexture>> {
+        self.wallpaper.as_ref()
+    }
+
+    pub fn wallpaper_key(&self) -> Option<&str> {
+        self.wallpaper_key.as_deref()
+    }
+
+    pub fn set_wallpaper(&mut self, buffer: TextureBuffer<GlesTexture>, key: String) {
+        self.wallpaper = Some(buffer);
+        self.wallpaper_key = Some(key);
     }
 
     pub fn launcher_geometry(&self) -> Option<Rectangle<i32, Logical>> {
