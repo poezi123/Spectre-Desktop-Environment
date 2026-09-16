@@ -529,11 +529,15 @@ impl PointerHandler for App {
                         }
                     }
                 }
-                PointerEventKind::Axis { vertical, .. } if vertical.discrete != 0 && self.dropdown.is_some() => {
-                    self.scroll_dropdown(vertical.discrete as isize);
-                }
-                PointerEventKind::Axis { vertical, .. } if vertical.discrete != 0 => {
-                    self.move_row(vertical.discrete as isize);
+                PointerEventKind::Axis { vertical, .. } => {
+                    let steps = wheel_steps(&vertical);
+                    if steps == 0 {
+                        continue;
+                    }
+                    match self.dropdown.is_some() {
+                        true => self.scroll_dropdown(steps as isize),
+                        false => self.move_row(steps as isize),
+                    }
                 }
                 _ => {}
             }
@@ -831,6 +835,13 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+fn wheel_steps(axis: &smithay_client_toolkit::seat::pointer::AxisScroll) -> i32 {
+    if axis.value120 != 0 {
+        return axis.value120 / 120;
+    }
+    axis.discrete
+}
 
 fn choice_of(sections: &[model::Section], section: usize, row: usize) -> Option<(usize, &[String])> {
     let row = sections.get(section)?.rows.get(row)?;
