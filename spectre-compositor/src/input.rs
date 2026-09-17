@@ -248,6 +248,10 @@ impl Spectre {
 
         match action {
             Action::Spawn { command } => self.launch(&command),
+            Action::Terminal => {
+                let command = self.config.terminal.command().to_owned();
+                self.launch(&command);
+            }
             Action::CloseWindow => self.close_focused(),
             Action::Quit => self.stop(),
             Action::FocusNext => self.cycle_focus(true),

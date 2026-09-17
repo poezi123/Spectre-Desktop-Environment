@@ -119,6 +119,9 @@ kind = "none"
 # keeps. Ctrl with plus or minus changes the size while it runs.
 font-size = 14.0
 scrollback = 10000
+# Which terminal Super+Return, Ctrl+Alt+T and the desktop menu open. Put
+# "spectre-terminal" here for Spectre's own one.
+command = "konsole"
 
 [keybinds]
 "Mod+Return" = { action = "spawn", command = "konsole" }

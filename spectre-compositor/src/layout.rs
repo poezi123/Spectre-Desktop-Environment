@@ -695,7 +695,10 @@ impl Spectre {
 
     fn activate_desktop_item(&mut self, item: MenuItem) {
         match item {
-            MenuItem::Terminal => self.launch("konsole"),
+            MenuItem::Terminal => {
+                let command = self.config.terminal.command().to_owned();
+                self.launch(&command);
+            }
             MenuItem::Settings | MenuItem::Wallpaper => self.launch("spectre-settings"),
             MenuItem::ShowDesktop => self.toggle_show_desktop(),
             MenuItem::Overview => self.open_overview(),

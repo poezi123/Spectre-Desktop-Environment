@@ -115,6 +115,7 @@ impl<'de> Deserialize<'de> for Keybind {
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
     Spawn { command: String },
+    Terminal,
     CloseWindow,
     Quit,
     FocusNext,
@@ -179,7 +180,7 @@ impl Default for Keybinds {
             m.insert(Keybind::new(mods, key), action);
         };
 
-        bind(logo, "return", Action::Spawn { command: "konsole".into() });
+        bind(logo, "return", Action::Terminal);
         bind(logo, "d", Action::ShowDesktop);
         bind(logo, "comma", Action::Spawn { command: "spectre-settings".into() });
         bind(logo, "q", Action::CloseWindow);
@@ -200,7 +201,7 @@ impl Default for Keybinds {
         bind(alt, "f4", Action::CloseWindow);
         bind(alt, "tab", Action::FocusNext);
         bind(alt_shift, "tab", Action::FocusPrev);
-        bind(ctrl_alt, "t", Action::Spawn { command: "konsole".into() });
+        bind(ctrl_alt, "t", Action::Terminal);
         bind(logo, "left", Action::SnapLeft);
         bind(logo, "right", Action::SnapRight);
         bind(logo, "up", Action::ToggleMaximize);
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(k.get(&parse("Alt+F4")), Some(&Action::CloseWindow));
         assert_eq!(k.get(&parse("Alt+Tab")), Some(&Action::FocusNext));
         assert_eq!(k.get(&parse("Alt+Shift+Tab")), Some(&Action::FocusPrev));
-        assert_eq!(k.get(&parse("Ctrl+Alt+T")), Some(&Action::Spawn { command: "konsole".into() }));
+        assert_eq!(k.get(&parse("Ctrl+Alt+T")), Some(&Action::Terminal));
         assert_eq!(k.get(&parse("Mod+Left")), Some(&Action::SnapLeft));
         assert_eq!(k.get(&parse("Mod+Right")), Some(&Action::SnapRight));
         assert_eq!(k.get(&parse("Mod+Up")), Some(&Action::ToggleMaximize));

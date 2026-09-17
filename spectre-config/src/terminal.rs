@@ -4,16 +4,17 @@ pub const MIN_FONT_SIZE: f32 = 8.0;
 
 pub const MAX_FONT_SIZE: f32 = 32.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Terminal {
     pub font_size: f32,
     pub scrollback: u32,
+    pub command: String,
 }
 
 impl Default for Terminal {
     fn default() -> Self {
-        Self { font_size: 14.0, scrollback: 10_000 }
+        Self { font_size: 14.0, scrollback: 10_000, command: String::from("konsole") }
     }
 }
 
@@ -28,6 +29,13 @@ impl Terminal {
     pub fn scrollback(&self) -> usize {
         self.scrollback.min(200_000) as usize
     }
+
+    pub fn command(&self) -> &str {
+        match self.command.trim().is_empty() {
+            true => "konsole",
+            false => self.command.trim(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -39,6 +47,14 @@ mod tests {
         let terminal = Terminal::default();
         assert_eq!(terminal.font_size(), 14.0);
         assert_eq!(terminal.scrollback(), 10_000);
+    }
+
+    #[test]
+    fn an_empty_terminal_command_falls_back_to_the_one_that_is_installed() {
+        let blank = Terminal { command: String::from("   "), ..Terminal::default() };
+        assert_eq!(blank.command(), "konsole");
+        let own = Terminal { command: String::from("spectre-terminal"), ..Terminal::default() };
+        assert_eq!(own.command(), "spectre-terminal");
     }
 
     #[test]
