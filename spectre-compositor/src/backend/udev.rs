@@ -540,6 +540,8 @@ fn scene_hash(elements: &[SpectreElement], skip: usize) -> u64 {
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
+const SLOW_SYNC_MS: u64 = 50;
+
 #[derive(Debug, Clone, Copy, Default)]
 struct FramePhases {
     built: Duration,
@@ -556,6 +558,7 @@ struct FrameStats {
     slowest: Duration,
     phases: FramePhases,
     full_redraws: u32,
+    told_about_the_wait: bool,
 }
 
 impl FrameStats {
@@ -567,6 +570,7 @@ impl FrameStats {
             slowest: Duration::ZERO,
             phases: FramePhases::default(),
             full_redraws: 0,
+            told_about_the_wait: false,
         }
     }
 
@@ -597,7 +601,18 @@ impl FrameStats {
             full_redraws = self.full_redraws,
             "render stats"
         );
-        *self = Self::new();
+
+        let waited = average(self.phases.waited);
+        let mut told = self.told_about_the_wait;
+        if waited >= SLOW_SYNC_MS && !told {
+            told = true;
+            tracing::warn!(
+                wait_ms = waited,
+                "the graphics driver hands each frame back very slowly, which is what makes the \
+                 desktop feel sluggish; inside a virtual machine a restart usually clears it"
+            );
+        }
+        *self = Self { told_about_the_wait: told, ..Self::new() };
     }
 }
 
