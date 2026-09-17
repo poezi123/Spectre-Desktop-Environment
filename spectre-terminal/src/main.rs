@@ -130,6 +130,9 @@ fn main() -> anyhow::Result<()> {
         paste_sender,
         serial: 0,
         selecting: false,
+        find: None,
+        pointer_at: None,
+        link: None,
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
@@ -167,6 +170,13 @@ fn main() -> anyhow::Result<()> {
         }
     })?;
     Ok(())
+}
+
+struct Find {
+    query: String,
+    found: bool,
+    at: Option<Point>,
+    ends_at: Option<Point>,
 }
 
 fn tab_title(session: &Session) -> String {
@@ -232,6 +242,9 @@ struct App {
     paste_sender: smithay_client_toolkit::reexports::calloop::channel::Sender<String>,
     serial: u32,
     selecting: bool,
+    find: Option<Find>,
+    pointer_at: Option<(f64, f64)>,
+    link: Option<(i32, usize, usize)>,
     control: bool,
     alt: bool,
     shift: bool,
@@ -312,6 +325,112 @@ impl App {
         }
         let next = (self.active as i32 + delta).rem_euclid(count);
         self.show_tab(next as usize);
+    }
+
+    fn look_for_a_link(&mut self) {
+        let wanted = match (self.control, self.pointer_at) {
+            (true, Some((x, y))) => {
+                let (point, _) = self.cell_at(x, y);
+                self.session().link_at(point).map(|(from, to, _)| (point.line.0, from, to))
+            }
+            _ => None,
+        };
+        if wanted == self.link {
+            return;
+        }
+        self.link = wanted;
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn open_link(&mut self, x: f64, y: f64) -> bool {
+        let (point, _) = self.cell_at(x, y);
+        let Some((_, _, address)) = self.session().link_at(point) else {
+            return false;
+        };
+        let opened = std::process::Command::new("xdg-open")
+            .arg(&address)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match opened {
+            Ok(_) => tracing::info!(%address, "opening a link"),
+            Err(err) => tracing::warn!(?err, %address, "could not open the link"),
+        }
+        true
+    }
+
+    fn open_find(&mut self) {
+        if self.find.is_some() {
+            return;
+        }
+        self.find = Some(Find { query: String::new(), found: true, at: None, ends_at: None });
+        self.fit_the_grid();
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn close_find(&mut self) {
+        if self.find.take().is_none() {
+            return;
+        }
+        self.fit_the_grid();
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn type_into_find(&mut self, letters: &str) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        find.query.push_str(letters);
+        self.step_find(true, true);
+    }
+
+    fn rub_out_of_find(&mut self) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        find.query.pop();
+        self.step_find(true, true);
+    }
+
+    fn step_find(&mut self, forward: bool, from_here: bool) {
+        let Some(find) = self.find.as_ref() else {
+            return;
+        };
+        let query = find.query.clone();
+        if query.is_empty() {
+            if let Some(find) = self.find.as_mut() {
+                find.found = true;
+            }
+            self.dirty = true;
+            self.redraw_if_needed();
+            return;
+        }
+
+        let session = self.session();
+        let last = match forward {
+            true => find.ends_at,
+            false => find.at,
+        };
+        let origin = match (from_here, last) {
+            (false, Some(point)) if forward => session.after(point),
+            (false, Some(point)) => session.before(point),
+            _ => session.last_point(),
+        };
+        let found = session.look_for(&query, origin, forward);
+        if let Some(found) = found.as_ref() {
+            self.session_mut().show_match(found);
+        }
+        if let Some(find) = self.find.as_mut() {
+            find.found = found.is_some();
+            find.at = found.as_ref().map(|found| *found.start());
+            find.ends_at = found.as_ref().map(|found| *found.end());
+        }
+        self.dirty = true;
+        self.redraw_if_needed();
     }
 
     fn clicked_a_tab(&mut self, x: f64, y: f64, closing: bool) -> bool {
@@ -443,7 +562,8 @@ impl App {
         let width = self.width * self.scale;
         let height = self.height * self.scale;
         let bar = view::bar_height(&self.metrics, self.sessions.len());
-        let size = Size::new(self.metrics.columns(width), self.metrics.lines(height - bar));
+        let find = view::find_height(&self.metrics, self.find.is_some());
+        let size = Size::new(self.metrics.columns(width), self.metrics.lines(height - bar - find));
         let cell = (self.metrics.cell_width as u16, self.metrics.cell_height as u16);
         self.session_mut().resize(size, cell);
     }
@@ -460,6 +580,9 @@ impl App {
             metrics: &self.metrics,
             tabs: &tabs,
             active: self.active,
+            find: self.find.as_ref().map(|find| find.query.as_str()),
+            found: self.find.as_ref().is_none_or(|find| find.found),
+            link: self.link,
         };
         view::draw(&mut self.canvas, &mut self.text, &view);
 
@@ -551,6 +674,10 @@ impl KeyboardHandler for App {
                     self.close_tab(self.active);
                     return;
                 }
+                Keysym::F | Keysym::f => {
+                    self.open_find();
+                    return;
+                }
                 _ => {}
             }
         }
@@ -579,6 +706,33 @@ impl KeyboardHandler for App {
             if event.keysym == Keysym::V || event.keysym == Keysym::v {
                 self.paste();
                 return;
+            }
+        }
+        if self.find.is_some() {
+            match event.keysym {
+                Keysym::Escape => {
+                    self.close_find();
+                    return;
+                }
+                Keysym::Return | Keysym::KP_Enter => {
+                    self.step_find(!self.shift, false);
+                    return;
+                }
+                Keysym::BackSpace => {
+                    self.rub_out_of_find();
+                    return;
+                }
+                _ => {}
+            }
+            if !self.control && !self.alt {
+                if let Some(letters) = event.utf8.as_ref() {
+                    let printable = letters.chars().all(|c| !c.is_control());
+                    if printable && !letters.is_empty() {
+                        let letters = letters.clone();
+                        self.type_into_find(&letters);
+                        return;
+                    }
+                }
             }
         }
         if self.shift {
@@ -646,6 +800,7 @@ impl KeyboardHandler for App {
         self.control = modifiers.ctrl;
         self.alt = modifiers.alt;
         self.shift = modifiers.shift;
+        self.look_for_a_link();
     }
 }
 
@@ -792,15 +947,22 @@ impl PointerHandler for App {
                     if self.clicked_a_tab(event.position.0, event.position.1, false) {
                         continue;
                     }
+                    if self.control && self.open_link(event.position.0, event.position.1) {
+                        continue;
+                    }
                     let (point, side) = self.cell_at(event.position.0, event.position.1);
                     self.session_mut().start_selection(point, side);
                     self.selecting = true;
                     self.dirty = true;
                 }
-                PointerEventKind::Motion { .. } if self.selecting => {
-                    let (point, side) = self.cell_at(event.position.0, event.position.1);
-                    self.session_mut().update_selection(point, side);
-                    self.dirty = true;
+                PointerEventKind::Motion { .. } => {
+                    self.pointer_at = Some(event.position);
+                    if self.selecting {
+                        let (point, side) = self.cell_at(event.position.0, event.position.1);
+                        self.session_mut().update_selection(point, side);
+                        self.dirty = true;
+                    }
+                    self.look_for_a_link();
                 }
                 PointerEventKind::Release { button, .. } if *button == BTN_LEFT => {
                     self.selecting = false;

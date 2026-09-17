@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::index::{Column, Direction, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::search::{Match, RegexSearch};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
@@ -193,6 +194,67 @@ impl Session {
         }
     }
 
+    pub fn link_at(&self, point: Point) -> Option<(usize, usize, String)> {
+        let columns = self.size.columns;
+        if columns == 0 || point.line < self.term.topmost_line() {
+            return None;
+        }
+        if point.line > self.term.bottommost_line() {
+            return None;
+        }
+        let row: Vec<char> =
+            (0..columns).map(|column| self.term.grid()[point.line][Column(column)].c).collect();
+        link_in_row(&row, point.column.0.min(columns - 1))
+    }
+
+    pub fn look_for(&self, query: &str, origin: Point, forward: bool) -> Option<Match> {
+        if query.is_empty() {
+            return None;
+        }
+        let mut search = RegexSearch::new(&as_literal(query)).ok()?;
+        let direction = match forward {
+            true => Direction::Right,
+            false => Direction::Left,
+        };
+        self.term.search_next(&mut search, origin, direction, Side::Left, None)
+    }
+
+    pub fn show_match(&mut self, found: &Match) {
+        self.term.scroll_to_point(*found.start());
+        let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+        selection.update(*found.end(), Side::Right);
+        self.term.selection = Some(selection);
+    }
+
+    pub fn last_point(&self) -> Point {
+        Point::new(self.term.bottommost_line(), Column(self.size.columns.saturating_sub(1)))
+    }
+
+    pub fn first_point(&self) -> Point {
+        Point::new(self.term.topmost_line(), Column(0))
+    }
+
+    pub fn after(&self, point: Point) -> Point {
+        let last = self.size.columns.saturating_sub(1);
+        if point.column.0 < last {
+            return Point::new(point.line, Column(point.column.0 + 1));
+        }
+        if point.line >= self.term.bottommost_line() {
+            return self.first_point();
+        }
+        Point::new(point.line + 1, Column(0))
+    }
+
+    pub fn before(&self, point: Point) -> Point {
+        if point.column.0 > 0 {
+            return Point::new(point.line, Column(point.column.0 - 1));
+        }
+        if point.line <= self.term.topmost_line() {
+            return self.last_point();
+        }
+        Point::new(point.line - 1, Column(self.size.columns.saturating_sub(1)))
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         let text = self.term.selection_to_string()?;
         if text.is_empty() {
@@ -230,6 +292,58 @@ impl Session {
     }
 }
 
+fn link_in_row(row: &[char], at: usize) -> Option<(usize, usize, String)> {
+    if at >= row.len() || !is_link_letter(row[at]) {
+        return None;
+    }
+    let mut start = at;
+    while start > 0 && is_link_letter(row[start - 1]) {
+        start -= 1;
+    }
+    let mut end = at;
+    while end + 1 < row.len() && is_link_letter(row[end + 1]) {
+        end += 1;
+    }
+    let mut text: String = row[start..=end].iter().collect();
+    while text.ends_with(['.', ',', ';', ':', '!', '?']) {
+        text.pop();
+        end -= 1;
+    }
+    let address = as_address(&text)?;
+    Some((start, end, address))
+}
+
+fn is_link_letter(letter: char) -> bool {
+    if letter.is_whitespace() || letter == '\0' {
+        return false;
+    }
+    !matches!(letter, '<' | '>' | '"' | '`' | '|' | '\'' | '(' | ')' | '[' | ']' | '{' | '}')
+}
+
+fn as_address(text: &str) -> Option<String> {
+    const SCHEMES: [&str; 5] = ["http://", "https://", "file://", "ftp://", "mailto:"];
+    for scheme in SCHEMES {
+        if text.starts_with(scheme) && text.len() > scheme.len() {
+            return Some(text.to_owned());
+        }
+    }
+    if text.starts_with("www.") && text.len() > 4 {
+        return Some(format!("https://{text}"));
+    }
+    None
+}
+
+fn as_literal(query: &str) -> String {
+    let mut out = String::new();
+    for letter in query.chars() {
+        if !letter.is_alphanumeric() && !letter.is_whitespace() {
+            out.push('\\');
+        }
+        out.push(letter);
+    }
+    out
+}
+
 fn wait_for_output(reader: &std::fs::File) {
     let fd = reader.as_raw_fd();
     unsafe {
@@ -252,6 +366,61 @@ fn window_size(size: Size, cell: (u16, u16)) -> WindowSize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(text: &str) -> Vec<char> {
+        text.chars().collect()
+    }
+
+    #[test]
+    fn a_link_is_read_out_of_the_line_around_the_click() {
+        let line = row("siehe https://spectre.de/x und sonst nichts          ");
+        let found = link_in_row(&line, 10).expect("the click sits on the link");
+        assert_eq!(found.2, "https://spectre.de/x");
+        assert_eq!(&line[found.0..=found.1].iter().collect::<String>(), "https://spectre.de/x");
+
+        assert!(link_in_row(&line, 2).is_none(), "the word before is not a link");
+        assert!(link_in_row(&line, 5).is_none(), "a space is not a link");
+    }
+
+    #[test]
+    fn a_full_stop_at_the_end_of_a_sentence_is_not_part_of_the_link() {
+        let line = row("lies https://spectre.de/x.");
+        let found = link_in_row(&line, 12).expect("a link");
+        assert_eq!(found.2, "https://spectre.de/x");
+        assert_eq!(found.1, line.len() - 2);
+    }
+
+    #[test]
+    fn a_link_at_the_very_end_of_the_line_still_counts() {
+        let line = row("www.archlinux.org");
+        let found = link_in_row(&line, 0).expect("a link");
+        assert_eq!(found.2, "https://www.archlinux.org");
+        assert_eq!((found.0, found.1), (0, line.len() - 1));
+    }
+
+    #[test]
+    fn only_real_addresses_count_as_links() {
+        assert_eq!(as_address("https://spectre.de/x"), Some(String::from("https://spectre.de/x")));
+        assert_eq!(as_address("www.spectre.de"), Some(String::from("https://www.spectre.de")));
+        assert_eq!(as_address("spectre.de"), None, "a bare word is not a link");
+        assert_eq!(as_address("https://"), None, "a scheme on its own is not a link");
+    }
+
+    #[test]
+    fn brackets_and_quotes_never_belong_to_a_link() {
+        assert!(!is_link_letter('('));
+        assert!(!is_link_letter('"'));
+        assert!(!is_link_letter(' '));
+        assert!(is_link_letter('/'));
+        assert!(is_link_letter('-'));
+    }
+
+    #[test]
+    fn a_search_word_is_taken_as_it_is_typed() {
+        assert_eq!(as_literal("main.rs"), "main\\.rs");
+        assert_eq!(as_literal("a+b"), "a\\+b");
+        assert_eq!(as_literal("two words"), "two words");
+    }
 
     #[test]
     fn a_size_is_never_empty() {

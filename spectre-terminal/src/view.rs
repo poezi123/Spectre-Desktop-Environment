@@ -47,6 +47,43 @@ pub struct Frame<'a> {
     pub metrics: &'a Metrics,
     pub tabs: &'a [String],
     pub active: usize,
+    pub find: Option<&'a str>,
+    pub found: bool,
+    pub link: Option<(i32, usize, usize)>,
+}
+
+pub fn find_height(metrics: &Metrics, open: bool) -> i32 {
+    if !open {
+        return 0;
+    }
+    metrics.cell_height + TAB_PADDING * 2
+}
+
+fn draw_find(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>, query: &str) {
+    let palette = &frame.theme.palette;
+    let height = find_height(frame.metrics, true);
+    let top = canvas.height() - height;
+    canvas.fill_rect(Rect::new(0, top, canvas.width(), height), palette.surface);
+
+    let colour = match frame.found || query.is_empty() {
+        true => palette.text,
+        false => palette.accent.sample(0.5),
+    };
+    let line = format!("Find: {query}");
+    let label = Label::new(&line)
+        .size(frame.metrics.font_px)
+        .family(FontFamily::Monospace)
+        .color(colour);
+    let image = text.rasterise(&label);
+    canvas.draw_image(PADDING, top + TAB_PADDING, &image);
+
+    let hint = Label::new("Enter next · Shift+Enter back · Esc close")
+        .size(frame.metrics.font_px * 0.85)
+        .family(FontFamily::Monospace)
+        .color(palette.text_muted);
+    let image = text.rasterise(&hint);
+    let x = canvas.width() - image.width as i32 - PADDING;
+    canvas.draw_image(x, top + TAB_PADDING, &image);
 }
 
 pub fn bar_height(metrics: &Metrics, tabs: usize) -> i32 {
@@ -138,6 +175,9 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
     if bar > 0 {
         draw_tabs(canvas, text, frame);
     }
+    if let Some(query) = frame.find {
+        draw_find(canvas, text, frame, query);
+    }
     let top = PADDING + bar;
 
     let content = session.term.renderable_content();
@@ -175,8 +215,29 @@ pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
         run.push(cell.c);
     }
     run.flush(canvas, text, metrics, top);
+    if let Some((line, from, to)) = frame.link {
+        draw_link_line(canvas, palette, metrics, top, line + offset, from, to);
+    }
     let spot = CursorSpot { point: cursor, offset, glyph: under_cursor, top };
     draw_cursor(canvas, text, &spot, palette, metrics);
+}
+
+fn draw_link_line(
+    canvas: &mut Canvas,
+    palette: &Palette,
+    metrics: &Metrics,
+    top: i32,
+    row: i32,
+    from: usize,
+    to: usize,
+) {
+    if row < 0 || to < from {
+        return;
+    }
+    let x = PADDING + from as i32 * metrics.cell_width;
+    let width = (to - from + 1) as i32 * metrics.cell_width;
+    let y = top + row * metrics.cell_height + metrics.cell_height - 2;
+    canvas.fill_rect(Rect::new(x, y, width, 1), palette.accent.sample(0.5));
 }
 
 struct CursorSpot {
