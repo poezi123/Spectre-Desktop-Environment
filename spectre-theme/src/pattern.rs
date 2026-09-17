@@ -173,8 +173,12 @@ impl Pattern {
         self.line_coverage(self.height(x, y, phase, scale), scale)
     }
 
+    pub fn cell(&self, scale: f32) -> f32 {
+        (self.line_spacing * scale).max(1.0) * Self::CELL_SPACINGS
+    }
+
     pub fn height(&self, x: f32, y: f32, phase: f32, scale: f32) -> f32 {
-        let cell = (self.line_spacing * scale).max(1.0) * Self::CELL_SPACINGS;
+        let cell = self.cell(scale);
         fbm(x / cell + phase, y / cell)
     }
 

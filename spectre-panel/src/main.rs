@@ -425,7 +425,7 @@ impl Panel {
 
         let elapsed = self.started.elapsed().as_secs_f64();
         let pattern = draw::panel_pattern(&self.config.theme);
-        self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), scale);
+        self.mask.prepare_scrolling(width, height, &pattern, pattern.phase(elapsed), scale);
         let frame = draw::Frame {
             theme: &self.config.theme,
             pointer: self.pointer_position.map(|(x, y)| (x * self.scale, y * self.scale)),

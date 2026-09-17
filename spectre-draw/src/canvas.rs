@@ -162,9 +162,12 @@ impl Canvas {
         accent: &Gradient,
         color_phase: f32,
     ) {
-        self.fill_rect(rect, background);
         if mask.is_empty() || rect.w <= 0 {
+            self.fill_rect(rect, background);
             return;
+        }
+        if to_argb(spectre_theme::pattern::ground(background, background))[3] != 255 {
+            self.fill_rect(rect, background);
         }
         let stops = mask.pattern.line_stops(accent, background);
         let area = rect.intersect(&self.bounds());
@@ -177,15 +180,35 @@ impl Canvas {
             let line = Pattern::line_at(&stops, t);
             let ground = spectre_theme::pattern::ground(background, line);
             let [gb, gg, gr, ga] = to_argb(ground);
-            for y in area.y..area.bottom() {
-                self.blend(x, y, gb, gg, gr, ga);
-                let coverage = mask.at(x - rect.x, y - rect.y);
-                if coverage <= 0.0 {
-                    continue;
+            let [lb, lg, lr, _] = to_argb(line.alpha(1.0));
+            let line_alpha = (line.a.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+
+            if ga != 255 {
+                for y in area.y..area.bottom() {
+                    self.blend(x, y, gb, gg, gr, ga);
+                    let coverage = mask.at(x - rect.x, y - rect.y);
+                    if coverage <= 0.0 {
+                        continue;
+                    }
+                    let color = line.alpha(line.a * coverage);
+                    let [b, g, r, a] = to_argb(color);
+                    self.blend(x, y, b, g, r, a);
                 }
-                let color = line.alpha(line.a * coverage);
-                let [b, g, r, a] = to_argb(color);
-                self.blend(x, y, b, g, r, a);
+                continue;
+            }
+
+            let stride = (self.width * 4) as usize;
+            let mut at = ((area.y * self.width + x) * 4) as usize;
+            for y in area.y..area.bottom() {
+                let coverage = mask.coverage_at(x - rect.x, y - rect.y) as u32;
+                let alpha = line_alpha * coverage / 255;
+                let rest = 255 - alpha;
+                let mix = |l: u8, g: u8| ((l as u32 * alpha + g as u32 * rest) / 255) as u8;
+                self.pixels[at] = mix(lb, gb);
+                self.pixels[at + 1] = mix(lg, gg);
+                self.pixels[at + 2] = mix(lr, gr);
+                self.pixels[at + 3] = 255;
+                at += stride;
             }
         }
     }
@@ -218,6 +241,56 @@ fn to_argb(color: Color) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn panel_mask() -> PatternMask {
+        let mut mask = PatternMask::new();
+        mask.prepare(1920, 48, &spectre_theme::Pattern::default(), 0.0, 1.0);
+        mask
+    }
+
+    #[test]
+    #[ignore = "measures this machine, not the code"]
+    fn how_long_a_panel_mask_takes_to_bake() {
+        let pattern = spectre_theme::Pattern::default();
+        let mut mask = PatternMask::new();
+        let rounds = 50;
+        let start = std::time::Instant::now();
+        for round in 0..rounds {
+            mask.prepare(1920, 48, &pattern, round as f32 * 0.01, 1.0);
+        }
+        let each = start.elapsed() / rounds;
+        println!("baking one 1920x48 mask takes {each:?}");
+
+        let mut scrolling = PatternMask::new();
+        scrolling.prepare_scrolling(1920, 48, &pattern, 0.0, 1.0);
+        let start = std::time::Instant::now();
+        for round in 0..rounds {
+            scrolling.prepare_scrolling(1920, 48, &pattern, round as f32 * 0.001, 1.0);
+        }
+        let each = start.elapsed() / rounds;
+        println!("scrolling the same mask takes {each:?}");
+    }
+
+    #[test]
+    #[ignore = "measures this machine, not the code"]
+    fn how_long_a_panel_bar_takes_to_fill() {
+        let mask = panel_mask();
+        let mut canvas = Canvas::new(1920, 48);
+        let palette = spectre_theme::Palette::default();
+        let start = std::time::Instant::now();
+        let rounds = 200;
+        for round in 0..rounds {
+            canvas.fill_pattern(
+                canvas.bounds(),
+                &mask,
+                palette.surface,
+                &palette.accent,
+                round as f32 / rounds as f32,
+            );
+        }
+        let each = start.elapsed() / rounds;
+        println!("one 1920x48 bar takes {each:?}");
+    }
 
     #[test]
     fn fading_makes_the_picture_see_through_but_keeps_full_opacity_alone() {

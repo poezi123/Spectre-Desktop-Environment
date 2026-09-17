@@ -2,6 +2,8 @@ use spectre_theme::Pattern;
 
 const STEP: i32 = 3;
 
+const MARGIN: i32 = 256;
+
 #[derive(Debug, Clone)]
 pub struct PatternMask {
     width: i32,
@@ -10,6 +12,8 @@ pub struct PatternMask {
     scale: f32,
     pub(crate) pattern: Pattern,
     coverage: Vec<u8>,
+    shift_pixels: i32,
+    shift_fraction: u32,
 }
 
 impl Default for PatternMask {
@@ -27,7 +31,38 @@ impl PatternMask {
             scale: 1.0,
             pattern: Pattern::OFF,
             coverage: Vec::new(),
+            shift_pixels: 0,
+            shift_fraction: 0,
         }
+    }
+
+    pub fn prepare_scrolling(
+        &mut self,
+        width: i32,
+        height: i32,
+        pattern: &Pattern,
+        phase: f32,
+        scale: f32,
+    ) {
+        let margin = if pattern.animated && pattern.speed > 0.0 { MARGIN } else { 0 };
+        let baked = width + margin;
+        let same_field = self.width == baked
+            && self.height == height
+            && self.scale == scale
+            && &self.pattern == pattern;
+
+        if same_field {
+            let moved = (phase - self.phase) * pattern.cell(scale);
+            if moved >= 0.0 && moved <= margin as f32 {
+                self.shift_pixels = moved.floor() as i32;
+                self.shift_fraction = ((moved - moved.floor()) * 255.0).round() as u32;
+                return;
+            }
+        }
+
+        self.prepare(baked, height, pattern, phase, scale);
+        self.shift_pixels = 0;
+        self.shift_fraction = 0;
     }
 
     pub fn prepare(
@@ -50,6 +85,8 @@ impl PatternMask {
         self.width = width;
         self.height = height;
         self.phase = phase;
+        self.shift_pixels = 0;
+        self.shift_fraction = 0;
         self.scale = scale;
         self.pattern = *pattern;
 
@@ -100,12 +137,27 @@ impl PatternMask {
         (self.width, self.height)
     }
 
+    pub fn coverage_at(&self, x: i32, y: i32) -> u8 {
+        let shifted = x + self.shift_pixels;
+        let near = self.raw(shifted, y) as u32;
+        if self.shift_fraction == 0 {
+            return near as u8;
+        }
+        let next = self.raw(shifted + 1, y) as u32;
+        let mixed = near * (255 - self.shift_fraction) + next * self.shift_fraction;
+        (mixed / 255) as u8
+    }
+
     pub fn at(&self, x: i32, y: i32) -> f32 {
+        self.coverage_at(x, y) as f32 / 255.0
+    }
+
+    fn raw(&self, x: i32, y: i32) -> u8 {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return 0.0;
+            return 0;
         }
         let i = y as usize * self.width as usize + x as usize;
-        self.coverage.get(i).map_or(0.0, |&c| c as f32 / 255.0)
+        self.coverage.get(i).copied().unwrap_or(0)
     }
 }
 
@@ -150,6 +202,42 @@ mod tests {
         let first = mask.coverage.clone();
         mask.prepare(16, 16, &pattern, 0.25, 1.0);
         assert_eq!(first, mask.coverage);
+    }
+
+    #[test]
+    fn scrolling_reuses_the_baked_field_instead_of_baking_again() {
+        let mut mask = PatternMask::new();
+        let pattern = Pattern::default();
+        mask.prepare_scrolling(64, 32, &pattern, 0.0, 1.0);
+        let baked = mask.coverage.clone();
+        let still = mask.at(10, 10);
+
+        let step = 4.0 / pattern.cell(1.0);
+        mask.prepare_scrolling(64, 32, &pattern, step, 1.0);
+        assert_eq!(baked, mask.coverage, "the field is only read from a different place");
+        assert_eq!(mask.shift_pixels, 4);
+        assert_eq!(mask.at(6, 10), still, "what sat at 10 now sits four pixels to the left");
+    }
+
+    #[test]
+    fn scrolling_past_the_margin_bakes_a_fresh_field() {
+        let mut mask = PatternMask::new();
+        let pattern = Pattern::default();
+        mask.prepare_scrolling(64, 32, &pattern, 0.0, 1.0);
+        let baked = mask.coverage.clone();
+
+        let far = (MARGIN + 10) as f32 / pattern.cell(1.0);
+        mask.prepare_scrolling(64, 32, &pattern, far, 1.0);
+        assert_eq!(mask.shift_pixels, 0);
+        assert_ne!(baked, mask.coverage);
+    }
+
+    #[test]
+    fn a_still_pattern_is_baked_without_a_margin() {
+        let mut mask = PatternMask::new();
+        let pattern = Pattern::default().without_animation();
+        mask.prepare_scrolling(64, 32, &pattern, 0.0, 1.0);
+        assert_eq!(mask.size(), (64, 32));
     }
 
     #[test]

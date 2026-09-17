@@ -253,7 +253,7 @@ impl Launcher {
         let results: Vec<&Entry> = self.results.iter().map(|&i| &self.entries[i]).collect();
         let elapsed = self.started.elapsed().as_secs_f64();
         let pattern = ui::launcher_pattern(&self.config.theme);
-        self.mask.prepare(width, height, &pattern, pattern.phase(elapsed), self.scale as f32);
+        self.mask.prepare_scrolling(width, height, &pattern, pattern.phase(elapsed), self.scale as f32);
         let frame = ui::Frame {
             theme: &self.config.theme,
             query: &self.query,
