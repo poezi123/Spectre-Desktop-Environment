@@ -25,6 +25,27 @@ use crate::state::Spectre;
 const XWAYLAND_STARTUP_LIMIT: Duration = Duration::from_secs(10);
 
 impl Spectre {
+    pub fn start_xwayland_if_needed(&mut self) {
+        if !self.config.general.xwayland || self.xwayland_client.is_some() {
+            return;
+        }
+        self.start_xwayland();
+    }
+
+    pub fn forget_stopped_xwayland(&mut self) {
+        let Some(client) = self.xwayland_client.clone() else {
+            return;
+        };
+        let handle = self.display_handle.backend_handle();
+        if handle.get_client_data(client).is_ok() {
+            return;
+        }
+        tracing::info!("XWayland stopped; it will start again when it is needed");
+        self.xwayland_client = None;
+        self.xwm = None;
+        self.xdisplay = None;
+    }
+
     pub fn start_xwayland(&mut self) {
         let spawned = crate::with_default_child_signal(|| {
             XWayland::spawn(
@@ -44,6 +65,8 @@ impl Spectre {
                 return;
             }
         };
+        self.xwayland_client = Some(client.id());
+        self.xdisplay = Some(xwayland.display_number());
 
         let watched = self.loop_handle.insert_source(xwayland, move |event, _, state| match event {
             XWaylandEvent::Ready { x11_socket, display_number } => {

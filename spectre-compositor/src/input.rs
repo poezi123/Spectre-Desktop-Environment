@@ -247,7 +247,7 @@ impl Spectre {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Top;
 
         match action {
-            Action::Spawn { command } => self.spawn(&command),
+            Action::Spawn { command } => self.launch(&command),
             Action::CloseWindow => self.close_focused(),
             Action::Quit => self.stop(),
             Action::FocusNext => self.cycle_focus(true),
@@ -338,6 +338,11 @@ impl Spectre {
         let _ = self.spawn_pid(command);
     }
 
+    pub fn launch(&mut self, command: &str) {
+        self.start_xwayland_if_needed();
+        let _ = self.spawn_pid(command);
+    }
+
     pub fn spawn_pid(&self, command: &str) -> Option<u32> {
         let Some(argv) = shell_split(command) else {
             tracing::warn!(%command, "unbalanced quotes in spawn command");
@@ -413,6 +418,7 @@ impl Spectre {
                 return;
             }
         }
+        self.start_xwayland_if_needed();
         self.launcher = self.spawn_pid("spectre-launcher");
     }
 

@@ -15,6 +15,9 @@ profile = "balanced"
 # Start XWayland so programs written for X11 can run. Turn it off to save a
 # little memory when you only use Wayland programs.
 xwayland = true
+# Only start XWayland once you launch a program, not at login. It costs about
+# 65 MB of memory, so a session that never runs an X11 program never pays for it.
+xwayland-lazy = true
 workspaces = 4
 # spectre-panel is started automatically unless [panel] enabled = false;
 # anything listed here runs after it.

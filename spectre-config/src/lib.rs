@@ -30,15 +30,29 @@ pub struct General {
     pub workspaces: u8,
     pub autostart: Vec<String>,
     pub xwayland: bool,
+    pub xwayland_lazy: bool,
 }
 
 impl Default for General {
     fn default() -> Self {
-        Self { profile: Profile::default(), workspaces: 4, autostart: Vec::new(), xwayland: true }
+        Self {
+            profile: Profile::default(),
+            workspaces: 4,
+            autostart: Vec::new(),
+            xwayland: true,
+            xwayland_lazy: true,
+        }
     }
 }
 
 impl General {
+    pub fn xwayland_at_login(&self) -> bool {
+        if !self.xwayland {
+            return false;
+        }
+        !self.xwayland_lazy || !self.autostart.is_empty()
+    }
+
     pub fn startup_commands(&self, panel_enabled: bool) -> Vec<String> {
         let mut commands = Vec::with_capacity(self.autostart.len() + 2);
         if panel_enabled {
@@ -298,6 +312,22 @@ mod tests {
         let cfg = Config::from_toml("[panel]\nenabled = false").unwrap();
         let commands = cfg.general.startup_commands(cfg.panel.enabled);
         assert!(!commands.iter().any(|c| c.contains("spectre-panel")));
+    }
+
+    #[test]
+    fn xwayland_waits_for_the_first_program_unless_something_needs_it_sooner() {
+        let mut general = General::default();
+        assert!(!general.xwayland_at_login(), "by default it waits");
+
+        general.autostart = vec![String::from("nm-applet")];
+        assert!(general.xwayland_at_login(), "own autostart programs may need X11");
+
+        general.autostart.clear();
+        general.xwayland_lazy = false;
+        assert!(general.xwayland_at_login());
+
+        general.xwayland = false;
+        assert!(!general.xwayland_at_login(), "off means off");
     }
 
     #[test]

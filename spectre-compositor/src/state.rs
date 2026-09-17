@@ -105,6 +105,7 @@ pub struct Spectre {
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
     pub xdisplay: Option<u32>,
+    pub xwayland_client: Option<smithay::reexports::wayland_server::backend::ClientId>,
     pub overview: Option<crate::overview::Overview>,
     pub corner_armed: bool,
     pub pending_overview_key: Option<smithay::input::keyboard::Keysym>,
@@ -221,6 +222,7 @@ impl Spectre {
             xwayland_shell_state,
             xwm: None,
             xdisplay: None,
+            xwayland_client: None,
             overview: None,
             corner_armed: false,
             pending_overview_key: None,
@@ -540,6 +542,7 @@ impl Spectre {
     }
 
     pub fn refresh(&mut self) {
+        self.forget_stopped_xwayland();
         self.finish_transition();
         self.finish_window_animations();
         self.workspaces.refresh();

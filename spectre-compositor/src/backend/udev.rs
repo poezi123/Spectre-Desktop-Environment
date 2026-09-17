@@ -89,7 +89,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     init_session_events(&mut state, session_notifier, &shared)?;
 
     state.start_ipc();
-    if state.config.general.xwayland {
+    if state.config.general.xwayland_at_login() {
         state.start_xwayland();
     }
     tracing::info!(socket = %state.socket_name, seat = %seat_name, "Spectre is up (native)");
