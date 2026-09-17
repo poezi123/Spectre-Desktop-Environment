@@ -59,6 +59,7 @@ pub struct Effects {
     pub animation_speed: f32,
     pub workspace_transition: WorkspaceTransition,
     pub rgb_glow: f32,
+    pub pattern_frames_per_second: u8,
 }
 
 impl Default for Effects {
@@ -69,7 +70,24 @@ impl Default for Effects {
 
 use crate::profile::Profile;
 
+pub const PATTERN_RATES: [(u8, &str); 3] =
+    [(30, "Smooth (30 fps)"), (15, "Light (15 fps)"), (8, "Very light (8 fps)")];
+
 impl Effects {
+    pub fn pattern_frame_gap(&self) -> std::time::Duration {
+        let frames = self.pattern_frames_per_second.clamp(4, 60);
+        std::time::Duration::from_secs_f32(1.0 / frames as f32)
+    }
+
+    pub fn pattern_interval(
+        &self,
+        pattern: &spectre_theme::Pattern,
+        scale: f32,
+    ) -> Option<std::time::Duration> {
+        let interval = pattern.redraw_interval(scale)?;
+        Some(interval.max(self.pattern_frame_gap()))
+    }
+
     pub fn transition_duration_ms(&self) -> u32 {
         if !self.window_animations {
             return 0;
@@ -86,6 +104,33 @@ impl Effects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pattern_never_asks_for_more_frames_than_the_setting_allows() {
+        let pattern = spectre_theme::Pattern::default();
+        let smooth = Effects { pattern_frames_per_second: 30, ..Default::default() };
+        let light = Effects { pattern_frames_per_second: 8, ..Default::default() };
+
+        let quick = smooth.pattern_interval(&pattern, 1.0).expect("it moves");
+        let slow = light.pattern_interval(&pattern, 1.0).expect("it still moves");
+        assert!(slow > quick, "{slow:?} must be rarer than {quick:?}");
+        assert_eq!(slow, std::time::Duration::from_secs_f32(1.0 / 8.0));
+    }
+
+    #[test]
+    fn a_nonsense_frame_rate_is_pulled_back_into_reach() {
+        let none = Effects { pattern_frames_per_second: 0, ..Default::default() };
+        let mad = Effects { pattern_frames_per_second: 240, ..Default::default() };
+        assert_eq!(none.pattern_frame_gap(), std::time::Duration::from_secs_f32(1.0 / 4.0));
+        assert_eq!(mad.pattern_frame_gap(), std::time::Duration::from_secs_f32(1.0 / 60.0));
+    }
+
+    #[test]
+    fn a_still_pattern_asks_for_nothing_whatever_the_frame_rate() {
+        let pattern = spectre_theme::Pattern::default().without_animation();
+        let effects = Effects::default();
+        assert!(effects.pattern_interval(&pattern, 1.0).is_none());
+    }
 
     #[test]
     fn disabling_animations_zeroes_the_transition() {

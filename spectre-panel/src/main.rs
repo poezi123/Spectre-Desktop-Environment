@@ -131,7 +131,8 @@ fn main() -> anyhow::Result<()> {
             if panel.is_behind_a_fullscreen_window() {
                 return TimeoutAction::ToDuration(IDLE_INTERVAL);
             }
-            match panel.config.theme.panel_pattern.redraw_interval(panel.scale as f32) {
+            let pattern = panel.config.theme.panel_pattern;
+            match panel.config.effects.pattern_interval(&pattern, panel.scale as f32) {
                 Some(interval) => {
                     panel.dirty = true;
                     panel.redraw_if_needed();

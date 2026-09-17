@@ -32,6 +32,9 @@ window-animations = true
 animation-speed = 1.0
 # none | fade | slide | depth | cube | coverflow
 workspace-transition = "slide"
+# How often the moving pattern is redrawn. 30 looks smoothest, 15 and 8 use
+# noticeably less power. Anything outside 4 to 60 is pulled back into that range.
+pattern-frames-per-second = 30
 # Strength of the RGB accent glow around the focused window, 0.0 to 1.0.
 rgb-glow = 0.45
 

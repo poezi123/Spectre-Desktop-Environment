@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use spectre_config::effects::PATTERN_RATES;
 use spectre_config::terminal::{MAX_FONT_SIZE, MIN_FONT_SIZE};
 use spectre_config::{Config, PanelPosition, Profile, WallpaperMode, WorkspaceTransition};
 use spectre_theme::PatternKind;
@@ -28,6 +29,7 @@ pub enum Field {
     RoundedCorners,
     WindowAnimations,
     AnimationSpeed,
+    PatternRate,
 
     PanelEnabled,
     PanelPosition,
@@ -185,6 +187,7 @@ impl Settings {
                     self.row(Field::RoundedCorners, "Rounded corners", "Clip windows to a radius"),
                     self.row(Field::Shadows, "Shadows", "Drop shadow under windows"),
                     self.row(Field::Blur, "Blur", "Costs a full offscreen pass"),
+                    self.row(Field::PatternRate, "Pattern frame rate", "Fewer frames use less power"),
                 ],
             },
             Section {
@@ -261,6 +264,10 @@ impl Settings {
             Field::RoundedCorners => Control::Toggle(cfg.effects.rounded_corners),
             Field::WindowAnimations => Control::Toggle(cfg.effects.window_animations),
             Field::AnimationSpeed => percent(cfg.effects.animation_speed / MAX_SPEED),
+            Field::PatternRate => choice(
+                PATTERN_RATES.iter().map(|(_, name)| (*name).to_owned()).collect(),
+                self.pattern_rate_index(),
+            ),
 
             Field::PanelEnabled => Control::Toggle(cfg.panel.enabled),
             Field::PanelPosition => choice(
@@ -291,6 +298,18 @@ impl Settings {
             .iter()
             .position(|r| r.eq_ignore_ascii_case(&self.config.display.resolution))
             .unwrap_or(0)
+    }
+
+    fn pattern_rate_index(&self) -> usize {
+        let wanted = self.config.effects.pattern_frames_per_second;
+        let mut best = 0;
+        for (index, (frames, _)) in PATTERN_RATES.iter().enumerate() {
+            let closer = frames.abs_diff(wanted) < PATTERN_RATES[best].0.abs_diff(wanted);
+            if closer {
+                best = index;
+            }
+        }
+        best
     }
 
     fn scrollback_index(&self) -> usize {
@@ -402,6 +421,11 @@ impl Settings {
                 self.custom();
                 let value = step_unit(self.config.effects.animation_speed / MAX_SPEED, delta);
                 self.config.effects.animation_speed = (value * MAX_SPEED).max(0.1);
+            }
+            Field::PatternRate => {
+                let index = cycle(&PATTERN_RATES, self.pattern_rate_index(), delta);
+                self.custom();
+                self.config.effects.pattern_frames_per_second = PATTERN_RATES[index].0;
             }
 
             Field::PanelEnabled => self.config.panel.enabled = !self.config.panel.enabled,

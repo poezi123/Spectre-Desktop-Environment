@@ -420,17 +420,18 @@ impl Spectre {
         }
         let scale = self.animation_scale();
         let theme = &self.config.theme;
+        let effects = &self.config.effects;
         let desktop = self
             .wallpaper
             .is_none()
-            .then(|| theme.desktop_pattern.redraw_interval(scale))
+            .then(|| effects.pattern_interval(&theme.desktop_pattern, scale))
             .flatten();
         let window = self
             .workspaces
             .active()
             .elements()
             .any(|w| self.is_decorated(w))
-            .then(|| theme.window_pattern.redraw_interval(scale))
+            .then(|| effects.pattern_interval(&theme.window_pattern, scale))
             .flatten();
         match (desktop, window) {
             (Some(a), Some(b)) => Some(a.min(b)),

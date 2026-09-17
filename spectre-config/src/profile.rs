@@ -36,6 +36,7 @@ impl Profile {
                 animation_speed: 1.0,
                 workspace_transition: WorkspaceTransition::None,
                 rgb_glow: 0.0,
+                pattern_frames_per_second: 15,
             },
             Profile::Balanced => Effects {
                 blur: false,
@@ -45,6 +46,7 @@ impl Profile {
                 animation_speed: 1.0,
                 workspace_transition: WorkspaceTransition::Slide,
                 rgb_glow: 0.45,
+                pattern_frames_per_second: 30,
             },
             Profile::Spectre => Effects {
                 blur: true,
@@ -54,6 +56,7 @@ impl Profile {
                 animation_speed: 1.0,
                 workspace_transition: WorkspaceTransition::Cube,
                 rgb_glow: 1.0,
+                pattern_frames_per_second: 30,
             },
             Profile::Custom => return None,
         })
