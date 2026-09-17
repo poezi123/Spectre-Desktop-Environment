@@ -93,6 +93,8 @@ pub struct Window {
     pub workspace: u8,
     pub focused: bool,
     pub minimized: bool,
+    #[serde(default)]
+    pub fullscreen: bool,
 }
 
 #[cfg(test)]
@@ -111,6 +113,7 @@ mod tests {
             workspace,
             focused,
             minimized: false,
+            fullscreen: false,
         }
     }
 

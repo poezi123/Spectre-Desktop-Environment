@@ -676,10 +676,14 @@ fn layer_elements(
         }
     }
 
+    let covered = state.a_window_covers_the_output();
     let map = layer_map_for_output(output);
     for layer in map.layers().rev() {
         let is_upper = matches!(layer.layer(), WlrLayer::Overlay | WlrLayer::Top);
         if is_upper != upper {
+            continue;
+        }
+        if covered && layer.layer() == WlrLayer::Top {
             continue;
         }
         let Some(geometry) = map.layer_geometry(layer) else {

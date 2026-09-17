@@ -211,6 +211,17 @@ pub fn item_at(items: &[Placed], x: i32, y: i32) -> Option<&Placed> {
     items.iter().find(|p| p.rect.contains(x, y))
 }
 
+pub fn hidden_by_fullscreen(desktop: &Desktop) -> bool {
+    let active = desktop.workspaces.iter().find(|workspace| workspace.active);
+    let Some(active) = active else {
+        return false;
+    };
+    desktop
+        .windows
+        .iter()
+        .any(|window| window.fullscreen && !window.minimized && window.workspace == active.index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,10 +240,27 @@ mod tests {
                     workspace: 1,
                     focused: i == 0,
                     minimized: false,
+                    fullscreen: false,
                 })
                 .collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_fullscreen_window_on_the_open_workspace_hides_the_panel() {
+        let mut d = desktop(4, 2);
+        assert!(!hidden_by_fullscreen(&d));
+
+        d.windows[1].fullscreen = true;
+        assert!(hidden_by_fullscreen(&d), "it covers the workspace we are looking at");
+
+        d.windows[1].minimized = true;
+        assert!(!hidden_by_fullscreen(&d), "a minimized window covers nothing");
+
+        d.windows[1].minimized = false;
+        d.windows[1].workspace = 3;
+        assert!(!hidden_by_fullscreen(&d), "another workspace does not hide this one");
     }
 
     #[test]

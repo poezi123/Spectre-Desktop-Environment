@@ -988,9 +988,15 @@ impl Spectre {
         let output_geo = self.workspaces.output_geometry(&output)?;
         let layers = layer_map_for_output(&output);
 
+        let covered = self.a_window_covers_the_output();
         let above = layers
             .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, pos)
-            .or_else(|| layers.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, pos));
+            .or_else(|| {
+                if covered {
+                    return None;
+                }
+                layers.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, pos)
+            });
 
         if let Some(layer) = above {
             let loc = layers.layer_geometry(layer)?.loc + output_geo.loc;

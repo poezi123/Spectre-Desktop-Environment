@@ -430,6 +430,7 @@ mod tests {
                 workspace: 1,
                 focused: true,
                 minimized: false,
+                fullscreen: false,
             }],
             ..Default::default()
         };

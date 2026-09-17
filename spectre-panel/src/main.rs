@@ -128,6 +128,9 @@ fn main() -> anyhow::Result<()> {
     event_loop
         .handle()
         .insert_source(Timer::immediate(), |_, _, panel: &mut Panel| {
+            if panel.is_behind_a_fullscreen_window() {
+                return TimeoutAction::ToDuration(IDLE_INTERVAL);
+            }
             match panel.config.theme.panel_pattern.redraw_interval(panel.scale as f32) {
                 Some(interval) => {
                     panel.dirty = true;
@@ -364,6 +367,10 @@ impl Panel {
             Item::Resources => self.open_system_monitor(),
             Item::Clock => {}
         }
+    }
+
+    fn is_behind_a_fullscreen_window(&self) -> bool {
+        crate::layout::hidden_by_fullscreen(&self.desktop)
     }
 
     fn redraw_if_needed(&mut self) {

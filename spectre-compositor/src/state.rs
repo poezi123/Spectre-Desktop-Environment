@@ -415,9 +415,16 @@ impl Spectre {
             }
             return None;
         }
+        if self.a_window_covers_the_output() {
+            return None;
+        }
         let scale = self.animation_scale();
         let theme = &self.config.theme;
-        let desktop = theme.desktop_pattern.redraw_interval(scale);
+        let desktop = self
+            .wallpaper
+            .is_none()
+            .then(|| theme.desktop_pattern.redraw_interval(scale))
+            .flatten();
         let window = self
             .workspaces
             .active()
@@ -429,6 +436,10 @@ impl Spectre {
             (Some(a), Some(b)) => Some(a.min(b)),
             (only, None) | (None, only) => only,
         }
+    }
+
+    pub fn a_window_covers_the_output(&self) -> bool {
+        self.workspaces.active().elements().any(|window| self.is_fullscreen(window))
     }
 
     fn animation_scale(&self) -> f32 {
@@ -520,6 +531,10 @@ impl Spectre {
         toplevel.with_pending_state(|state| {
             !matches!(state.decoration_mode, Some(Mode::ClientSide))
         })
+    }
+
+    pub fn is_fullscreen(&self, window: &Window) -> bool {
+        self.has_state(window, xdg_toplevel::State::Fullscreen)
     }
 
     pub fn is_maximized(&self, window: &Window) -> bool {

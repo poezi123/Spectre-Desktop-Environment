@@ -437,6 +437,7 @@ impl Spectre {
             workspace,
             focused: self.focus.as_ref() == Some(window),
             minimized,
+            fullscreen: self.is_fullscreen(window),
         }
     }
 
