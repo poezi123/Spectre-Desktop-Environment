@@ -1,7 +1,8 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
+use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::{OnResize, VoidListener, WindowSize};
+use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -10,6 +11,74 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Processor;
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
+
+pub enum FromShell {
+    Output { id: u64, bytes: Vec<u8> },
+    Ended { id: u64 },
+}
+
+struct Shared {
+    title: Option<String>,
+    answers: Vec<u8>,
+    window: WindowSize,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Self {
+            title: None,
+            answers: Vec::new(),
+            window: WindowSize {
+                num_lines: 1,
+                num_cols: 1,
+                cell_width: 1,
+                cell_height: 1,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Notifier {
+    shared: Arc<Mutex<Shared>>,
+}
+
+impl Notifier {
+    fn set_window(&self, window: WindowSize) {
+        if let Ok(mut shared) = self.shared.lock() {
+            shared.window = window;
+        }
+    }
+
+    fn title(&self) -> Option<String> {
+        self.shared.lock().ok().and_then(|shared| shared.title.clone())
+    }
+
+    fn take_answers(&self) -> Vec<u8> {
+        match self.shared.lock() {
+            Ok(mut shared) => std::mem::take(&mut shared.answers),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
+impl EventListener for Notifier {
+    fn send_event(&self, event: Event) {
+        let Ok(mut shared) = self.shared.lock() else {
+            return;
+        };
+        match event {
+            Event::Title(title) => shared.title = Some(title),
+            Event::ResetTitle => shared.title = None,
+            Event::PtyWrite(text) => shared.answers.extend_from_slice(text.as_bytes()),
+            Event::TextAreaSizeRequest(reply) => {
+                let answer = reply(shared.window);
+                shared.answers.extend_from_slice(answer.as_bytes());
+            }
+            _ => {}
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
@@ -38,19 +107,22 @@ impl Dimensions for Size {
 }
 
 pub struct Session {
-    pub term: Term<VoidListener>,
+    pub id: u64,
+    pub term: Term<Notifier>,
     pub size: Size,
     processor: Processor,
     pty: tty::Pty,
     writer: std::fs::File,
+    notifier: Notifier,
 }
 
 impl Session {
     pub fn start(
+        id: u64,
         size: Size,
         cell: (u16, u16),
         scrollback: usize,
-        output: Sender<Vec<u8>>,
+        output: Sender<FromShell>,
     ) -> anyhow::Result<Self> {
         let mut options = tty::Options::default();
         options.env.insert(String::from("TERM"), String::from("xterm-256color"));
@@ -73,15 +145,23 @@ impl Session {
                         break;
                     }
                 };
-                if output.send(buffer[..count].to_vec()).is_err() {
+                let bytes = buffer[..count].to_vec();
+                if output.send(FromShell::Output { id, bytes }).is_err() {
                     break;
                 }
             }
+            let _ = output.send(FromShell::Ended { id });
         });
 
         let config = Config { scrolling_history: scrollback, ..Config::default() };
-        let term = Term::new(config, &size, VoidListener);
-        Ok(Self { term, size, processor: Processor::new(), pty, writer })
+        let notifier = Notifier::default();
+        notifier.set_window(window_size(size, cell));
+        let term = Term::new(config, &size, notifier.clone());
+        Ok(Self { id, term, size, processor: Processor::new(), pty, writer, notifier })
+    }
+
+    pub fn title(&self) -> Option<String> {
+        self.notifier.title()
     }
 
     pub fn scroll(&mut self, lines: i32) {
@@ -127,6 +207,10 @@ impl Session {
 
     pub fn feed(&mut self, bytes: &[u8]) {
         self.processor.advance(&mut self.term, bytes);
+        let answers = self.notifier.take_answers();
+        if !answers.is_empty() {
+            self.write(&answers);
+        }
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -141,6 +225,7 @@ impl Session {
         }
         self.size = size;
         self.term.resize(size);
+        self.notifier.set_window(window_size(size, cell));
         self.pty.on_resize(window_size(size, cell));
     }
 }

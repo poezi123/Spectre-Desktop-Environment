@@ -2,12 +2,18 @@ use alacritty_terminal::index::Point;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
 use spectre_draw::{Canvas, Rect};
-use spectre_text::{FontFamily, Label, TextRenderer};
+use spectre_text::{EllipsisSide, FontFamily, Label, TextRenderer};
 use spectre_theme::{Color, Palette, Theme};
 
 use crate::session::Session;
 
 pub const PADDING: i32 = 10;
+
+const TAB_PADDING: i32 = 5;
+const TAB_GAP: i32 = 2;
+const TAB_NARROWEST: i32 = 70;
+const TAB_WIDEST: i32 = 240;
+const CLOSE_GLYPH: &str = "\u{2715}";
 
 const CUBE: [u8; 6] = [0, 95, 135, 175, 215, 255];
 
@@ -35,15 +41,104 @@ impl Metrics {
     }
 }
 
-pub fn draw(
-    canvas: &mut Canvas,
-    text: &mut TextRenderer,
-    session: &Session,
-    theme: &Theme,
-    metrics: &Metrics,
-) {
-    let palette = &theme.palette;
+pub struct Frame<'a> {
+    pub session: &'a Session,
+    pub theme: &'a Theme,
+    pub metrics: &'a Metrics,
+    pub tabs: &'a [String],
+    pub active: usize,
+}
+
+pub fn bar_height(metrics: &Metrics, tabs: usize) -> i32 {
+    if tabs < 2 {
+        return 0;
+    }
+    metrics.cell_height + TAB_PADDING * 2
+}
+
+pub fn tab_width(width: i32, tabs: usize) -> i32 {
+    if tabs == 0 {
+        return 0;
+    }
+    (width / tabs as i32).clamp(TAB_NARROWEST, TAB_WIDEST)
+}
+
+pub fn tab_rect(width: i32, metrics: &Metrics, tabs: usize, index: usize) -> Rect {
+    let each = tab_width(width, tabs);
+    let height = bar_height(metrics, tabs);
+    Rect::new(index as i32 * each, 0, (each - TAB_GAP).max(1), height)
+}
+
+pub fn tab_at(width: i32, metrics: &Metrics, tabs: usize, x: i32, y: i32) -> Option<usize> {
+    let height = bar_height(metrics, tabs);
+    if height == 0 || y < 0 || y >= height || x < 0 {
+        return None;
+    }
+    (0..tabs).find(|index| tab_rect(width, metrics, tabs, *index).contains(x, y))
+}
+
+pub fn close_at(width: i32, metrics: &Metrics, tabs: usize, x: i32, y: i32) -> Option<usize> {
+    let index = tab_at(width, metrics, tabs, x, y)?;
+    let rect = tab_rect(width, metrics, tabs, index);
+    let button = close_button(&rect, metrics);
+    button.contains(x, y).then_some(index)
+}
+
+fn close_button(tab: &Rect, metrics: &Metrics) -> Rect {
+    let size = metrics.cell_width.max(8);
+    Rect::new(tab.right() - size - TAB_PADDING, tab.y + TAB_PADDING, size, size)
+}
+
+fn draw_tabs(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
+    let palette = &frame.theme.palette;
+    let tabs = frame.tabs.len();
+    let width = canvas.width();
+    let height = bar_height(frame.metrics, tabs);
+    canvas.fill_rect(Rect::new(0, 0, width, height), palette.surface);
+
+    for (index, title) in frame.tabs.iter().enumerate() {
+        let rect = tab_rect(width, frame.metrics, tabs, index);
+        let open = index == frame.active;
+        let ground = match open {
+            true => palette.base,
+            false => palette.surface,
+        };
+        canvas.fill_rect(rect, ground);
+        if open {
+            let line = Rect::new(rect.x, rect.bottom() - 2, rect.w, 2);
+            canvas.fill_rect(line, palette.accent.sample(0.5));
+        }
+
+        let button = close_button(&rect, frame.metrics);
+        let room = (button.x - rect.x - TAB_PADDING * 2).max(0);
+        let label = Label::new(title)
+            .size(frame.metrics.font_px)
+            .family(FontFamily::Monospace)
+            .color(palette.titlebar_text(open))
+            .max_width(room as u32)
+            .ellipsis(EllipsisSide::End);
+        let image = text.rasterise(&label);
+        canvas.draw_image(rect.x + TAB_PADDING * 2, rect.y + TAB_PADDING, &image);
+
+        let cross = Label::new(CLOSE_GLYPH)
+            .size(frame.metrics.font_px)
+            .family(FontFamily::Monospace)
+            .color(palette.titlebar_text(open));
+        let image = text.rasterise(&cross);
+        canvas.draw_image(button.x, button.y, &image);
+    }
+}
+
+pub fn draw(canvas: &mut Canvas, text: &mut TextRenderer, frame: &Frame<'_>) {
+    let palette = &frame.theme.palette;
+    let metrics = frame.metrics;
+    let session = frame.session;
     canvas.clear(palette.base);
+    let bar = bar_height(metrics, frame.tabs.len());
+    if bar > 0 {
+        draw_tabs(canvas, text, frame);
+    }
+    let top = PADDING + bar;
 
     let content = session.term.renderable_content();
     let offset = content.display_offset as i32;
@@ -74,38 +169,44 @@ pub fn draw(
             bold: cell.flags.contains(Flags::BOLD),
         };
         if !run.accepts(&style, point.column.0) {
-            run.flush(canvas, text, metrics);
+            run.flush(canvas, text, metrics, top);
             run.start(style, point.column.0);
         }
         run.push(cell.c);
     }
-    run.flush(canvas, text, metrics);
-    draw_cursor(canvas, text, cursor, offset, under_cursor, palette, metrics);
+    run.flush(canvas, text, metrics, top);
+    let spot = CursorSpot { point: cursor, offset, glyph: under_cursor, top };
+    draw_cursor(canvas, text, &spot, palette, metrics);
+}
+
+struct CursorSpot {
+    point: Point,
+    offset: i32,
+    glyph: char,
+    top: i32,
 }
 
 fn draw_cursor(
     canvas: &mut Canvas,
     text: &mut TextRenderer,
-    cursor: Point,
-    offset: i32,
-    glyph: char,
+    spot: &CursorSpot,
     palette: &Palette,
     metrics: &Metrics,
 ) {
-    let row = cursor.line.0 + offset;
+    let row = spot.point.line.0 + spot.offset;
     if row < 0 {
         return;
     }
-    let x = PADDING + cursor.column.0 as i32 * metrics.cell_width;
-    let y = PADDING + row * metrics.cell_height;
+    let x = PADDING + spot.point.column.0 as i32 * metrics.cell_width;
+    let y = spot.top + row * metrics.cell_height;
     let block = Rect::new(x, y, metrics.cell_width, metrics.cell_height);
     canvas.fill_rect(block, palette.accent.sample(0.5));
 
-    if glyph == ' ' || glyph == '\0' {
+    if spot.glyph == ' ' || spot.glyph == '\0' {
         return;
     }
     let mut letters = String::new();
-    letters.push(glyph);
+    letters.push(spot.glyph);
     let label = Label::new(&letters)
         .size(metrics.font_px)
         .family(FontFamily::Monospace)
@@ -150,7 +251,13 @@ impl Run {
         self.text.push(glyph);
     }
 
-    fn flush(&mut self, canvas: &mut Canvas, text: &mut TextRenderer, metrics: &Metrics) {
+    fn flush(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &mut TextRenderer,
+        metrics: &Metrics,
+        top: i32,
+    ) {
         let Some(style) = self.style else {
             return;
         };
@@ -160,7 +267,7 @@ impl Run {
         }
 
         let x = PADDING + self.column as i32 * metrics.cell_width;
-        let y = PADDING + style.line * metrics.cell_height;
+        let y = top + style.line * metrics.cell_height;
         let width = self.text.chars().count() as i32 * metrics.cell_width;
         canvas.fill_rect(Rect::new(x, y, width, metrics.cell_height), style.background);
 
@@ -260,6 +367,39 @@ mod tests {
 
     fn metrics() -> Metrics {
         Metrics { cell_width: 9, cell_height: 18, font_px: 14.0 }
+    }
+
+    #[test]
+    fn a_single_tab_needs_no_bar() {
+        assert_eq!(bar_height(&metrics(), 1), 0);
+        assert_eq!(bar_height(&metrics(), 0), 0);
+        assert!(bar_height(&metrics(), 2) > 0);
+    }
+
+    #[test]
+    fn the_bar_only_answers_clicks_inside_itself() {
+        let m = metrics();
+        let bar = bar_height(&m, 3);
+        assert_eq!(tab_at(900, &m, 3, 10, 1), Some(0));
+        assert_eq!(tab_at(900, &m, 3, 310, 1), Some(1));
+        assert_eq!(tab_at(900, &m, 3, 10, bar + 5), None, "the grid below is not the bar");
+        assert_eq!(tab_at(900, &m, 1, 10, 1), None, "one tab means no bar at all");
+    }
+
+    #[test]
+    fn the_cross_sits_inside_its_own_tab() {
+        let m = metrics();
+        let rect = tab_rect(900, &m, 3, 1);
+        let cross = close_button(&rect, &m);
+        assert!(rect.contains(cross.x, cross.y));
+        assert_eq!(close_at(900, &m, 3, cross.x + 1, cross.y + 1), Some(1));
+        assert_eq!(close_at(900, &m, 3, rect.x + 2, cross.y + 1), None, "the title is not a cross");
+    }
+
+    #[test]
+    fn many_tabs_stay_wide_enough_to_read() {
+        assert!(tab_width(900, 30) >= TAB_NARROWEST);
+        assert!(tab_width(4000, 2) <= TAB_WIDEST);
     }
 
     #[test]

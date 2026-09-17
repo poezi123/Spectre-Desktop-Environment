@@ -40,12 +40,13 @@ use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
-use crate::session::{Session, Size};
+use crate::session::{FromShell, Session, Size};
 use crate::view::Metrics;
 
 const MIN_REDRAW: Duration = Duration::from_millis(16);
 const WHEEL_LINES: i32 = 3;
 const BTN_LEFT: u32 = 0x110;
+const BTN_MIDDLE: u32 = 0x112;
 const TEXT_MIME: &str = "text/plain;charset=utf-8";
 const START_COLUMNS: usize = 92;
 const START_LINES: usize = 26;
@@ -86,11 +87,11 @@ fn main() -> anyhow::Result<()> {
         DataDeviceManagerState::bind(&globals, &qh).context("the clipboard is missing")?;
 
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
-    let (sender, receiver) = channel::<Vec<u8>>();
+    let (sender, receiver) = channel::<FromShell>();
     let (paste_sender, paste_receiver) = channel::<String>();
     let cell = (metrics.cell_width as u16, metrics.cell_height as u16);
     let history = config.terminal.scrollback();
-    let session = Session::start(Size::new(START_COLUMNS, START_LINES), cell, history, sender)
+    let first = Session::start(1, Size::new(START_COLUMNS, START_LINES), cell, history, sender.clone())
         .context("could not start the shell")?;
 
     let mut app = App {
@@ -113,7 +114,11 @@ fn main() -> anyhow::Result<()> {
         text,
         metrics,
         theme: config.theme.clone(),
-        session,
+        sessions: vec![first],
+        active: 0,
+        next_id: 1,
+        history,
+        to_app: sender,
         control: false,
         alt: false,
         shift: false,
@@ -131,11 +136,16 @@ fn main() -> anyhow::Result<()> {
     event_loop
         .handle()
         .insert_source(receiver, |event, _, app: &mut App| match event {
-            ChannelEvent::Msg(bytes) => {
-                app.session.feed(&bytes);
+            ChannelEvent::Msg(FromShell::Output { id, bytes }) => {
+                let found = app.sessions.iter_mut().find(|session| session.id == id);
+                if let Some(session) = found {
+                    session.feed(&bytes);
+                }
                 app.dirty = true;
+                app.show_the_title();
                 app.redraw_if_needed();
             }
+            ChannelEvent::Msg(FromShell::Ended { id }) => app.end_of_shell(id),
             ChannelEvent::Closed => app.exit = true,
         })
         .map_err(|err| anyhow::anyhow!("could not listen to the shell: {err}"))?;
@@ -157,6 +167,28 @@ fn main() -> anyhow::Result<()> {
         }
     })?;
     Ok(())
+}
+
+fn tab_title(session: &Session) -> String {
+    match session.title() {
+        Some(title) if !title.trim().is_empty() => title,
+        _ => String::from("Shell"),
+    }
+}
+
+fn digit_key(key: Keysym) -> Option<usize> {
+    let digits = [
+        Keysym::_1,
+        Keysym::_2,
+        Keysym::_3,
+        Keysym::_4,
+        Keysym::_5,
+        Keysym::_6,
+        Keysym::_7,
+        Keysym::_8,
+        Keysym::_9,
+    ];
+    digits.iter().position(|d| *d == key).map(|index| index + 1)
 }
 
 fn init_tracing() {
@@ -188,7 +220,11 @@ struct App {
     text: TextRenderer,
     metrics: Metrics,
     theme: Theme,
-    session: Session,
+    sessions: Vec<Session>,
+    active: usize,
+    next_id: u64,
+    history: usize,
+    to_app: smithay_client_toolkit::reexports::calloop::channel::Sender<FromShell>,
     data_manager: DataDeviceManagerState,
     data_device: Option<DataDevice>,
     copy_source: Option<CopyPasteSource>,
@@ -203,6 +239,108 @@ struct App {
 }
 
 impl App {
+    fn session(&self) -> &Session {
+        let index = self.active.min(self.sessions.len() - 1);
+        &self.sessions[index]
+    }
+
+    fn session_mut(&mut self) -> &mut Session {
+        let index = self.active.min(self.sessions.len() - 1);
+        &mut self.sessions[index]
+    }
+
+    fn open_tab(&mut self) {
+        let cell = (self.metrics.cell_width as u16, self.metrics.cell_height as u16);
+        let size = self.session().size;
+        self.next_id += 1;
+        let started = Session::start(self.next_id, size, cell, self.history, self.to_app.clone());
+        match started {
+            Ok(session) => {
+                self.sessions.push(session);
+                self.active = self.sessions.len() - 1;
+            }
+            Err(err) => {
+                tracing::warn!(?err, "could not open another tab");
+                return;
+            }
+        }
+        self.fit_the_grid();
+        self.show_the_title();
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn close_tab(&mut self, index: usize) {
+        if index >= self.sessions.len() {
+            return;
+        }
+        self.sessions.remove(index);
+        if self.sessions.is_empty() {
+            self.exit = true;
+            return;
+        }
+        if self.active >= self.sessions.len() {
+            self.active = self.sessions.len() - 1;
+        }
+        self.fit_the_grid();
+        self.show_the_title();
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn end_of_shell(&mut self, id: u64) {
+        let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
+            return;
+        };
+        self.close_tab(index);
+    }
+
+    fn show_tab(&mut self, index: usize) {
+        if index >= self.sessions.len() || index == self.active {
+            return;
+        }
+        self.active = index;
+        self.show_the_title();
+        self.dirty = true;
+        self.redraw_if_needed();
+    }
+
+    fn step_tab(&mut self, delta: i32) {
+        let count = self.sessions.len() as i32;
+        if count < 2 {
+            return;
+        }
+        let next = (self.active as i32 + delta).rem_euclid(count);
+        self.show_tab(next as usize);
+    }
+
+    fn clicked_a_tab(&mut self, x: f64, y: f64, closing: bool) -> bool {
+        let tabs = self.sessions.len();
+        let width = self.canvas.width();
+        let inside_x = (x * self.scale as f64) as i32;
+        let inside_y = (y * self.scale as f64) as i32;
+        if let Some(index) = view::close_at(width, &self.metrics, tabs, inside_x, inside_y) {
+            self.close_tab(index);
+            return true;
+        }
+        let Some(index) = view::tab_at(width, &self.metrics, tabs, inside_x, inside_y) else {
+            return false;
+        };
+        match closing {
+            true => self.close_tab(index),
+            false => self.show_tab(index),
+        }
+        true
+    }
+
+    fn show_the_title(&mut self) {
+        let title = match self.session().title() {
+            Some(title) if !title.trim().is_empty() => format!("{title} — Spectre Terminal"),
+            _ => String::from("Spectre Terminal"),
+        };
+        self.window.set_title(title);
+    }
+
     fn redraw_if_needed(&mut self) {
         if !self.dirty || !self.configured || self.width <= 0 {
             return;
@@ -217,13 +355,14 @@ impl App {
     fn cell_at(&self, x: f64, y: f64) -> (Point, Side) {
         let cell_width = self.metrics.cell_width.max(1);
         let cell_height = self.metrics.cell_height.max(1);
+        let bar = view::bar_height(&self.metrics, self.sessions.len());
         let inside_x = (x * self.scale as f64) as i32 - view::PADDING;
-        let inside_y = (y * self.scale as f64) as i32 - view::PADDING;
+        let inside_y = (y * self.scale as f64) as i32 - view::PADDING - bar;
         let column = (inside_x.max(0) / cell_width) as usize;
         let row = inside_y.max(0) / cell_height;
-        let column = column.min(self.session.size.columns.saturating_sub(1));
-        let row = row.min(self.session.size.lines.saturating_sub(1) as i32);
-        let line = Line(row - self.session.display_offset() as i32);
+        let column = column.min(self.session().size.columns.saturating_sub(1));
+        let row = row.min(self.session().size.lines.saturating_sub(1) as i32);
+        let line = Line(row - self.session().display_offset() as i32);
         let side = match inside_x.rem_euclid(cell_width) > cell_width / 2 {
             true => Side::Right,
             false => Side::Left,
@@ -232,7 +371,7 @@ impl App {
     }
 
     fn copy(&mut self, qh: &QueueHandle<Self>) {
-        let Some(text) = self.session.selected_text() else {
+        let Some(text) = self.session().selected_text() else {
             return;
         };
         let Some(device) = self.data_device.as_ref() else {
@@ -273,13 +412,13 @@ impl App {
             return;
         }
         let lines = text.replace("\r\n", "\r").replace('\n', "\r");
-        self.session.scroll_to_bottom();
-        if self.session.wraps_a_paste() {
-            self.session.write(b"\x1b[200~");
-            self.session.write(lines.as_bytes());
-            self.session.write(b"\x1b[201~");
+        self.session_mut().scroll_to_bottom();
+        if self.session().wraps_a_paste() {
+            self.session_mut().write(b"\x1b[200~");
+            self.session_mut().write(lines.as_bytes());
+            self.session_mut().write(b"\x1b[201~");
         } else {
-            self.session.write(lines.as_bytes());
+            self.session_mut().write(lines.as_bytes());
         }
         self.dirty = true;
         self.redraw_if_needed();
@@ -303,16 +442,26 @@ impl App {
     fn fit_the_grid(&mut self) {
         let width = self.width * self.scale;
         let height = self.height * self.scale;
-        let size = Size::new(self.metrics.columns(width), self.metrics.lines(height));
+        let bar = view::bar_height(&self.metrics, self.sessions.len());
+        let size = Size::new(self.metrics.columns(width), self.metrics.lines(height - bar));
         let cell = (self.metrics.cell_width as u16, self.metrics.cell_height as u16);
-        self.session.resize(size, cell);
+        self.session_mut().resize(size, cell);
     }
 
     fn draw(&mut self) {
         self.dirty = false;
         let (width, height) = (self.width * self.scale, self.height * self.scale);
         self.canvas.resize(width, height);
-        view::draw(&mut self.canvas, &mut self.text, &self.session, &self.theme, &self.metrics);
+        let tabs: Vec<String> = self.sessions.iter().map(tab_title).collect();
+        let index = self.active.min(self.sessions.len() - 1);
+        let view = view::Frame {
+            session: &self.sessions[index],
+            theme: &self.theme,
+            metrics: &self.metrics,
+            tabs: &tabs,
+            active: self.active,
+        };
+        view::draw(&mut self.canvas, &mut self.text, &view);
 
         let stride = width * 4;
         let Ok((buffer, target)) =
@@ -393,6 +542,36 @@ impl KeyboardHandler for App {
     ) {
         self.serial = serial;
         if self.control && self.shift {
+            match event.keysym {
+                Keysym::T | Keysym::t => {
+                    self.open_tab();
+                    return;
+                }
+                Keysym::W | Keysym::w => {
+                    self.close_tab(self.active);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.control {
+            let stepped = match event.keysym {
+                Keysym::Page_Down | Keysym::Tab => Some(1),
+                Keysym::Page_Up => Some(-1),
+                _ => None,
+            };
+            if let Some(delta) = stepped {
+                self.step_tab(delta);
+                return;
+            }
+        }
+        if self.alt {
+            if let Some(digit) = digit_key(event.keysym) {
+                self.show_tab(digit - 1);
+                return;
+            }
+        }
+        if self.control && self.shift {
             if event.keysym == Keysym::C || event.keysym == Keysym::c {
                 self.copy(qh);
                 return;
@@ -409,7 +588,7 @@ impl KeyboardHandler for App {
                 _ => None,
             };
             if let Some(up) = paged {
-                self.session.scroll_page(up);
+                self.session_mut().scroll_page(up);
                 self.dirty = true;
                 self.redraw_if_needed();
                 return;
@@ -427,8 +606,8 @@ impl KeyboardHandler for App {
             }
         }
         if let Some(bytes) = keys_to_bytes(&event, self.control, self.alt) {
-            self.session.scroll_to_bottom();
-            self.session.write(&bytes);
+            self.session_mut().scroll_to_bottom();
+            self.session_mut().write(&bytes);
             self.dirty = true;
         }
     }
@@ -606,15 +785,21 @@ impl PointerHandler for App {
                 continue;
             }
             match &event.kind {
+                PointerEventKind::Press { button, .. } if *button == BTN_MIDDLE => {
+                    self.clicked_a_tab(event.position.0, event.position.1, true);
+                }
                 PointerEventKind::Press { button, .. } if *button == BTN_LEFT => {
+                    if self.clicked_a_tab(event.position.0, event.position.1, false) {
+                        continue;
+                    }
                     let (point, side) = self.cell_at(event.position.0, event.position.1);
-                    self.session.start_selection(point, side);
+                    self.session_mut().start_selection(point, side);
                     self.selecting = true;
                     self.dirty = true;
                 }
                 PointerEventKind::Motion { .. } if self.selecting => {
                     let (point, side) = self.cell_at(event.position.0, event.position.1);
-                    self.session.update_selection(point, side);
+                    self.session_mut().update_selection(point, side);
                     self.dirty = true;
                 }
                 PointerEventKind::Release { button, .. } if *button == BTN_LEFT => {
@@ -627,7 +812,7 @@ impl PointerHandler for App {
                             (vertical.absolute / self.metrics.cell_height as f64).round() as i32;
                     }
                     if lines != 0 {
-                        self.session.scroll(-lines);
+                        self.session_mut().scroll(-lines);
                         self.dirty = true;
                     }
                 }
