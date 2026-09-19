@@ -227,6 +227,12 @@ impl Spectre {
             return;
         }
         let x = self.pointer_position().x;
+        let mut width = 1.0;
+        if let Some(output) = self.active_output() {
+            if let Some(area) = self.workspaces.output_geometry(&output) {
+                width = area.size.w as f64;
+            }
+        }
         let Some(overview) = self.overview.as_mut() else {
             return;
         };
@@ -235,7 +241,7 @@ impl Spectre {
                 overview.press(x, now);
                 None
             }
-            ButtonState::Released => overview.release(now),
+            ButtonState::Released => overview.release(x, width, now),
         };
         if let Some(index) = chosen {
             self.close_overview(Some(index));

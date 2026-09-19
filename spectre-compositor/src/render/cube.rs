@@ -13,7 +13,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 
 pub const SNAPSHOT_SCALE: f64 = 0.5;
 
-pub const FACE_SIZE: f32 = 0.55;
+pub const FACE_SIZE: f32 = 0.74;
 
 pub fn capture<E>(
     renderer: &mut GlesRenderer,

@@ -9,6 +9,8 @@ const FACES_PER_SCREEN_WIDTH: f32 = 1.6;
 
 const CLICK_SLOP: f64 = 8.0;
 
+const CORNER_TURN: f32 = 0.5;
+
 #[derive(Debug, Clone)]
 pub struct Overview {
     faces: usize,
@@ -68,13 +70,21 @@ impl Overview {
         self.angle = drag.start_angle - turned;
     }
 
-    pub fn release(&mut self, now: Instant) -> Option<usize> {
+    pub fn release(&mut self, x: f64, width: f64, now: Instant) -> Option<usize> {
         let drag = self.drag.take()?;
-        if !drag.moved {
-            return Some(self.front(now));
+        if drag.moved {
+            self.snap = Some(Snap { from: self.angle, to: self.angle.round(), started: now });
+            return None;
         }
-        self.snap = Some(Snap { from: self.angle, to: self.angle.round(), started: now });
-        None
+        Some(self.under(x, width, now))
+    }
+
+    pub fn under(&self, x: f64, width: f64, now: Instant) -> usize {
+        let front = self.front(now);
+        if x <= width / 2.0 {
+            return front;
+        }
+        (front + 1).rem_euclid(self.faces)
     }
 
     pub fn step(&mut self, delta: i32, now: Instant) {
@@ -91,7 +101,14 @@ impl Overview {
     }
 
     pub fn face_angle(&self, index: usize, now: Instant) -> f32 {
-        (index as f32 - self.angle(now)) * TAU / self.faces as f32
+        (index as f32 - self.angle(now) - self.corner_turn()) * TAU / self.faces as f32
+    }
+
+    fn corner_turn(&self) -> f32 {
+        match self.faces >= 3 {
+            true => CORNER_TURN,
+            false => 0.0,
+        }
     }
 
     pub fn is_visible(&self, index: usize, now: Instant) -> bool {
@@ -121,20 +138,40 @@ mod tests {
     }
 
     #[test]
-    fn it_opens_facing_the_active_workspace() {
+    fn it_opens_with_the_active_workspace_turned_towards_the_left() {
         let now = Instant::now();
         let overview = Overview::open(4, 2);
         assert_eq!(overview.front(now), 2);
-        assert!(overview.face_angle(2, now).abs() < 1e-6);
+
+        let step = TAU / 4.0;
+        let active = overview.face_angle(2, now);
+        let next = overview.face_angle(3, now);
+        assert!((active + step / 2.0).abs() < 1e-6, "the active face sits half a step to the left");
+        assert!((next - step / 2.0).abs() < 1e-6, "the next one sits half a step to the right");
+        assert!(active.cos() > 0.5 && next.cos() > 0.5, "both are turned towards the viewer");
     }
 
     #[test]
-    fn a_click_without_dragging_picks_the_front_workspace() {
+    fn a_click_on_the_left_half_picks_the_face_on_the_left() {
         let now = Instant::now();
         let mut overview = Overview::open(4, 1);
         overview.press(500.0, now);
         overview.drag_to(503.0, 1920.0);
-        assert_eq!(overview.release(now), Some(1));
+        assert_eq!(overview.release(500.0, 1920.0, now), Some(1));
+    }
+
+    #[test]
+    fn a_click_on_the_right_half_picks_the_face_on_the_right() {
+        let now = Instant::now();
+        let mut overview = Overview::open(4, 1);
+        overview.press(1500.0, now);
+        overview.drag_to(1503.0, 1920.0);
+        assert_eq!(overview.release(1500.0, 1920.0, now), Some(2));
+
+        let mut last = Overview::open(4, 3);
+        last.press(1500.0, now);
+        last.drag_to(1503.0, 1920.0);
+        assert_eq!(last.release(1500.0, 1920.0, now), Some(0), "it wraps round");
     }
 
     #[test]
@@ -143,7 +180,7 @@ mod tests {
         let mut overview = Overview::open(4, 0);
         overview.press(1500.0, now);
         overview.drag_to(1500.0 - 1920.0 * 0.5, 1920.0);
-        assert_eq!(overview.release(now), None, "a drag is not a choice");
+        assert_eq!(overview.release(0.0, 1920.0, now), None, "a drag is not a choice");
         assert_eq!(overview.front(later(now)), 1);
     }
 
@@ -153,7 +190,7 @@ mod tests {
         let mut overview = Overview::open(4, 0);
         overview.press(1000.0, now);
         overview.drag_to(700.0, 1920.0);
-        overview.release(now);
+        overview.release(700.0, 1920.0, now);
         let angle = overview.angle(later(now));
         assert!((angle - angle.round()).abs() < 1e-5, "it came to rest at {angle}");
         assert!(!overview.is_moving(later(now)));
@@ -173,8 +210,10 @@ mod tests {
     fn only_the_faces_turned_towards_the_viewer_are_drawn() {
         let now = Instant::now();
         let overview = Overview::open(4, 0);
-        assert!(overview.is_visible(0, now));
+        assert!(overview.is_visible(0, now), "the active face");
+        assert!(overview.is_visible(1, now), "and the one next to it");
         assert!(!overview.is_visible(2, now), "the back face is hidden");
+        assert!(!overview.is_visible(3, now), "and the one behind on the other side");
     }
 
     #[test]
@@ -183,12 +222,22 @@ mod tests {
         let overview = Overview::open(1, 0);
         assert!(overview.is_visible(0, now));
         assert_eq!(overview.front(now), 0);
+        assert_eq!(overview.face_angle(0, now), 0.0, "with nothing beside it, it faces us");
+    }
+
+    #[test]
+    fn two_workspaces_face_us_straight_on_rather_than_edge_on() {
+        let now = Instant::now();
+        let overview = Overview::open(2, 0);
+        assert_eq!(overview.face_angle(0, now), 0.0);
+        assert!(overview.is_visible(0, now));
+        assert!(!overview.is_visible(1, now), "the other one is behind");
     }
 
     #[test]
     fn a_release_without_a_press_does_nothing() {
         let now = Instant::now();
         let mut overview = Overview::open(4, 0);
-        assert_eq!(overview.release(now), None);
+        assert_eq!(overview.release(100.0, 1920.0, now), None);
     }
 }
