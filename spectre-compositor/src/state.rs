@@ -110,6 +110,14 @@ pub struct Spectre {
     pub clipboard_image: Option<std::sync::Arc<Vec<u8>>>,
     pub flash: Option<Instant>,
     pub region: Option<crate::region::Pick>,
+    pub lock_state: smithay::wayland::session_lock::SessionLockManagerState,
+    pub lock: Option<crate::lock::Lock>,
+    pub pending_lock: Option<smithay::wayland::session_lock::SessionLocker>,
+    pub idle_notifier: smithay::wayland::idle_notify::IdleNotifierState<Self>,
+    pub idle_inhibitors: Vec<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+    pub last_activity: Instant,
+    pub screen_is_dark: bool,
+    dark_drawn: bool,
     pub overview: Option<crate::overview::Overview>,
     pub corner_armed: bool,
     pub pending_overview_key: Option<smithay::input::keyboard::Keysym>,
@@ -146,6 +154,11 @@ impl Spectre {
         let data_device_state = DataDeviceState::new::<Self>(dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(dh);
+        let lock_state =
+            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(dh, |_| true);
+        let idle_notifier =
+            smithay::wayland::idle_notify::IdleNotifierState::new(dh, loop_handle.clone());
+        smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<Self>(dh);
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, seat_name);
@@ -231,6 +244,14 @@ impl Spectre {
             clipboard_image: None,
             flash: None,
             region: None,
+            lock_state,
+            lock: None,
+            pending_lock: None,
+            idle_notifier,
+            idle_inhibitors: Vec::new(),
+            last_activity: Instant::now(),
+            screen_is_dark: false,
+            dark_drawn: false,
             overview: None,
             corner_armed: false,
             pending_overview_key: None,
@@ -393,7 +414,16 @@ impl Spectre {
     }
 
     pub fn take_dirty(&mut self) -> bool {
-        if std::mem::replace(&mut self.dirty, false) {
+        let dirty = std::mem::replace(&mut self.dirty, false);
+        if self.screen_is_dark {
+            if self.dark_drawn {
+                return false;
+            }
+            self.dark_drawn = true;
+            return true;
+        }
+        self.dark_drawn = false;
+        if dirty {
             self.last_animation = Instant::now();
             return true;
         }
@@ -409,6 +439,9 @@ impl Spectre {
     }
 
     pub fn animation_interval(&self) -> Option<Duration> {
+        if self.screen_is_dark || self.locked() {
+            return None;
+        }
         if let Some(started) = self.flash {
             if started.elapsed() < crate::screenshot::FLASH {
                 return Some(TRANSITION_INTERVAL);
@@ -571,6 +604,7 @@ impl Spectre {
     }
 
     pub fn refresh(&mut self) {
+        self.watch_for_idleness();
         if self.flash.is_some_and(|started| started.elapsed() >= crate::screenshot::FLASH) {
             self.flash = None;
         }

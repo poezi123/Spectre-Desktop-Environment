@@ -706,6 +706,9 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
             let waited = started.elapsed();
             match surface.compositor.queue_frame(()) {
                 Ok(()) => {
+                    if let Some(locker) = state.pending_lock.take() {
+                        locker.lock();
+                    }
                     surface.awaiting_flip = true;
                     surface.last_frame = now;
                     surface.last_cost = started.elapsed();

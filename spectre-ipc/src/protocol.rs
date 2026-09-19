@@ -36,6 +36,8 @@ pub struct Desktop {
     pub animations: bool,
     #[serde(default)]
     pub outputs: Vec<Output>,
+    #[serde(default)]
+    pub resting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,6 +148,7 @@ mod tests {
             windows: vec![window(1, 1, true)],
             profile: Profile::Balanced,
             animations: true,
+            resting: false,
             outputs: vec![Output {
                 name: String::from("Virtual-1"),
                 modes: vec![Mode { width: 1920, height: 1080, refresh: 60 }],

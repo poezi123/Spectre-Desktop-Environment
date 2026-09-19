@@ -211,6 +211,10 @@ pub fn item_at(items: &[Placed], x: i32, y: i32) -> Option<&Placed> {
     items.iter().find(|p| p.rect.contains(x, y))
 }
 
+pub fn nothing_to_show(desktop: &Desktop) -> bool {
+    desktop.resting || hidden_by_fullscreen(desktop)
+}
+
 pub fn hidden_by_fullscreen(desktop: &Desktop) -> bool {
     let active = desktop.workspaces.iter().find(|workspace| workspace.active);
     let Some(active) = active else {

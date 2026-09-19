@@ -33,6 +33,17 @@ pub struct ModifiersExt(pub Modifiers);
 
 impl Spectre {
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
+        let woke_us = matches!(
+            event,
+            InputEvent::Keyboard { .. }
+                | InputEvent::PointerMotion { .. }
+                | InputEvent::PointerMotionAbsolute { .. }
+                | InputEvent::PointerButton { .. }
+                | InputEvent::PointerAxis { .. }
+        );
+        if woke_us {
+            self.saw_activity();
+        }
         match event {
             InputEvent::Keyboard { event } => self.on_key::<B>(event),
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
@@ -60,6 +71,9 @@ impl Spectre {
             time,
             |state, modifiers, handle| {
                 let sym = handle.raw_syms().first().copied().unwrap_or(handle.modified_sym());
+                if state.locked() {
+                    return FilterResult::Forward;
+                }
                 if state.region.is_some() {
                     let pressed = event.state() == smithay::backend::input::KeyState::Pressed;
                     if pressed && sym.raw() == keysyms::KEY_Escape {
@@ -192,6 +206,9 @@ impl Spectre {
     }
 
     fn watch_hot_corner(&mut self) {
+        if self.locked() {
+            return;
+        }
         if !self.pointer_in_hot_corner() {
             self.corner_armed = false;
             return;
@@ -331,9 +348,6 @@ impl Spectre {
                     self.set_fullscreen(&window, !on);
                 }
             }
-            Action::ToggleFloating => {
-                tracing::debug!("toggle-floating is not implemented yet");
-            }
             Action::Minimize => {
                 if let Some(window) = self.focus.clone() {
                     self.minimize(&window);
@@ -366,7 +380,7 @@ impl Spectre {
             Action::ToggleAnimations => self.toggle_animations(),
             Action::CycleProfile => self.cycle_profile(),
             Action::ToggleLauncher => self.toggle_launcher(),
-            Action::LockSession => self.spawn_configured("lock"),
+            Action::LockSession => self.lock_session(),
             Action::Screenshot => self.want_screenshot(crate::screenshot::Wish::Screen),
             Action::ScreenshotWindow => self.want_screenshot(crate::screenshot::Wish::Window),
             Action::ScreenshotRegion => self.start_region(),
@@ -489,10 +503,6 @@ impl Spectre {
         self.launcher = self.spawn_pid("spectre-launcher");
     }
 
-    fn spawn_configured(&self, what: &str) {
-        tracing::info!(component = what, "not implemented yet");
-    }
-
     fn show_edge_cursor(&mut self, over_nothing: bool) {
         let mut edges = None;
         if over_nothing {
@@ -611,6 +621,12 @@ impl Spectre {
         }
         if self.window_menu.is_some() {
             self.menu_button(state == ButtonState::Pressed);
+            return;
+        }
+        if self.locked() {
+            let pointer = self.pointer.clone();
+            pointer.button(self, &ButtonEvent { button, state, serial, time });
+            pointer.frame(self);
             return;
         }
 
@@ -735,6 +751,9 @@ impl Spectre {
     }
 
     fn follow_mouse_focus(&mut self) {
+        if self.locked() {
+            return;
+        }
         if !self.config.input.pointer.focus_follows_mouse {
             return;
         }

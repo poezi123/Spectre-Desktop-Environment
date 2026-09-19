@@ -988,6 +988,10 @@ impl Spectre {
     )> {
         let pos = self.pointer_position();
         let output = self.active_output()?;
+        if let Some(lock) = self.lock.as_ref() {
+            let surface = lock.surface_for(&output)?;
+            return Some((surface.wl_surface().clone(), Point::from((0.0, 0.0))));
+        }
         let output_geo = self.workspaces.output_geometry(&output)?;
         let layers = layer_map_for_output(&output);
 

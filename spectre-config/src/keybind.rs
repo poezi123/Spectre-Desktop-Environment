@@ -124,7 +124,6 @@ pub enum Action {
     MoveDirection { direction: Direction },
     ToggleMaximize,
     ToggleFullscreen,
-    ToggleFloating,
     Minimize,
     SnapLeft,
     SnapRight,
@@ -195,7 +194,6 @@ impl Default for Keybinds {
         bind(logo_shift, "a", Action::ToggleAnimations);
         bind(logo_shift, "p", Action::CycleProfile);
         bind(Modifiers::NONE, "print", Action::Screenshot);
-        bind(logo, "space", Action::ToggleFloating);
 
         let alt = Modifiers { alt: true, ..Modifiers::NONE };
         let alt_shift = Modifiers { shift: true, ..alt };

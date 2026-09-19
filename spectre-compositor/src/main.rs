@@ -11,6 +11,8 @@ mod render;
 mod transition;
 mod state;
 mod workspace;
+mod idle;
+mod lock;
 mod region;
 mod screenshot;
 mod xwayland;

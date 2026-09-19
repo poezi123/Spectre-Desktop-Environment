@@ -114,6 +114,16 @@ kind = "none"
 # next-workspace, prev-workspace, toggle-animations, cycle-profile,
 # toggle-launcher, lock-session, screenshot, minimize, snap-left, snap-right,
 # show-desktop.
+[session]
+# Which program locks the screen. Super+L starts it, and it takes over the
+# whole screen until it lets go again.
+lock-command = "spectre-lock"
+# Seconds without keyboard or mouse before the screen goes dark, and before the
+# session locks itself. 0 turns either of them off. A video player can hold the
+# screen awake while it plays.
+blank-after = 300
+lock-after = 0
+
 [terminal]
 # The Spectre terminal: text size in pixels and how many lines of history it
 # keeps. Ctrl with plus or minus changes the size while it runs.

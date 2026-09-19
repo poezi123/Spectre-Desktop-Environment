@@ -225,6 +225,9 @@ fn draw(
     let result = damage_tracker.render_output(renderer, &mut framebuffer, age, &elements, [0.0; 4])?;
     drop(framebuffer);
 
+    if let Some(locker) = state.pending_lock.take() {
+        locker.lock();
+    }
     if let Some(damage) = result.damage {
         let damage: Vec<Rectangle<i32, smithay::utils::Physical>> = damage.to_vec();
         backend.submit(Some(&damage))?;

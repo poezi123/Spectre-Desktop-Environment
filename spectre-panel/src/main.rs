@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
     event_loop
         .handle()
         .insert_source(Timer::immediate(), |_, _, panel: &mut Panel| {
-            if panel.is_behind_a_fullscreen_window() {
+            if panel.nothing_to_draw() {
                 return TimeoutAction::ToDuration(IDLE_INTERVAL);
             }
             let pattern = panel.config.theme.panel_pattern;
@@ -370,8 +370,8 @@ impl Panel {
         }
     }
 
-    fn is_behind_a_fullscreen_window(&self) -> bool {
-        crate::layout::hidden_by_fullscreen(&self.desktop)
+    fn nothing_to_draw(&self) -> bool {
+        crate::layout::nothing_to_show(&self.desktop)
     }
 
     fn redraw_if_needed(&mut self) {

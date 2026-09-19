@@ -392,6 +392,7 @@ impl Spectre {
         Desktop {
             workspaces,
             windows,
+            resting: self.screen_is_dark || self.locked(),
             profile: self.config.general.profile,
             animations: self.config.effects.window_animations,
             outputs: self.output_info(),

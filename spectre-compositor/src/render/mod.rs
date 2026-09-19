@@ -97,6 +97,19 @@ fn build_output_elements(
     let geometry = state.workspaces.output_geometry(output);
     let width = geometry.map(|g| g.size.w).unwrap_or(0);
 
+    if state.screen_is_dark {
+        let mut elements = Vec::new();
+        if let Some(area) = geometry {
+            let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(scale);
+            let black = cache.solid(Slot::Backdrop, physical, [0.0, 0.0, 0.0, 1.0], Kind::Unspecified);
+            elements.push(SpectreElement::Plain(WorkspaceElement::Solid(black)));
+        }
+        cache.set_cursor_elements(0);
+        return elements;
+    }
+    if state.locked() {
+        return locked_elements(state, output, renderer, cache, scale);
+    }
     if let Some(overview) = state.overview.as_ref() {
         return overview_elements(state, overview, output, renderer, shader, cache, scale);
     }
@@ -656,6 +669,41 @@ fn blur_element(
         Kind::Unspecified,
     );
     Some(WorkspaceElement::Snapshot(element))
+}
+
+fn locked_elements(
+    state: &Spectre,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    cache: &mut RenderCache,
+    scale: f64,
+) -> Vec<SpectreElement> {
+    let mut elements: Vec<SpectreElement> = Vec::new();
+    let cursor = cursor_elements(state, output, renderer, scale);
+    cache.set_cursor_elements(cursor.len());
+    elements.extend(cursor.into_iter().map(SpectreElement::Plain));
+
+    let cover = state.lock.as_ref().and_then(|lock| lock.surface_for(output));
+    if let Some(surface) = cover {
+        let drawn = smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+            renderer,
+            surface.wl_surface(),
+            Point::from((0, 0)),
+            Scale::from(scale),
+            1.0,
+            Kind::Unspecified,
+        );
+        elements.extend(
+            drawn.into_iter().map(|element| SpectreElement::Plain(WorkspaceElement::Surface(element))),
+        );
+    }
+
+    if let Some(area) = state.workspaces.output_geometry(output) {
+        let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(scale);
+        let black = cache.solid(Slot::Backdrop, physical, [0.0, 0.0, 0.0, 1.0], Kind::Unspecified);
+        elements.push(SpectreElement::Plain(WorkspaceElement::Solid(black)));
+    }
+    elements
 }
 
 fn region_elements(
