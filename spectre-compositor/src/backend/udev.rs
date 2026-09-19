@@ -86,6 +86,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     init_dmabuf(&mut state, &shared);
     init_input(&mut state, session.clone(), &seat_name)?;
     init_drm_events(&mut state, &shared, drm_notifier)?;
+    init_display_changes(&mut state, &seat_name)?;
     init_session_events(&mut state, session_notifier, &shared)?;
 
     state.start_ipc();
@@ -352,7 +353,7 @@ fn apply_display(state: &mut Spectre, shared: &Shared) {
             .map(|(crtc, surface)| {
                 let modes = udev
                     .drm
-                    .get_connector(surface.connector, false)
+                    .get_connector(surface.connector, true)
                     .map(|info| info.modes().to_vec())
                     .unwrap_or_default();
                 (*crtc, pick_mode(&modes, &state.config.display))
@@ -483,6 +484,21 @@ fn init_drm_events(
             DrmEvent::Error(err) => tracing::error!(?err, "DRM device error"),
         })
         .map_err(|err| anyhow::anyhow!("could not listen for vblank: {err}"))?;
+    Ok(())
+}
+
+fn init_display_changes(state: &mut Spectre, seat_name: &str) -> anyhow::Result<()> {
+    let watcher = udev::UdevBackend::new(seat_name)
+        .map_err(|err| anyhow::anyhow!("cannot watch for display changes: {err}"))?;
+    state
+        .loop_handle
+        .insert_source(watcher, move |event, _, state: &mut Spectre| {
+            if let udev::UdevEvent::Changed { .. } = event {
+                tracing::info!("the screen told us something changed, looking at it again");
+                state.mark_display_dirty();
+            }
+        })
+        .map_err(|err| anyhow::anyhow!("could not listen for display changes: {err}"))?;
     Ok(())
 }
 
