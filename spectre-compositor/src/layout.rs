@@ -1118,10 +1118,22 @@ pub fn back_on_screen(
         return window.loc;
     }
     let room = STAYS_VISIBLE.min(window.size.w).min(window.size.h).max(1);
-    let left = area.loc.x - (window.size.w - room).max(0);
-    let right = area.loc.x + area.size.w - room;
+    let fits_across = window.size.w <= area.size.w;
+    let fits_down = window.size.h <= area.size.h;
+
+    let left = match fits_across {
+        true => area.loc.x,
+        false => area.loc.x - (window.size.w - room),
+    };
+    let right = match fits_across {
+        true => area.loc.x + area.size.w - window.size.w,
+        false => area.loc.x + area.size.w - room,
+    };
     let top = area.loc.y;
-    let bottom = area.loc.y + area.size.h - room;
+    let bottom = match fits_down {
+        true => area.loc.y + area.size.h - window.size.h,
+        false => area.loc.y + area.size.h - room,
+    };
     Point::from((window.loc.x.clamp(left, right.max(left)), window.loc.y.clamp(top, bottom.max(top))))
 }
 
@@ -1140,10 +1152,17 @@ mod tests {
     }
 
     #[test]
-    fn a_window_that_fell_off_the_right_edge_comes_back() {
+    fn a_window_that_fits_ends_up_fully_on_the_screen() {
         let window = Rectangle::new(Point::from((3000, 200)), Size::from((800, 600)));
         let moved = back_on_screen(window, area());
         assert_eq!(moved.y, 200, "it only moves as far as it has to");
+        assert_eq!(moved.x, 1920 - 800, "it comes to rest against the right edge");
+    }
+
+    #[test]
+    fn a_window_wider_than_the_screen_keeps_a_handle_on_it() {
+        let window = Rectangle::new(Point::from((3000, 200)), Size::from((2400, 600)));
+        let moved = back_on_screen(window, area());
         assert!(moved.x + STAYS_VISIBLE <= 1920, "a piece of it must be reachable");
         assert!(moved.x < 3000);
     }
@@ -1152,7 +1171,7 @@ mod tests {
     fn a_window_below_the_screen_comes_back_up() {
         let window = Rectangle::new(Point::from((100, 2000)), Size::from((800, 600)));
         let moved = back_on_screen(window, area());
-        assert!(moved.y + STAYS_VISIBLE <= 1040);
+        assert_eq!(moved.y, 1040 - 600);
     }
 
     #[test]
@@ -1162,10 +1181,12 @@ mod tests {
     }
 
     #[test]
-    fn a_window_may_hang_over_the_left_edge_as_long_as_some_of_it_shows() {
-        let window = Rectangle::new(Point::from((-5000, 100)), Size::from((800, 600)));
-        let moved = back_on_screen(window, area());
-        assert_eq!(moved.x, -(800 - STAYS_VISIBLE));
+    fn a_window_may_hang_over_the_left_edge_only_if_it_is_too_big() {
+        let fits = Rectangle::new(Point::from((-5000, 100)), Size::from((800, 600)));
+        assert_eq!(back_on_screen(fits, area()).x, 0);
+
+        let huge = Rectangle::new(Point::from((-5000, 100)), Size::from((2400, 600)));
+        assert_eq!(back_on_screen(huge, area()).x, -(2400 - STAYS_VISIBLE));
     }
 
     #[test]
