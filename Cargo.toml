@@ -8,6 +8,7 @@ members = [
     "spectre-notify",
     "spectre-panel",
     "spectre-settings",
+    "spectre-status",
     "spectre-terminal",
     "spectre-text",
     "spectre-theme",
@@ -26,6 +27,7 @@ authors = ["Leon Pelzmann"]
 spectre-config = { path = "spectre-config", version = "0.1.0" }
 spectre-draw   = { path = "spectre-draw",   version = "0.1.0" }
 spectre-ipc    = { path = "spectre-ipc",    version = "0.1.0" }
+spectre-status = { path = "spectre-status", version = "0.1.0" }
 spectre-theme  = { path = "spectre-theme",  version = "0.1.0" }
 spectre-text   = { path = "spectre-text",   version = "0.1.0" }
 

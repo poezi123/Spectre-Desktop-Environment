@@ -1,4 +1,5 @@
 use spectre_ipc::{Desktop, WindowId};
+use spectre_status::{Battery, Sound};
 
 use spectre_draw::Rect;
 
@@ -12,6 +13,8 @@ pub const TASK_MIN_WIDTH: i32 = 56;
 pub const WORKSPACE_HEIGHT: i32 = 26;
 pub const RESOURCES_HEIGHT: i32 = 30;
 pub const CLOCK_HEIGHT: i32 = 34;
+pub const SOUND_WIDTH: i32 = 92;
+pub const BAR_HEIGHT: i32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -21,6 +24,8 @@ pub enum Item {
     Resources,
     Clock,
     Session,
+    Sound { percent: u8, muted: bool },
+    Battery { percent: u8, charging: bool, low: bool },
 }
 
 impl Item {
@@ -38,6 +43,34 @@ pub struct Placed {
 pub struct Measured {
     pub clock: i32,
     pub resources: i32,
+    pub battery: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Status {
+    pub sound: Option<Sound>,
+    pub battery: Option<Battery>,
+}
+
+pub fn sound_bar(chip: Rect) -> Rect {
+    let inset = CHIP_PADDING / 2;
+    let left = chip.x + inset + 34;
+    let width = (chip.right() - inset - left).max(1);
+    let y = chip.y + (chip.h - BAR_HEIGHT) / 2;
+    Rect::new(left, y, width, BAR_HEIGHT)
+}
+
+pub fn sound_percent(chip: Rect, x: i32) -> u8 {
+    let bar = sound_bar(chip);
+    if bar.w <= 1 {
+        return 0;
+    }
+    let along = (x - bar.x).clamp(0, bar.w) as f32 / bar.w as f32;
+    (along * 100.0).round() as u8
+}
+
+pub fn on_the_sound_bar(chip: Rect, x: i32) -> bool {
+    x >= sound_bar(chip).x
 }
 
 pub fn layout(
@@ -45,6 +78,7 @@ pub fn layout(
     height: i32,
     desktop: &Desktop,
     measured: &Measured,
+    status: &Status,
     mut title_width: impl FnMut(&str) -> i32,
     show_resources: bool,
 ) -> Vec<Placed> {
@@ -81,6 +115,18 @@ pub fn layout(
 
     push_right(&mut right, &mut edge, Item::Session, BUTTON_WIDTH);
     push_right(&mut right, &mut edge, Item::Clock, measured.clock.max(1) + CHIP_PADDING);
+    if let Some(battery) = status.battery {
+        let item = Item::Battery {
+            percent: battery.percent,
+            charging: battery.charging,
+            low: battery.low(),
+        };
+        push_right(&mut right, &mut edge, item, measured.battery.max(1) + CHIP_PADDING);
+    }
+    if let Some(sound) = status.sound {
+        let item = Item::Sound { percent: sound.percent, muted: sound.muted };
+        push_right(&mut right, &mut edge, item, SOUND_WIDTH);
+    }
     if show_resources {
         push_right(&mut right, &mut edge, Item::Resources, measured.resources.max(1) + CHIP_PADDING);
     }
@@ -251,6 +297,51 @@ mod tests {
         }
     }
 
+    fn chip() -> Rect {
+        Rect::new(500, 0, SOUND_WIDTH, 36)
+    }
+
+    #[test]
+    fn the_sound_bar_sits_inside_its_chip_with_room_for_the_word() {
+        let bar = sound_bar(chip());
+        assert!(bar.x > chip().x, "the word comes first");
+        assert!(bar.right() <= chip().right());
+        assert!(bar.w > 20, "a bar of {} px is too small to aim at", bar.w);
+    }
+
+    #[test]
+    fn clicking_along_the_bar_picks_that_share() {
+        let bar = sound_bar(chip());
+        assert_eq!(sound_percent(chip(), bar.x), 0);
+        assert_eq!(sound_percent(chip(), bar.right()), 100);
+        assert_eq!(sound_percent(chip(), bar.x + bar.w / 2), 50);
+    }
+
+    #[test]
+    fn a_click_left_of_the_bar_is_the_mute_switch() {
+        let bar = sound_bar(chip());
+        assert!(!on_the_sound_bar(chip(), chip().x + 2));
+        assert!(on_the_sound_bar(chip(), bar.x + 1));
+    }
+
+    #[test]
+    fn sound_and_battery_only_appear_when_the_machine_has_them() {
+        let desktop = desktop(4, 1);
+        let measured = Measured { clock: 60, resources: 120, battery: 40 };
+        let bare = Status::default();
+        let plain = layout(1600, 36, &desktop, &measured, &bare, |_| 100, true);
+        assert!(!plain.iter().any(|p| matches!(p.item, Item::Sound { .. })));
+        assert!(!plain.iter().any(|p| matches!(p.item, Item::Battery { .. })));
+
+        let full = Status {
+            sound: Some(Sound { percent: 40, muted: false }),
+            battery: Some(Battery { percent: 90, charging: true, full: false }),
+        };
+        let rich = layout(1600, 36, &desktop, &measured, &full, |_| 100, true);
+        assert!(rich.iter().any(|p| matches!(p.item, Item::Sound { percent: 40, muted: false })));
+        assert!(rich.iter().any(|p| matches!(p.item, Item::Battery { percent: 90, .. })));
+    }
+
     #[test]
     fn a_fullscreen_window_on_the_open_workspace_hides_the_panel() {
         let mut d = desktop(4, 2);
@@ -314,7 +405,7 @@ mod tests {
     }
 
     fn measured() -> Measured {
-        Measured { clock: 46, resources: 70 }
+        Measured { clock: 46, resources: 70, battery: 40 }
     }
 
     fn width_of(text: &str) -> i32 {
@@ -322,7 +413,7 @@ mod tests {
     }
 
     fn lay(width: i32, d: &Desktop) -> Vec<Placed> {
-        layout(width, 32, d, &measured(), width_of, true)
+        layout(width, 32, d, &measured(), &Status::default(), width_of, true)
     }
 
     #[test]
@@ -410,8 +501,8 @@ mod tests {
     #[test]
     fn hiding_the_resource_readout_gives_the_room_to_tasks() {
         let d = desktop(4, 6);
-        let with = layout(1000, 32, &d, &measured(), width_of, true);
-        let without = layout(1000, 32, &d, &measured(), width_of, false);
+        let with = layout(1000, 32, &d, &measured(), &Status::default(), width_of, true);
+        let without = layout(1000, 32, &d, &measured(), &Status::default(), width_of, false);
         let room = |items: &[Placed]| {
             items
                 .iter()

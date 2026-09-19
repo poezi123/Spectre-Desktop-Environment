@@ -151,6 +151,51 @@ fn draw_item(
                 );
             }
         }
+        Item::Sound { percent, muted } => {
+            let (percent, muted) = (*percent, *muted);
+            let word = match muted {
+                true => "off",
+                false => "vol",
+            };
+            let label = Label::new(word)
+                .size(DATE_SIZE)
+                .color(palette.text_muted)
+                .family(spectre_text::FontFamily::Monospace);
+            let image = text.rasterise(&label);
+            let y = rect.y + (rect.h - image.height as i32) / 2;
+            canvas.draw_image(rect.x + CHIP_PADDING / 2, y, &image);
+
+            let bar = crate::layout::sound_bar(rect);
+            canvas.fill_rect(bar, palette.line);
+            if !muted && percent > 0 {
+                let filled = (bar.w * percent as i32 / 100).clamp(1, bar.w);
+                for step in 0..filled {
+                    let along = step as f32 / bar.w.max(1) as f32;
+                    let slice = Rect::new(bar.x + step, bar.y, 1, bar.h);
+                    canvas.fill_rect(slice, palette.accent.sample(along));
+                }
+            }
+        }
+        Item::Battery { percent, charging, low } => {
+            let (percent, charging, low) = (*percent, *charging, *low);
+            let word = match charging {
+                true => format!("{percent}% +"),
+                false => format!("{percent}%"),
+            };
+            let colour = match low {
+                true => palette.accent.sample(0.0),
+                false => palette.text_dim,
+            };
+            centre_label(
+                canvas,
+                text,
+                rect,
+                &Label::new(&word)
+                    .size(DATE_SIZE + 1.0)
+                    .color(colour)
+                    .family(spectre_text::FontFamily::Monospace),
+            );
+        }
         Item::Clock => {
             if frame.vertical() {
                 let (hours, minutes) = frame.time.split_once(':').unwrap_or((frame.time, ""));

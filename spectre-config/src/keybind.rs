@@ -141,6 +141,11 @@ pub enum Action {
     Screenshot,
     ScreenshotWindow,
     ScreenshotRegion,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +206,13 @@ impl Default for Keybinds {
         let shift = Modifiers { shift: true, ..Modifiers::NONE };
         bind(alt, "print", Action::ScreenshotWindow);
         bind(shift, "print", Action::ScreenshotRegion);
+
+        let none = Modifiers::NONE;
+        bind(none, "xf86audioraisevolume", Action::VolumeUp);
+        bind(none, "xf86audiolowervolume", Action::VolumeDown);
+        bind(none, "xf86audiomute", Action::VolumeMute);
+        bind(none, "xf86monbrightnessup", Action::BrightnessUp);
+        bind(none, "xf86monbrightnessdown", Action::BrightnessDown);
         bind(alt, "f4", Action::CloseWindow);
         bind(alt, "tab", Action::FocusNext);
         bind(alt_shift, "tab", Action::FocusPrev);
@@ -280,6 +292,14 @@ mod tests {
         let b = parse("Mod+Shift+q");
         assert_eq!(b.to_string(), "Mod+Shift+q");
         assert_eq!(parse(&b.to_string()), b);
+    }
+
+    #[test]
+    fn the_media_keys_are_bound_without_any_modifier() {
+        let k = Keybinds::default();
+        assert_eq!(k.get(&parse("XF86AudioRaiseVolume")), Some(&Action::VolumeUp));
+        assert_eq!(k.get(&parse("XF86AudioMute")), Some(&Action::VolumeMute));
+        assert_eq!(k.get(&parse("XF86MonBrightnessDown")), Some(&Action::BrightnessDown));
     }
 
     #[test]

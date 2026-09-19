@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
         text: TextRenderer::new(),
         config,
         desktop: Desktop::default(),
+        status: layout::Status::default(),
         items: Vec::new(),
         pointer_position: None,
         dumped: false,
@@ -232,6 +233,7 @@ struct Panel {
     config: Config,
 
     desktop: Desktop,
+    status: layout::Status,
     items: Vec<Placed>,
     pointer_position: Option<(i32, i32)>,
     dumped: bool,
@@ -256,7 +258,16 @@ impl Panel {
     }
 
     fn sample(&mut self) {
-        if self.readout.refresh() {
+        let mut changed = self.readout.refresh();
+        let status = layout::Status {
+            sound: spectre_status::Sound::read(),
+            battery: spectre_status::Battery::read(),
+        };
+        if status.sound != self.status.sound || status.battery != self.status.battery {
+            self.status = status;
+            changed = true;
+        }
+        if changed {
             self.dirty = true;
             self.redraw_if_needed();
         }
@@ -366,8 +377,33 @@ impl Panel {
             Item::Session => self.send(Request::Quit),
             Item::Launcher => self.send(Request::ToggleLauncher),
             Item::Resources => self.open_system_monitor(),
+            Item::Sound { .. } => self.touch_the_sound(placed.rect, x),
+            Item::Battery { .. } => {}
             Item::Clock => {}
         }
+    }
+
+    fn scroll_over(&mut self, x: i32, y: i32, steps: i32) {
+        let Some(placed) = layout::item_at(&self.items, x, y) else {
+            return;
+        };
+        if !matches!(placed.item, Item::Sound { .. }) {
+            return;
+        }
+        spectre_status::Sound::change(steps * -5);
+        self.sample();
+    }
+
+    fn touch_the_sound(&mut self, chip: spectre_draw::Rect, x: i32) {
+        match layout::on_the_sound_bar(chip, x) {
+            true => {
+                spectre_status::Sound::set(layout::sound_percent(chip, x));
+            }
+            false => {
+                spectre_status::Sound::toggle_mute();
+            }
+        }
+        self.sample();
     }
 
     fn nothing_to_draw(&self) -> bool {
@@ -405,9 +441,14 @@ impl Panel {
                 Label::new(text).size(size * scale).family(spectre_text::FontFamily::Monospace);
             self.text.measure(&label).0 as i32
         };
+        let battery_text = match self.status.battery {
+            Some(battery) => battery.label(),
+            None => String::new(),
+        };
         let measured = layout::Measured {
             clock: mono(&time, draw::LABEL_SIZE).max(mono(&date, draw::DATE_SIZE)),
             resources: mono(&resources, draw::DATE_SIZE + 1.0),
+            battery: mono(&battery_text, draw::DATE_SIZE + 1.0),
         };
 
         let text = &mut self.text;
@@ -419,6 +460,7 @@ impl Panel {
                 height,
                 &self.desktop,
                 &measured,
+                &self.status,
                 |title| text.measure(&Label::new(title).size(draw::LABEL_SIZE * scale)).0 as i32,
                 show_resources,
             )
@@ -631,6 +673,12 @@ impl PointerHandler for Panel {
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                     self.click(x * self.scale, y * self.scale);
                 }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let steps = wheel_steps(&vertical);
+                    if steps != 0 {
+                        self.scroll_over(x * self.scale, y * self.scale, steps);
+                    }
+                }
                 _ => {}
             }
         }
@@ -654,3 +702,10 @@ impl ProvidesRegistryState for Panel {
 
 delegate_registry!(Panel);
 smithay_client_toolkit::delegate_dispatch2!(Panel);
+
+fn wheel_steps(axis: &smithay_client_toolkit::seat::pointer::AxisScroll) -> i32 {
+    if axis.value120 != 0 {
+        return axis.value120 / 120;
+    }
+    axis.discrete
+}

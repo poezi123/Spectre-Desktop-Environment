@@ -229,6 +229,14 @@ impl Spectre {
         }
     }
 
+    fn turn_the_volume(&mut self, step: i32) {
+        crate::with_default_child_signal(|| spectre_status::Sound::change(step));
+    }
+
+    fn turn_the_brightness(&mut self, step: i32) {
+        crate::with_default_child_signal(|| spectre_status::Brightness::change(step));
+    }
+
     fn start_region(&mut self) {
         let at = self.pointer_position().to_i32_round();
         self.region = Some(crate::region::Pick::new(at));
@@ -381,6 +389,13 @@ impl Spectre {
             Action::CycleProfile => self.cycle_profile(),
             Action::ToggleLauncher => self.toggle_launcher(),
             Action::LockSession => self.lock_session(),
+            Action::VolumeUp => self.turn_the_volume(5),
+            Action::VolumeDown => self.turn_the_volume(-5),
+            Action::VolumeMute => {
+                crate::with_default_child_signal(spectre_status::Sound::toggle_mute);
+            }
+            Action::BrightnessUp => self.turn_the_brightness(10),
+            Action::BrightnessDown => self.turn_the_brightness(-10),
             Action::Screenshot => self.want_screenshot(crate::screenshot::Wish::Screen),
             Action::ScreenshotWindow => self.want_screenshot(crate::screenshot::Wish::Window),
             Action::ScreenshotRegion => self.start_region(),

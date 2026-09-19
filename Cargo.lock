@@ -2344,6 +2344,7 @@ dependencies = [
  "spectre-config",
  "spectre-draw",
  "spectre-ipc",
+ "spectre-status",
  "spectre-text",
  "spectre-theme",
  "time",
@@ -2419,6 +2420,7 @@ dependencies = [
  "spectre-config",
  "spectre-draw",
  "spectre-ipc",
+ "spectre-status",
  "spectre-text",
  "spectre-theme",
  "time",
@@ -2440,6 +2442,13 @@ dependencies = [
  "spectre-theme",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "spectre-status"
+version = "0.1.0"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
