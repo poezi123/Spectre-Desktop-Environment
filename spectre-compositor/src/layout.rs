@@ -945,8 +945,43 @@ impl Spectre {
             if self.is_maximized(&window) {
                 self.set_maximized(&window, true);
             }
+            if self.is_fullscreen(&window) {
+                self.set_fullscreen(&window, true);
+            }
         }
+        self.bring_windows_back(output);
         self.mark_dirty();
+    }
+
+    fn bring_windows_back(&mut self, output: &Output) {
+        let area = self.working_area(output);
+        let metrics = self.config.theme.metrics;
+        for index in 0..self.workspaces.count() {
+            let Some(space) = self.workspaces.get(index) else {
+                continue;
+            };
+            let windows: Vec<Window> = space.elements().cloned().collect();
+            for window in windows {
+                if self.is_maximized(&window) || self.is_fullscreen(&window) {
+                    continue;
+                }
+                let Some(space) = self.workspaces.get(index) else {
+                    continue;
+                };
+                let Some(geometry) = space.element_geometry(&window) else {
+                    continue;
+                };
+                let frame = Frame::new(geometry, &metrics, self.is_decorated(&window));
+                let wanted = back_on_screen(frame.outer, area);
+                if wanted == frame.outer.loc {
+                    continue;
+                }
+                let moved = geometry.loc + (wanted - frame.outer.loc);
+                if let Some(space) = self.workspaces.get_mut(index) {
+                    space.map_element(window.clone(), moved, false);
+                }
+            }
+        }
     }
 
     pub fn decoration_under_pointer(&self) -> Option<(Window, Part)> {
@@ -1073,9 +1108,72 @@ fn in_direction(
     }
 }
 
+pub const STAYS_VISIBLE: i32 = 80;
+
+pub fn back_on_screen(
+    window: Rectangle<i32, Logical>,
+    area: Rectangle<i32, Logical>,
+) -> Point<i32, Logical> {
+    if area.size.w <= 0 || area.size.h <= 0 {
+        return window.loc;
+    }
+    let room = STAYS_VISIBLE.min(window.size.w).min(window.size.h).max(1);
+    let left = area.loc.x - (window.size.w - room).max(0);
+    let right = area.loc.x + area.size.w - room;
+    let top = area.loc.y;
+    let bottom = area.loc.y + area.size.h - room;
+    Point::from((window.loc.x.clamp(left, right.max(left)), window.loc.y.clamp(top, bottom.max(top))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn area() -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((0, 0)), Size::from((1920, 1040)))
+    }
+
+    #[test]
+    fn a_window_inside_the_screen_is_left_alone() {
+        let window = Rectangle::new(Point::from((100, 100)), Size::from((800, 600)));
+        assert_eq!(back_on_screen(window, area()), window.loc);
+    }
+
+    #[test]
+    fn a_window_that_fell_off_the_right_edge_comes_back() {
+        let window = Rectangle::new(Point::from((3000, 200)), Size::from((800, 600)));
+        let moved = back_on_screen(window, area());
+        assert_eq!(moved.y, 200, "it only moves as far as it has to");
+        assert!(moved.x + STAYS_VISIBLE <= 1920, "a piece of it must be reachable");
+        assert!(moved.x < 3000);
+    }
+
+    #[test]
+    fn a_window_below_the_screen_comes_back_up() {
+        let window = Rectangle::new(Point::from((100, 2000)), Size::from((800, 600)));
+        let moved = back_on_screen(window, area());
+        assert!(moved.y + STAYS_VISIBLE <= 1040);
+    }
+
+    #[test]
+    fn a_title_bar_never_ends_up_above_the_screen() {
+        let window = Rectangle::new(Point::from((100, -400)), Size::from((800, 600)));
+        assert_eq!(back_on_screen(window, area()).y, 0);
+    }
+
+    #[test]
+    fn a_window_may_hang_over_the_left_edge_as_long_as_some_of_it_shows() {
+        let window = Rectangle::new(Point::from((-5000, 100)), Size::from((800, 600)));
+        let moved = back_on_screen(window, area());
+        assert_eq!(moved.x, -(800 - STAYS_VISIBLE));
+    }
+
+    #[test]
+    fn a_screen_with_no_size_moves_nothing() {
+        let nothing = Rectangle::new(Point::from((0, 0)), Size::from((0, 0)));
+        let window = Rectangle::new(Point::from((10, 10)), Size::from((100, 100)));
+        assert_eq!(back_on_screen(window, nothing), window.loc);
+    }
 
     fn p(x: i32, y: i32) -> Point<i32, Logical> {
         Point::from((x, y))

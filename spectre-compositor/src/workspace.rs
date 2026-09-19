@@ -42,6 +42,10 @@ impl Workspaces {
         self.spaces.get(index)
     }
 
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Space<Window>> {
+        self.spaces.get_mut(index)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Space<Window>> {
         self.spaces.iter()
     }
