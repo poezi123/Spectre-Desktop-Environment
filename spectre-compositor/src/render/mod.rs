@@ -698,6 +698,24 @@ fn locked_elements(
         );
     }
 
+    if cover.is_none() {
+        if let Some(area) = state.workspaces.output_geometry(output) {
+            let note = "The lock screen is not answering. Ctrl+Alt+F2 opens a text console.";
+            let label = spectre_text::Label::new(note)
+                .size(14.0)
+                .color(state.config.theme.palette.text_muted);
+            let mut text = state.text.borrow_mut();
+            let size = text.measure(&label);
+            let middle = Point::from((
+                area.loc.x + (area.size.w - size.w).max(0) / 2,
+                area.loc.y + (area.size.h - size.h).max(0) / 2,
+            ));
+            if let Some(element) = text.element(renderer, &label, middle, scale, 1.0) {
+                elements.push(SpectreElement::Plain(WorkspaceElement::Text(element)));
+            }
+        }
+    }
+
     if let Some(area) = state.workspaces.output_geometry(output) {
         let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(scale);
         let black = cache.solid(Slot::Backdrop, physical, [0.0, 0.0, 0.0, 1.0], Kind::Unspecified);
