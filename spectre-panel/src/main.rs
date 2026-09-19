@@ -2,6 +2,7 @@ mod clock;
 mod draw;
 mod layout;
 mod readout;
+mod tray;
 
 use std::io::{ErrorKind, Read};
 use std::time::{Duration, Instant};
@@ -43,6 +44,7 @@ use crate::readout::{system_monitor, Readout};
 use smithay_client_toolkit::reexports::client as wayland_client;
 
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 fn main() -> anyhow::Result<()> {
     init_tracing();
@@ -98,6 +100,8 @@ fn main() -> anyhow::Result<()> {
         config,
         desktop: Desktop::default(),
         status: layout::Status::default(),
+        tray_items: Vec::new(),
+        tray: None,
         items: Vec::new(),
         pointer_position: None,
         dumped: false,
@@ -109,6 +113,23 @@ fn main() -> anyhow::Result<()> {
     };
 
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
+
+    let (tray_sender, tray_receiver) = smithay_client_toolkit::reexports::calloop::channel::channel();
+    panel.tray = tray::start(tray_sender);
+    if panel.tray.is_none() {
+        tracing::info!("running without a system tray");
+    }
+    event_loop
+        .handle()
+        .insert_source(tray_receiver, |event, _, panel: &mut Panel| {
+            if let smithay_client_toolkit::reexports::calloop::channel::Event::Msg(items) = event {
+                panel.status.tray = items.len();
+                panel.tray_items = items;
+                panel.dirty = true;
+                panel.redraw_if_needed();
+            }
+        })
+        .map_err(|err| anyhow::anyhow!("could not listen to the system tray: {err}"))?;
 
     event_loop
         .handle()
@@ -234,6 +255,8 @@ struct Panel {
 
     desktop: Desktop,
     status: layout::Status,
+    tray_items: Vec<tray::Item>,
+    tray: Option<std::sync::mpsc::Sender<tray::Command>>,
     items: Vec<Placed>,
     pointer_position: Option<(i32, i32)>,
     dumped: bool,
@@ -262,8 +285,9 @@ impl Panel {
         let status = layout::Status {
             sound: spectre_status::Sound::read(),
             battery: spectre_status::Battery::read(),
+            tray: self.tray_items.len(),
         };
-        if status.sound != self.status.sound || status.battery != self.status.battery {
+        if status != self.status {
             self.status = status;
             changed = true;
         }
@@ -379,6 +403,7 @@ impl Panel {
             Item::Resources => self.open_system_monitor(),
             Item::Sound { .. } => self.touch_the_sound(placed.rect, x),
             Item::Battery { .. } => {}
+            Item::Tray { index } => self.poke_the_tray(index, false),
             Item::Clock => {}
         }
     }
@@ -392,6 +417,35 @@ impl Panel {
         }
         spectre_status::Sound::change(steps * -5);
         self.sample();
+    }
+
+    fn poke_the_tray(&mut self, index: usize, menu: bool) {
+        let Some(item) = self.tray_items.get(index) else {
+            return;
+        };
+        let Some(orders) = self.tray.as_ref() else {
+            return;
+        };
+        let service = item.service.clone();
+        let path = item.path.clone();
+        let at = self.pointer_position.unwrap_or((0, 0));
+        let order = match menu {
+            true => tray::Command::Context { service, path, at },
+            false => tray::Command::Activate { service, path, at },
+        };
+        if orders.send(order).is_err() {
+            tracing::warn!("the tray gave up");
+            self.tray = None;
+        }
+    }
+
+    fn right_click(&mut self, x: i32, y: i32) {
+        let Some(placed) = layout::item_at(&self.items, x, y) else {
+            return;
+        };
+        if let Item::Tray { index } = placed.item {
+            self.poke_the_tray(index, true);
+        }
     }
 
     fn touch_the_sound(&mut self, chip: spectre_draw::Rect, x: i32) {
@@ -480,6 +534,7 @@ impl Panel {
             mask: &self.mask,
             color_phase: pattern.color_phase(elapsed),
             position: self.config.panel.position,
+            tray: &self.tray_items,
             opacity: self.config.panel.opacity,
         };
         draw::draw(&mut self.canvas, &mut self.text, &items, &frame);
@@ -672,6 +727,9 @@ impl PointerHandler for Panel {
                 }
                 PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                     self.click(x * self.scale, y * self.scale);
+                }
+                PointerEventKind::Press { button, .. } if button == BTN_RIGHT => {
+                    self.right_click(x * self.scale, y * self.scale);
                 }
                 PointerEventKind::Axis { vertical, .. } => {
                     let steps = wheel_steps(&vertical);

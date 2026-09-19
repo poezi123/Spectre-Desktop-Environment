@@ -14,6 +14,7 @@ pub const WORKSPACE_HEIGHT: i32 = 26;
 pub const RESOURCES_HEIGHT: i32 = 30;
 pub const CLOCK_HEIGHT: i32 = 34;
 pub const SOUND_WIDTH: i32 = 92;
+pub const TRAY_WIDTH: i32 = 26;
 pub const BAR_HEIGHT: i32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub enum Item {
     Session,
     Sound { percent: u8, muted: bool },
     Battery { percent: u8, charging: bool, low: bool },
+    Tray { index: usize },
 }
 
 impl Item {
@@ -46,10 +48,11 @@ pub struct Measured {
     pub battery: i32,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Status {
     pub sound: Option<Sound>,
     pub battery: Option<Battery>,
+    pub tray: usize,
 }
 
 pub fn sound_bar(chip: Rect) -> Rect {
@@ -126,6 +129,9 @@ pub fn layout(
     if let Some(sound) = status.sound {
         let item = Item::Sound { percent: sound.percent, muted: sound.muted };
         push_right(&mut right, &mut edge, item, SOUND_WIDTH);
+    }
+    for index in (0..status.tray).rev() {
+        push_right(&mut right, &mut edge, Item::Tray { index }, TRAY_WIDTH);
     }
     if show_resources {
         push_right(&mut right, &mut edge, Item::Resources, measured.resources.max(1) + CHIP_PADDING);
@@ -302,6 +308,26 @@ mod tests {
     }
 
     #[test]
+    fn tray_icons_stand_next_to_each_other_in_order() {
+        let desktop = desktop(4, 0);
+        let measured = Measured { clock: 60, resources: 120, battery: 40 };
+        let status = Status { tray: 3, ..Status::default() };
+        let items = layout(1600, 36, &desktop, &measured, &status, |_| 100, true);
+        let mut trays: Vec<&Placed> =
+            items.iter().filter(|p| matches!(p.item, Item::Tray { .. })).collect();
+        assert_eq!(trays.len(), 3);
+        trays.sort_by_key(|placed| placed.rect.x);
+        let order: Vec<usize> = trays
+            .iter()
+            .filter_map(|placed| match placed.item {
+                Item::Tray { index } => Some(index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, vec![0, 1, 2], "the first one registered sits leftmost");
+    }
+
+    #[test]
     fn the_sound_bar_sits_inside_its_chip_with_room_for_the_word() {
         let bar = sound_bar(chip());
         assert!(bar.x > chip().x, "the word comes first");
@@ -336,6 +362,7 @@ mod tests {
         let full = Status {
             sound: Some(Sound { percent: 40, muted: false }),
             battery: Some(Battery { percent: 90, charging: true, full: false }),
+            tray: 0,
         };
         let rich = layout(1600, 36, &desktop, &measured, &full, |_| 100, true);
         assert!(rich.iter().any(|p| matches!(p.item, Item::Sound { percent: 40, muted: false })));

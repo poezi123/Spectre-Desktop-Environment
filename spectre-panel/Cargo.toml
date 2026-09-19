@@ -17,6 +17,7 @@ spectre-config = { workspace = true }
 spectre-draw = { workspace = true }
 spectre-ipc = { workspace = true }
 spectre-status = { workspace = true }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 spectre-text = { workspace = true }
 spectre-theme = { workspace = true }
 

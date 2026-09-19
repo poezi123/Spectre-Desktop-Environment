@@ -13,6 +13,7 @@ const LOGO_FILL: f32 = 0.78;
 
 pub struct Frame<'a> {
     pub theme: &'a Theme,
+    pub tray: &'a [crate::tray::Item],
     pub pointer: Option<(i32, i32)>,
     pub time: &'a str,
     pub date: &'a str,
@@ -149,6 +150,30 @@ fn draw_item(
                         .color(palette.text_dim)
                         .family(spectre_text::FontFamily::Monospace),
                 );
+            }
+        }
+        Item::Tray { index } => {
+            let Some(item) = frame.tray.get(*index) else {
+                return;
+            };
+            match item.icon.as_ref() {
+                Some(icon) => {
+                    let x = rect.x + (rect.w - icon.width as i32) / 2;
+                    let y = rect.y + (rect.h - icon.height as i32) / 2;
+                    canvas.draw_image(x, y, icon);
+                }
+                None => {
+                    let colour = match hovered {
+                        true => palette.text,
+                        false => palette.text_dim,
+                    };
+                    centre_label(
+                        canvas,
+                        text,
+                        rect,
+                        &Label::new(&item.letter).size(LABEL_SIZE).color(colour),
+                    );
+                }
             }
         }
         Item::Sound { percent, muted } => {
@@ -339,6 +364,7 @@ mod tests {
             color_phase: 0.0,
             position: PanelPosition::Bottom,
             opacity: 1.0,
+            tray: &[],
         }
     }
 
