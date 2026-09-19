@@ -157,9 +157,37 @@ pub enum Direction {
     Down,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct Keybinds(pub BTreeMap<Keybind, Action>);
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KnownOrNot {
+    Known(Action),
+    Anything(serde::de::IgnoredAny),
+}
+
+impl<'de> Deserialize<'de> for Keybinds {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let written = BTreeMap::<Keybind, KnownOrNot>::deserialize(deserializer)?;
+        let mut binds = BTreeMap::new();
+        for (bind, action) in written {
+            match action {
+                KnownOrNot::Known(action) => {
+                    binds.insert(bind, action);
+                }
+                KnownOrNot::Anything(_) => {
+                    tracing::warn!(%bind, "this shortcut asks for something Spectre does not know");
+                }
+            }
+        }
+        Ok(Keybinds(binds))
+    }
+}
 
 impl Keybinds {
     pub fn get(&self, bind: &Keybind) -> Option<&Action> {
@@ -292,6 +320,17 @@ mod tests {
         let b = parse("Mod+Shift+q");
         assert_eq!(b.to_string(), "Mod+Shift+q");
         assert_eq!(parse(&b.to_string()), b);
+    }
+
+    #[test]
+    fn a_shortcut_spectre_does_not_know_is_skipped_rather_than_fatal() {
+        let written = r#"
+            "Mod+space" = { action = "toggle-floating" }
+            "Mod+q" = { action = "close-window" }
+        "#;
+        let binds: Keybinds = toml::from_str(written).expect("the rest still loads");
+        assert_eq!(binds.get(&parse("Mod+q")), Some(&Action::CloseWindow));
+        assert_eq!(binds.get(&parse("Mod+space")), None);
     }
 
     #[test]
