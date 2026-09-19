@@ -106,6 +106,10 @@ pub struct Spectre {
     pub xwm: Option<X11Wm>,
     pub xdisplay: Option<u32>,
     pub xwayland_client: Option<smithay::reexports::wayland_server::backend::ClientId>,
+    pub screenshot: Option<crate::screenshot::Wish>,
+    pub clipboard_image: Option<std::sync::Arc<Vec<u8>>>,
+    pub flash: Option<Instant>,
+    pub region: Option<crate::region::Pick>,
     pub overview: Option<crate::overview::Overview>,
     pub corner_armed: bool,
     pub pending_overview_key: Option<smithay::input::keyboard::Keysym>,
@@ -223,6 +227,10 @@ impl Spectre {
             xwm: None,
             xdisplay: None,
             xwayland_client: None,
+            screenshot: None,
+            clipboard_image: None,
+            flash: None,
+            region: None,
             overview: None,
             corner_armed: false,
             pending_overview_key: None,
@@ -401,6 +409,11 @@ impl Spectre {
     }
 
     pub fn animation_interval(&self) -> Option<Duration> {
+        if let Some(started) = self.flash {
+            if started.elapsed() < crate::screenshot::FLASH {
+                return Some(TRANSITION_INTERVAL);
+            }
+        }
         if self.transition.is_some() {
             return Some(TRANSITION_INTERVAL);
         }
@@ -558,6 +571,9 @@ impl Spectre {
     }
 
     pub fn refresh(&mut self) {
+        if self.flash.is_some_and(|started| started.elapsed() >= crate::screenshot::FLASH) {
+            self.flash = None;
+        }
         self.forget_stopped_xwayland();
         self.finish_transition();
         self.finish_window_animations();

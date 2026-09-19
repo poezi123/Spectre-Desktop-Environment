@@ -18,6 +18,9 @@ pub enum Slot {
     Decoration(u32, u8),
     Menu(u8),
     Shadow(u32),
+    Flash,
+    Dim(u8),
+    Edge(u8),
 }
 
 #[derive(Debug, Default)]

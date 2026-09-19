@@ -2346,6 +2346,7 @@ dependencies = [
  "spectre-ipc",
  "spectre-text",
  "spectre-theme",
+ "time",
  "tracing",
  "tracing-subscriber",
 ]

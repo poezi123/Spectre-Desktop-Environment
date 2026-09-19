@@ -4,7 +4,7 @@ mod pattern;
 mod banded;
 mod cache;
 mod contour;
-mod cube;
+pub mod cube;
 mod rounded;
 mod text;
 mod wallpaper;
@@ -114,6 +114,13 @@ fn build_output_elements(
     let cursor = cursor_elements(state, output, renderer, scale);
     cache.set_cursor_elements(cursor.len());
     elements.extend(cursor.into_iter().map(SpectreElement::Plain));
+
+    if let Some(element) = flash_element(state, cache, geometry, scale) {
+        elements.push(SpectreElement::Plain(element));
+    }
+
+    let picking = region_elements(state, cache, geometry, scale);
+    elements.extend(picking.into_iter().map(SpectreElement::Plain));
 
     let menu = menu_elements(state, output, renderer, cache, scale);
     elements.extend(menu.into_iter().map(SpectreElement::Plain));
@@ -649,6 +656,58 @@ fn blur_element(
         Kind::Unspecified,
     );
     Some(WorkspaceElement::Snapshot(element))
+}
+
+fn region_elements(
+    state: &Spectre,
+    cache: &mut RenderCache,
+    area: Option<Rectangle<i32, Logical>>,
+    scale: f64,
+) -> Vec<WorkspaceElement> {
+    let mut elements = Vec::new();
+    let Some(pick) = state.region.as_ref() else {
+        return elements;
+    };
+    let Some(screen) = area else {
+        return elements;
+    };
+    let picked = pick.area().unwrap_or(Rectangle::from_size(Size::from((0, 0))));
+
+    let accent = state.config.theme.palette.accent.sample(0.5);
+    let line = [accent.r * accent.a, accent.g * accent.a, accent.b * accent.a, accent.a];
+    for (index, edge) in crate::region::edges(picked, 2).into_iter().enumerate() {
+        let physical: Rectangle<i32, Physical> = edge.to_physical_precise_round(scale);
+        let slot = Slot::Edge(index as u8);
+        elements.push(WorkspaceElement::Solid(cache.solid(slot, physical, line, Kind::Unspecified)));
+    }
+
+    let shade = [0.0, 0.0, 0.0, 0.6];
+    for (index, band) in crate::region::around(picked, screen).into_iter().enumerate() {
+        let physical: Rectangle<i32, Physical> = band.to_physical_precise_round(scale);
+        let slot = Slot::Dim(index as u8);
+        elements.push(WorkspaceElement::Solid(cache.solid(slot, physical, shade, Kind::Unspecified)));
+    }
+    elements
+}
+
+fn flash_element(
+    state: &Spectre,
+    cache: &mut RenderCache,
+    area: Option<Rectangle<i32, Logical>>,
+    scale: f64,
+) -> Option<WorkspaceElement> {
+    let started = state.flash?;
+    let elapsed = started.elapsed();
+    if elapsed >= crate::screenshot::FLASH {
+        return None;
+    }
+    let area = area?;
+    let left = 1.0 - elapsed.as_secs_f32() / crate::screenshot::FLASH.as_secs_f32();
+    let alpha = left * 0.65;
+    let physical: Rectangle<i32, Physical> = area.to_physical_precise_round(scale);
+    let colour = [alpha, alpha, alpha, alpha];
+    let element = cache.solid(Slot::Flash, physical, colour, Kind::Unspecified);
+    Some(WorkspaceElement::Solid(element))
 }
 
 fn accent_for(theme: &spectre_theme::Theme, focused: bool) -> spectre_theme::Gradient {

@@ -60,6 +60,14 @@ impl Spectre {
             time,
             |state, modifiers, handle| {
                 let sym = handle.raw_syms().first().copied().unwrap_or(handle.modified_sym());
+                if state.region.is_some() {
+                    let pressed = event.state() == smithay::backend::input::KeyState::Pressed;
+                    if pressed && sym.raw() == keysyms::KEY_Escape {
+                        state.region = None;
+                        state.mark_dirty();
+                    }
+                    return FilterResult::Intercept(None);
+                }
                 if state.overview.is_some() {
                     if event.state() == smithay::backend::input::KeyState::Pressed {
                         state.pending_overview_key = Some(sym);
@@ -204,6 +212,53 @@ impl Spectre {
         }
     }
 
+    fn start_region(&mut self) {
+        let at = self.pointer_position().to_i32_round();
+        self.region = Some(crate::region::Pick::new(at));
+        self.mark_dirty();
+    }
+
+    fn region_pointer_moved(&mut self) {
+        let at = self.pointer_position().to_i32_round();
+        if let Some(pick) = self.region.as_mut() {
+            pick.moved(at);
+        }
+        self.mark_dirty();
+    }
+
+    fn region_button(&mut self, button: u32, state: ButtonState) {
+        if button != BTN_LEFT {
+            if state == ButtonState::Pressed {
+                self.region = None;
+                self.mark_dirty();
+            }
+            return;
+        }
+        let at = self.pointer_position().to_i32_round();
+        let scale = self
+            .active_output()
+            .map(|output| output.current_scale().fractional_scale())
+            .unwrap_or(1.0);
+        let Some(pick) = self.region.as_mut() else {
+            return;
+        };
+        match state {
+            ButtonState::Pressed => pick.begin(at),
+            ButtonState::Released => {
+                let area = pick.area();
+                self.region = None;
+                match area {
+                    Some(area) => {
+                        let physical = area.to_physical_precise_round(scale);
+                        self.want_screenshot(crate::screenshot::Wish::Region(physical));
+                    }
+                    None => tracing::debug!("the picked area was too small for a picture"),
+                }
+            }
+        }
+        self.mark_dirty();
+    }
+
     fn overview_pointer_moved(&mut self) {
         let x = self.pointer_position().x;
         let mut width = 1.0;
@@ -312,7 +367,9 @@ impl Spectre {
             Action::CycleProfile => self.cycle_profile(),
             Action::ToggleLauncher => self.toggle_launcher(),
             Action::LockSession => self.spawn_configured("lock"),
-            Action::Screenshot => self.spawn_configured("screenshot"),
+            Action::Screenshot => self.want_screenshot(crate::screenshot::Wish::Screen),
+            Action::ScreenshotWindow => self.want_screenshot(crate::screenshot::Wish::Window),
+            Action::ScreenshotRegion => self.start_region(),
         }
     }
 
@@ -462,6 +519,10 @@ impl Spectre {
         let delta = event.delta();
         let location = self.clamp_to_outputs(self.pointer_position() + delta);
         self.set_pointer_position(location);
+        if self.region.is_some() {
+            self.region_pointer_moved();
+            return;
+        }
         if self.overview.is_some() {
             self.overview_pointer_moved();
             return;
@@ -508,6 +569,10 @@ impl Spectre {
         let serial = SERIAL_COUNTER.next_serial();
         let location = geometry.loc.to_f64() + event.position_transformed(geometry.size);
         self.set_pointer_position(location);
+        if self.region.is_some() {
+            self.region_pointer_moved();
+            return;
+        }
         if self.overview.is_some() {
             self.overview_pointer_moved();
             return;
@@ -536,6 +601,10 @@ impl Spectre {
         let state = event.state();
         let time = event.time_msec();
 
+        if self.region.is_some() {
+            self.region_button(button, state);
+            return;
+        }
         if self.overview.is_some() {
             self.overview_button(button, state);
             return;

@@ -11,6 +11,8 @@ mod render;
 mod transition;
 mod state;
 mod workspace;
+mod region;
+mod screenshot;
 mod xwayland;
 
 use std::sync::atomic::{AtomicBool, Ordering};

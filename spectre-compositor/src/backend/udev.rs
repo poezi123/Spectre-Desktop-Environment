@@ -673,6 +673,11 @@ fn render_crtc(state: &mut Spectre, shared: &Shared, crtc: crtc::Handle) -> bool
     let elements: Vec<SpectreElement> =
         output_elements(state, &output, renderer, shader.as_ref(), cache);
     let built = started.elapsed();
+    if let Some(mode) = output.current_mode() {
+        let scale = output.current_scale().fractional_scale();
+        let without_cursor = elements.get(cache.cursor_elements()..).unwrap_or(&elements);
+        state.serve_screenshot(renderer, without_cursor, mode.size, scale);
+    }
 
     let Some(surface) = surfaces.get_mut(&crtc) else {
         return true;

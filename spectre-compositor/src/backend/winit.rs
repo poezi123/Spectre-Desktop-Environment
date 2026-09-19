@@ -212,6 +212,11 @@ fn draw(
         let renderer = backend.renderer();
         let elements = output_elements(state, output, renderer, shader, cache);
         crate::render::dump_scene(&elements, output.current_scale().fractional_scale());
+        let scale = output.current_scale().fractional_scale();
+        if let Some(mode) = output.current_mode() {
+            let without_cursor = elements.get(cache.cursor_elements()..).unwrap_or(&elements);
+            state.serve_screenshot(renderer, without_cursor, mode.size, scale);
+        }
         elements
     };
 

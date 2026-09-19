@@ -443,6 +443,17 @@ impl SelectionHandler for Spectre {
         _seat: Seat<Self>,
         _user_data: &(),
     ) {
+        if ty == SelectionTarget::Clipboard && mime_type == "image/png" {
+            if let Some(image) = self.clipboard_image.clone() {
+                std::thread::spawn(move || {
+                    let mut pipe = std::fs::File::from(fd);
+                    if let Err(err) = std::io::Write::write_all(&mut pipe, &image) {
+                        tracing::debug!(?err, "nobody read the picture from the clipboard");
+                    }
+                });
+                return;
+            }
+        }
         let loop_handle = self.loop_handle.clone();
         let Some(xwm) = self.xwm.as_mut() else {
             return;

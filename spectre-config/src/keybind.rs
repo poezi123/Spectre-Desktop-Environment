@@ -140,6 +140,8 @@ pub enum Action {
     ToggleLauncher,
     LockSession,
     Screenshot,
+    ScreenshotWindow,
+    ScreenshotRegion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,7 +188,6 @@ impl Default for Keybinds {
         bind(logo, "q", Action::CloseWindow);
         bind(logo, "f", Action::ToggleFullscreen);
         bind(logo, "m", Action::ToggleMaximize);
-        bind(logo, "space", Action::ToggleFloating);
         bind(logo, "l", Action::LockSession);
         bind(logo, "tab", Action::FocusNext);
         bind(logo_shift, "tab", Action::FocusPrev);
@@ -194,10 +195,14 @@ impl Default for Keybinds {
         bind(logo_shift, "a", Action::ToggleAnimations);
         bind(logo_shift, "p", Action::CycleProfile);
         bind(Modifiers::NONE, "print", Action::Screenshot);
+        bind(logo, "space", Action::ToggleFloating);
 
         let alt = Modifiers { alt: true, ..Modifiers::NONE };
         let alt_shift = Modifiers { shift: true, ..alt };
         let ctrl_alt = Modifiers { ctrl: true, ..alt };
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        bind(alt, "print", Action::ScreenshotWindow);
+        bind(shift, "print", Action::ScreenshotRegion);
         bind(alt, "f4", Action::CloseWindow);
         bind(alt, "tab", Action::FocusNext);
         bind(alt_shift, "tab", Action::FocusPrev);
