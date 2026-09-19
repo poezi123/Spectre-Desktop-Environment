@@ -11,6 +11,7 @@ mod render;
 mod transition;
 mod state;
 mod workspace;
+mod constraints;
 mod idle;
 mod lock;
 mod region;

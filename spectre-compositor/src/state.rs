@@ -159,6 +159,10 @@ impl Spectre {
         let idle_notifier =
             smithay::wayland::idle_notify::IdleNotifierState::new(dh, loop_handle.clone());
         smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<Self>(dh);
+        smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(dh);
+        smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(dh);
+        smithay::wayland::viewporter::ViewporterState::new::<Self>(dh);
+        smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(dh);
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, seat_name);

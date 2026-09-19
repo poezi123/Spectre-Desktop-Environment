@@ -527,7 +527,13 @@ impl Spectre {
     fn on_pointer_motion<B: InputBackend>(&mut self, event: B::PointerMotionEvent) {
         let serial = SERIAL_COUNTER.next_serial();
         let delta = event.delta();
-        let location = self.clamp_to_outputs(self.pointer_position() + delta);
+        let location = match self.pointer_is_locked() {
+            true => self.pointer_position(),
+            false => {
+                let wanted = self.clamp_to_outputs(self.pointer_position() + delta);
+                self.keep_the_pointer_inside(wanted)
+            }
+        };
         self.set_pointer_position(location);
         if self.region.is_some() {
             self.region_pointer_moved();
